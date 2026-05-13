@@ -1,5 +1,5 @@
 import { Search, Bell, HelpCircle, Plus } from 'lucide-react';
-import { auth } from '@/src/lib/firebase';
+import { auth } from '../lib/firebase';
 
 export function TopAppBar() {
   const user = auth.currentUser;

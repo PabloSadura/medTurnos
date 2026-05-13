@@ -1,5 +1,5 @@
 import { MessageSquare, CalendarClock, History, Settings, Send, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
-import { cn } from '@/src/lib/utils';
+import { cn } from '../lib/utils';
 
 const notifications = [
   { id: 1, type: 'WhatsApp', patient: 'Theresa Webb', time: '10:00 AM', status: 'Sent', date: 'Upcoming', message: 'Hi Theresa! Remember your appointment today...' },

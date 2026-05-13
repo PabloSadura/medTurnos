@@ -1,6 +1,7 @@
 import { TrendingUp, Users, CalendarCheck, CreditCard, ArrowUpRight, ArrowDownRight, Clock } from 'lucide-react';
 import { motion } from 'motion/react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { cn } from '../lib/utils';
 
 const data = [
   { name: 'Mon', revenue: 4000, appointments: 24 },

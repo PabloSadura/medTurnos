@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText } from 'lucide-react';
-import { cn } from '@/src/lib/utils';
+import { cn } from '../lib/utils';
 import { motion } from 'motion/react';
 
 const mockPatients = [

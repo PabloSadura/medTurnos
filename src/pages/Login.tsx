@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { auth } from '@/src/lib/firebase';
+import { auth } from '../lib/firebase';
 import { signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword } from 'firebase/auth';
 import { Activity, Mail, Lock, Eye, EyeOff, ShieldCheck, LockIcon, AlertCircle } from 'lucide-react';
 import { motion } from 'motion/react';

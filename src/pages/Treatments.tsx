@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Stethoscope, Plus, Search, DollarSign, Clock, ChevronRight, Package, Edit3, Trash2 } from 'lucide-react';
-import { cn } from '@/src/lib/utils';
+import { cn } from '../lib/utils';
 
 const mockTreatments = [
   { id: '1', name: 'Dental Cleaning', cost: 120, duration: 45, category: 'General', stockLinked: 3 },

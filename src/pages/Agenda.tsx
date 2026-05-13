@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical } from 'lucide-react';
 import { motion } from 'motion/react';
-import { cn } from '@/src/lib/utils';
+import { cn } from '../lib/utils';
 
 const hours = Array.from({ length: 11 }, (_, i) => i + 8); // 8:00 to 18:00
 const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];

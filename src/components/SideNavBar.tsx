@@ -11,8 +11,8 @@ import {
   LogOut,
   Activity
 } from 'lucide-react';
-import { cn } from '@/src/lib/utils';
-import { auth } from '@/src/lib/firebase';
+import { cn } from '../lib/utils';
+import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 
 const navItems = [
@@ -48,8 +48,12 @@ export function SideNavBar() {
                 : "text-on-surface-variant hover:bg-surface border-transparent"
             )}
           >
-            <item.icon className={cn("w-4 h-4 mr-3 transition-colors", isActive ? "text-primary" : "text-on-surface-variant opacity-60")} />
-            <span className="tracking-tight">{item.label}</span>
+            {({ isActive }) => (
+              <>
+                <item.icon className={cn("w-4 h-4 mr-3 transition-colors", isActive ? "text-primary" : "text-on-surface-variant opacity-60")} />
+                <span className="tracking-tight">{item.label}</span>
+              </>
+            )}
           </NavLink>
         ))}
       </nav>
@@ -64,8 +68,12 @@ export function SideNavBar() {
               : "text-on-surface-variant hover:bg-surface"
           )}
         >
-          <UserCircle className={cn("w-4 h-4 mr-3", isActive ? "text-white" : "text-on-surface-variant opacity-60")} />
-          <span>Mi Perfil</span>
+          {({ isActive }) => (
+            <>
+              <UserCircle className={cn("w-4 h-4 mr-3", isActive ? "text-white" : "text-on-surface-variant opacity-60")} />
+              <span>Mi Perfil</span>
+            </>
+          )}
         </NavLink>
         <button
           onClick={handleLogout}

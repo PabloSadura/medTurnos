@@ -1,5 +1,5 @@
 import { User, Mail, Shield, Smartphone, Globe, Camera, Save, Lock } from 'lucide-react';
-import { auth } from '@/src/lib/firebase';
+import { auth } from '../lib/firebase';
 import { motion } from 'motion/react';
 
 export function Profile() {

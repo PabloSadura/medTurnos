@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Package, Plus, Search, AlertCircle, TrendingDown, RefreshCw, BarChart3, ChevronRight } from 'lucide-react';
-import { cn } from '@/src/lib/utils';
+import { cn } from '../lib/utils';
 
 const mockInventory = [
   { id: '1', name: 'Dental Resin A2', sku: 'DR-A2-001', stock: 12, minStock: 5, unit: 'pcs', category: 'Supplies', status: 'normal' },
