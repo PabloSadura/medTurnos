@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Stethoscope, Plus, Search, DollarSign, Clock, ChevronRight, Package, Edit3, Trash2, Save, AlertTriangle } from 'lucide-react';
+import { Stethoscope, Plus, Search, DollarSign, Clock, ChevronRight, Package, Edit3, Trash2, Save, AlertTriangle, X, Info } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
+import { motion } from 'motion/react';
 
 const mockTreatments = [
   { id: '1', name: 'Dental Cleaning', cost: 120, duration: 45, category: 'General', stockLinked: 3 },
@@ -10,12 +11,18 @@ const mockTreatments = [
   { id: '4', name: 'Filling Replacement', cost: 150, duration: 30, category: 'General', stockLinked: 4 },
 ];
 
+const mockSupplies = [
+  { id: '1', name: 'Dental Resin A2', unit: 'pcs', qty: 1 },
+  { id: '2', name: 'Latex Gloves (Box)', unit: 'box', qty: 0.1 },
+  { id: '3', name: 'Anesthesia Vials', unit: 'pcs', qty: 2 },
+];
+
 export function Treatments() {
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'category' | null>(null);
+  const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'category' | 'supplies' | null>(null);
   const [selectedTreatment, setSelectedTreatment] = useState<any>(null);
 
-  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'category', treatment?: any) => {
+  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'category'| 'supplies', treatment?: any) => {
     setSelectedTreatment(treatment || null);
     setActiveModal(type);
   };
@@ -75,13 +82,16 @@ export function Treatments() {
               </div>
             </div>
 
-            <div className="border-t border-outline-variant bg-surface-bright px-4 py-2.5 flex justify-between items-center mt-auto">
-              <div className="flex items-center gap-1.5 text-on-surface-variant">
+            <button 
+              onClick={() => handleOpenModal('supplies', treatment)}
+              className="w-full border-t border-outline-variant bg-surface-bright px-4 py-2.5 flex justify-between items-center mt-auto hover:bg-surface transition-colors group/link"
+            >
+              <div className="flex items-center gap-1.5 text-on-surface-variant group-hover/link:text-primary transition-colors">
                 <Package size={12} />
-                <span className="text-[10px] font-bold uppercase tracking-tight">{treatment.stockLinked} Insumos</span>
+                <span className="text-[10px] font-bold uppercase tracking-tight">{treatment.stockLinked} Insumos Vinculados</span>
               </div>
-              <ChevronRight size={14} className="text-on-surface-variant group-hover:translate-x-1 transition-transform" />
-            </div>
+              <ChevronRight size={14} className="text-on-surface-variant group-hover/link:text-primary group-hover/link:translate-x-1 transition-all" />
+            </button>
           </div>
         ))}
         
@@ -152,6 +162,61 @@ export function Treatments() {
             <button type="submit" className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 transition-colors uppercase tracking-widest">Añadir</button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        isOpen={activeModal === 'supplies'}
+        onClose={() => setActiveModal(null)}
+        title={`Insumos: ${selectedTreatment?.name}`}
+        className="max-w-xl"
+      >
+        <div className="space-y-6">
+          <div className="bg-surface p-4 rounded-xl border border-outline-variant flex items-start gap-4">
+            <Info className="text-secondary shrink-0 mt-0.5" size={18} />
+            <div>
+              <h4 className="text-[12px] font-bold text-on-surface uppercase tracking-wider">Gestión de Insumos</h4>
+              <p className="text-[11px] text-on-surface-variant leading-relaxed">Vincule materiales del inventario a este tratamiento para descontarlos automáticamente al ser realizado.</p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+             <div className="flex justify-between items-center">
+               <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Insumos Vinculados</h5>
+               <button className="text-[10px] font-bold text-primary hover:underline uppercase tracking-wider flex items-center gap-1">
+                 <Plus size={12} /> Vincular Nuevo
+               </button>
+             </div>
+
+             <div className="space-y-2">
+               {mockSupplies.map((supply) => (
+                 <div key={supply.id} className="flex justify-between items-center p-3 bg-white border border-outline-variant rounded-lg group">
+                   <div>
+                     <p className="text-[13px] font-bold text-on-surface">{supply.name}</p>
+                     <p className="text-[10px] text-on-surface-variant uppercase font-bold tracking-tight">Cantidad por uso: {supply.qty} {supply.unit}</p>
+                   </div>
+                   <div className="flex items-center gap-2">
+                     <button className="p-1.5 hover:bg-surface rounded text-on-surface-variant transition-all">
+                       <Edit3 size={14} />
+                     </button>
+                     <button className="p-1.5 hover:bg-error-container text-error rounded transition-all opacity-0 group-hover:opacity-100">
+                       <X size={14} />
+                     </button>
+                   </div>
+                 </div>
+               ))}
+               {mockSupplies.length === 0 && (
+                 <div className="text-center py-8 border-2 border-dashed border-outline-variant rounded-xl opacity-50">
+                    <Package size={24} className="mx-auto mb-2" />
+                    <span className="text-[11px] font-bold uppercase tracking-widest">Sin insumos vinculados</span>
+                 </div>
+               )}
+             </div>
+          </div>
+
+          <div className="pt-4 flex gap-3">
+            <button onClick={() => setActiveModal(null)} className="w-full px-4 py-2 border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-surface transition-colors uppercase tracking-widest">Cerrar</button>
+          </div>
+        </div>
       </Modal>
 
       <Modal

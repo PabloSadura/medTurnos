@@ -54,7 +54,16 @@ export function Reminders() {
                       {msg.status}
                     </div>
                   </div>
-                  <p className="text-[12px] text-on-surface-variant italic bg-surface-bright px-3 py-2 rounded-lg border border-surface">"{msg.message}"</p>
+                  <div className="flex justify-between items-center group/btn">
+                    <p className="text-[12px] text-on-surface-variant italic bg-surface-bright px-3 py-2 rounded-lg border border-surface flex-1">"{msg.message}"</p>
+                    <button 
+                      onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(msg.message)}`, '_blank')}
+                      className="ml-3 p-2 bg-[#25D366] text-white rounded-lg opacity-0 group-hover:opacity-100 group-hover/btn:opacity-100 transition-all hover:scale-105 active:scale-95 shadow-sm"
+                      title="Abrir en WhatsApp"
+                    >
+                      <Send size={14} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

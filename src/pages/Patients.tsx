@@ -13,12 +13,15 @@ const mockPatients = [
 
 export function Patients() {
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'history' | null>(null);
+  const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'history' | 'add-entry' | null>(null);
   const [selectedPatient, setSelectedPatient] = useState<any>(null);
+  const [isAddingEntry, setIsAddingEntry] = useState(false);
 
-  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'history', patient?: any) => {
+  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'history' | 'add-entry', patient?: any) => {
     setSelectedPatient(patient || null);
-    setActiveModal(type);
+    setActiveModal(type === 'add-entry' ? 'history' : type);
+    if (type === 'add-entry') setIsAddingEntry(true);
+    if (type === 'history') setIsAddingEntry(false);
   };
 
   return (
@@ -244,7 +247,7 @@ export function Patients() {
       <Modal
         isOpen={activeModal === 'history'}
         onClose={() => setActiveModal(null)}
-        title={`Historia Clínica: ${selectedPatient?.name}`}
+        title={`Detalles del Paciente: ${selectedPatient?.name}`}
         className="max-w-2xl"
       >
         <div className="space-y-6">
@@ -252,38 +255,114 @@ export function Patients() {
             <div className="w-12 h-12 rounded-full bg-primary-container text-primary flex items-center justify-center text-lg font-bold">
               {selectedPatient?.name.charAt(0)}
             </div>
-            <div>
+            <div className="flex-1">
               <h4 className="text-sm font-bold text-on-surface">{selectedPatient?.name}</h4>
               <p className="text-[11px] text-on-surface-variant tracking-wide uppercase font-bold">{selectedPatient?.idNumber} • {selectedPatient?.gender} • {selectedPatient?.age} años</p>
+            </div>
+            <div className="text-right">
+              <span className={cn(
+                "px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider",
+                selectedPatient?.status === 'active' ? "bg-tertiary-container text-on-tertiary-container" : "bg-surface-dim text-on-surface-variant"
+              )}>
+                {selectedPatient?.status === 'active' ? 'ACTIVO' : 'INACTIVO'}
+              </span>
+            </div>
+          </div>
+
+          {/* Attendance KPIs */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
+              <CheckCircle2 size={16} className="text-primary mb-1" />
+              <span className="text-[18px] font-bold text-on-surface">92%</span>
+              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Asistencia</span>
+            </div>
+            <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
+              <AlertTriangle size={16} className="text-error mb-1" />
+              <span className="text-[18px] font-bold text-on-surface">2</span>
+              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Inasistencias</span>
+            </div>
+            <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
+              <Calendar size={16} className="text-secondary mb-1" />
+              <span className="text-[18px] font-bold text-on-surface">3d</span>
+              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Última Visita</span>
             </div>
           </div>
 
           <div className="space-y-4">
             <div className="flex justify-between items-center">
-              <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Evoluciones Recientes</h5>
-              <button className="text-[10px] font-bold text-primary hover:underline uppercase tracking-wider">Añadir Entrada</button>
+              <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Evoluciones y Tratamientos</h5>
+              <button 
+                onClick={() => setIsAddingEntry(!isAddingEntry)}
+                className="text-[10px] font-bold text-primary hover:underline uppercase tracking-wider flex items-center gap-1"
+              >
+                {isAddingEntry ? 'Cerrar Formulario' : <><Plus size={12} /> Añadir Entrada</>}
+              </button>
             </div>
+
+            {isAddingEntry && (
+              <motion.div 
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                className="p-4 bg-primary-container/20 rounded-xl border border-primary/20 space-y-3"
+              >
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-on-surface-variant uppercase">Tratamiento</label>
+                    <select className="w-full px-2 py-1.5 bg-white border border-outline-variant rounded-md text-[12px] outline-none">
+                      <option>Check-up</option>
+                      <option>Limpieza</option>
+                      <option>Consulta General</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-on-surface-variant uppercase">Doctor</label>
+                    <input type="text" className="w-full px-2 py-1.5 bg-white border border-outline-variant rounded-md text-[12px]" defaultValue="Dr. Smith" />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-on-surface-variant uppercase">Evolución / Notas</label>
+                  <textarea rows={3} className="w-full px-2 py-1.5 bg-white border border-outline-variant rounded-md text-[12px] resize-none" placeholder="Describa el procedimiento..." />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button 
+                    onClick={() => setIsAddingEntry(false)}
+                    className="px-3 py-1 text-[11px] font-bold text-on-surface-variant uppercase"
+                  >
+                    Cancelar
+                  </button>
+                  <button className="px-3 py-1 bg-primary text-white text-[11px] font-bold rounded shadow-sm uppercase">
+                    Guardar Entrada
+                  </button>
+                </div>
+              </motion.div>
+            )}
             
             <div className="space-y-3">
               {[
-                { date: '2024-05-10', doctor: 'Dr. Smith', note: 'Paciente presenta mejoría en tratamiento de encías. Se recomienda continuar con higiene rigurosa.', treatment: 'Check-up' },
-                { date: '2024-04-15', doctor: 'Dr. Wilson', note: 'Extracción de molar realizada sin complicaciones. Post-operatorio normal.', treatment: 'Surgery' },
+                { date: '2024-05-10', doctor: 'Dr. Smith', note: 'Paciente presenta mejoría en tratamiento de encías. Se recomienda continuar con higiene rigurosa.', treatment: 'Check-up', status: 'Completed' },
+                { date: '2024-04-15', doctor: 'Dr. Wilson', note: 'Extracción de molar realizada sin complicaciones. Post-operatorio normal.', treatment: 'Surgery', status: 'Completed' },
               ].map((entry, idx) => (
-                <div key={idx} className="p-3 bg-white border border-outline-variant rounded-lg space-y-2 relative overflow-hidden">
+                <div key={idx} className="p-3 bg-white border border-outline-variant rounded-lg space-y-2 relative overflow-hidden group hover:border-primary/50 transition-colors">
                   <div className="absolute left-0 top-0 bottom-0 w-1 bg-secondary"></div>
                   <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-bold text-secondary uppercase tracking-widest">{entry.date}</span>
-                    <span className="text-[10px] font-bold bg-surface px-1.5 py-0.5 rounded text-on-surface-variant uppercase">{entry.treatment}</span>
+                    <div>
+                      <span className="text-[10px] font-bold text-secondary uppercase tracking-widest">{entry.date}</span>
+                      <h6 className="text-[12px] font-bold text-on-surface mt-1">{entry.treatment}</h6>
+                    </div>
+                    <span className="text-[9px] font-bold bg-surface px-1.5 py-0.5 rounded text-on-surface-variant uppercase border border-outline-variant/30">{entry.status}</span>
                   </div>
                   <p className="text-[12px] text-on-surface">{entry.note}</p>
-                  <p className="text-[10px] font-medium text-on-surface-variant italic">— {entry.doctor}</p>
+                  <div className="flex items-center gap-2 pt-1 border-t border-surface">
+                     <User size={10} className="text-on-surface-variant opacity-50" />
+                     <p className="text-[10px] font-medium text-on-surface-variant italic">{entry.doctor}</p>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
 
           <div className="pt-4">
-            <button onClick={() => setActiveModal(null)} className="w-full px-4 py-2 border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-surface transition-colors uppercase tracking-widest">Cerrar</button>
+            <button onClick={() => setActiveModal(null)} className="w-full px-4 py-2 border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-surface transition-colors uppercase tracking-widest">Cerrar Historial</button>
           </div>
         </div>
       </Modal>

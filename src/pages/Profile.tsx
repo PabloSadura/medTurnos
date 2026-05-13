@@ -1,6 +1,7 @@
-import { User, Mail, Shield, Smartphone, Globe, Camera, Save, Lock } from 'lucide-react';
+import { User, Mail, Shield, Smartphone, Globe, Camera, Save, Lock, Clock } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { motion } from 'motion/react';
+import { cn } from '../lib/utils';
 
 export function Profile() {
   const user = auth.currentUser;
@@ -79,6 +80,56 @@ export function Profile() {
                 <input type="text" defaultValue="+1 (555) 000-1234" className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" />
               </div>
             </form>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
+            <h3 className="text-sm font-bold text-on-surface mb-5 flex items-center gap-2">
+              <Clock size={16} className="text-primary" />
+              Horarios de Atención
+            </h3>
+            <div className="space-y-6">
+              <div className="grid grid-cols-7 gap-2">
+                {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((day, idx) => (
+                  <button 
+                    key={idx}
+                    className={cn(
+                      "aspect-square rounded-lg border text-[11px] font-bold transition-all",
+                      idx < 5 
+                        ? "bg-primary-container border-primary text-primary" 
+                        : "bg-surface border-outline-variant text-on-surface-variant hover:border-primary/50"
+                    )}
+                  >
+                    {day}
+                  </button>
+                ))}
+              </div>
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Mañana</label>
+                    <div className="flex items-center gap-2">
+                      <input type="time" defaultValue="08:00" className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" />
+                      <span className="text-[10px] font-bold text-on-surface-variant">a</span>
+                      <input type="time" defaultValue="12:00" className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Tarde</label>
+                    <div className="flex items-center gap-2">
+                      <input type="time" defaultValue="14:00" className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" />
+                      <span className="text-[10px] font-bold text-on-surface-variant">a</span>
+                      <input type="time" defaultValue="18:00" className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-surface rounded-lg border border-outline-variant flex items-start gap-3">
+                  <Shield size={14} className="text-secondary shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-on-surface-variant">Estos horarios se utilizarán para generar los huecos automáticos en su agenda y sistema de turnos online.</p>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="bg-white p-6 rounded-xl border border-error-container/30 shadow-sm">

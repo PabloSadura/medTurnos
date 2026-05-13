@@ -8,14 +8,22 @@ const hours = Array.from({ length: 11 }, (_, i) => i + 8); // 8:00 to 18:00
 const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 const mockAppointments = [
-  { id: 1, name: 'Robert Fox', type: 'Check-up', time: '09:00', duration: 30, status: 'confirmed', day: 'Monday' },
-  { id: 2, name: 'Jenny Wilson', type: 'Root Canal', time: '11:30', duration: 60, status: 'in-session', day: 'Monday' },
-  { id: 3, name: 'Guy Hawkins', type: 'Cleaning', time: '14:00', duration: 45, status: 'finished', day: 'Monday' },
+  { id: 1, name: 'Robert Fox', type: 'Check-up General', time: '09:00', duration: 45, status: 'confirmed', day: 'Monday', attendance: 5 },
+  { id: 2, name: 'Jenny Wilson', type: 'Tratamiento de Conducto', time: '11:00', duration: 90, status: 'in-session', day: 'Monday', attendance: 1 },
+  { id: 3, name: 'Guy Hawkins', type: 'Limpieza Dental', time: '14:00', duration: 30, status: 'finished', day: 'Monday', attendance: 3 },
+  { id: 4, name: 'Cody Fisher', type: 'Ortodoncia', time: '16:00', duration: 45, status: 'confirmed', day: 'Monday', attendance: 12 },
 ];
 
 export function Agenda() {
   const [view, setView] = useState<'day' | 'week' | 'month'>('day');
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
+  const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+  const handleAppointmentClick = (apt: any) => {
+    setSelectedAppointment(apt);
+    setIsDetailModalOpen(true);
+  };
 
   return (
     <div className="space-y-6">
@@ -122,10 +130,11 @@ export function Agenda() {
                         <motion.div
                           key={apt.id}
                           layoutId={`apt-${apt.id}`}
+                          onClick={() => handleAppointmentClick(apt)}
                           className={cn(
-                            "absolute inset-x-2 p-2 rounded border-l-2 shadow-sm cursor-pointer group hover:shadow-md transition-all z-10",
-                            apt.status === 'confirmed' ? "bg-primary-container/40 border-primary text-primary" : 
-                            apt.status === 'in-session' ? "bg-tertiary-container/40 border-tertiary text-tertiary" : 
+                            "absolute inset-x-2 p-3 rounded border-l-4 shadow-sm cursor-pointer group hover:shadow-md transition-all z-10 flex flex-col justify-center",
+                            apt.status === 'confirmed' ? "bg-primary/5 border-primary text-primary" : 
+                            apt.status === 'in-session' ? "bg-tertiary/5 border-tertiary text-tertiary" : 
                             "bg-surface border-outline-variant text-on-surface-variant opacity-80"
                           )}
                           style={{
@@ -133,10 +142,19 @@ export function Agenda() {
                             height: `${(apt.duration / 60) * 100}px`
                           }}
                         >
-                          <div className="flex justify-between items-start">
+                          <div className="flex justify-between items-start overflow-hidden">
                             <div className="min-w-0">
-                              <p className="text-[12px] font-bold truncate">{apt.name}</p>
-                              <p className="text-[9px] uppercase font-bold opacity-80 mt-0.5">{apt.type} • {apt.duration}m</p>
+                              <p className="text-[13px] font-bold truncate leading-tight">{apt.name}</p>
+                              <div className="flex items-center gap-1.5 mt-1 text-[10px] font-bold opacity-80 uppercase tracking-tighter">
+                                <span>{apt.type}</span>
+                                <span>•</span>
+                                <span className={cn(
+                                  "px-1 rounded",
+                                  apt.attendance === 1 ? "bg-secondary/20 text-secondary" : "bg-primary/10 text-primary"
+                                )}>
+                                  {apt.attendance === 1 ? 'PRIMERA VEZ' : `${apt.attendance}ª VISITA`}
+                                </span>
+                              </div>
                             </div>
                           </div>
                         </motion.div>
@@ -274,6 +292,82 @@ export function Agenda() {
             </button>
           </div>
         </form>
+      </Modal>
+      <Modal 
+        isOpen={isDetailModalOpen} 
+        onClose={() => setIsDetailModalOpen(false)} 
+        title="Detalles del Turno"
+      >
+        {selectedAppointment && (
+          <div className="space-y-6">
+            <div className="flex items-center gap-4 p-4 bg-surface-bright rounded-xl border border-outline-variant">
+              <div className="w-12 h-12 rounded-full bg-primary-container text-primary flex items-center justify-center text-lg font-bold">
+                {selectedAppointment.name.charAt(0)}
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-on-surface">{selectedAppointment.name}</h4>
+                <p className="text-[11px] text-on-surface-variant tracking-wide uppercase font-bold">
+                  {selectedAppointment.time} • {selectedAppointment.duration} min
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 bg-surface rounded-xl border border-outline-variant">
+                <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Tratamiento</p>
+                <p className="text-[13px] font-bold text-on-surface">{selectedAppointment.type}</p>
+              </div>
+              <div className="p-3 bg-surface rounded-xl border border-outline-variant">
+                <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Asistencias</p>
+                <p className="text-[13px] font-bold text-on-surface">
+                  {selectedAppointment.attendance === 1 ? 'Primera vez' : `${selectedAppointment.attendance} visitas anteriores`}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Cambiar Estado</label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { id: 'confirmed', label: 'Confirmado', color: 'bg-primary' },
+                  { id: 'in-session', label: 'En Sesión', color: 'bg-tertiary' },
+                  { id: 'finished', label: 'Finalizado', color: 'bg-secondary' },
+                  { id: 'cancelled', label: 'Cancelado', color: 'bg-error' },
+                ].map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setIsDetailModalOpen(false)}
+                    className={cn(
+                      "px-3 py-2 rounded-lg border text-[11px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2",
+                      selectedAppointment.status === s.id 
+                        ? `${s.color} text-white border-transparent shadow-sm` 
+                        : "bg-white border-outline-variant text-on-surface-variant hover:bg-surface"
+                    )}
+                  >
+                    <div className={cn("w-1.5 h-1.5 rounded-full", selectedAppointment.status === s.id ? "bg-white" : s.color)} />
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-4 flex gap-3">
+              <button 
+                type="button"
+                onClick={() => setIsDetailModalOpen(false)}
+                className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest"
+              >
+                Cerrar
+              </button>
+              <button 
+                type="button"
+                className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest"
+              >
+                Ver Ficha
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

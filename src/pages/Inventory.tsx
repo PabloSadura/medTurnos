@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Package, Plus, Search, AlertCircle, TrendingDown, RefreshCw, BarChart3, ChevronRight, Save, History, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { Package, Plus, Search, AlertCircle, TrendingDown, RefreshCw, BarChart3, ChevronRight, Save, History, ArrowUpRight, ArrowDownRight, Edit3 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 
@@ -13,10 +13,12 @@ const mockInventory = [
 export function Inventory() {
   const [activeModal, setActiveModal] = useState<'create' | 'adjust' | 'details' | null>(null);
   const [selectedItem, setSelectedItem] = useState<any>(null);
+  const [isEditingStock, setIsEditingStock] = useState(false);
 
   const handleOpenModal = (type: 'create' | 'adjust' | 'details', item?: any) => {
     setSelectedItem(item || null);
     setActiveModal(type);
+    setIsEditingStock(false);
   };
 
   return (
@@ -236,51 +238,92 @@ export function Inventory() {
       <Modal
         isOpen={activeModal === 'details'}
         onClose={() => setActiveModal(null)}
-        title={`Detalle de Stock: ${selectedItem?.name}`}
+        title={isEditingStock ? `Editar Stock: ${selectedItem?.name}` : `Detalle de Stock: ${selectedItem?.name}`}
       >
         <div className="space-y-6">
-          <div className="bg-surface-bright p-4 rounded-xl border border-outline-variant grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Estado Actual</p>
-              <h4 className="text-xl font-bold text-on-surface">{selectedItem?.stock} {selectedItem?.unit}</h4>
-            </div>
-            <div className="text-right">
-              <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Código SKU</p>
-              <h4 className="text-sm font-mono font-bold text-on-surface">{selectedItem?.sku}</h4>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-on-surface">
-              <History size={16} className="text-primary" />
-              <h5 className="text-[11px] font-bold uppercase tracking-widest">Movimientos Recientes</h5>
-            </div>
-            
-            <div className="space-y-2">
-              {[
-                { date: '10 Mayo, 2024', type: 'Entrada', qty: '+5', note: 'Reposición programada' },
-                { date: '08 Mayo, 2024', type: 'Salida', qty: '-2', note: 'Uso en Cirugía #104' },
-                { date: '05 Mayo, 2024', type: 'Salida', qty: '-1', note: 'Uso en Consulta #92' }
-              ].map((mov, idx) => (
-                <div key={idx} className="flex justify-between items-center p-3 bg-white border border-outline-variant rounded-lg">
-                  <div>
-                    <p className="text-[12px] font-bold text-on-surface">{mov.note}</p>
-                    <p className="text-[10px] text-on-surface-variant">{mov.date}</p>
-                  </div>
-                  <span className={cn(
-                    "text-[12px] font-bold",
-                    mov.qty.startsWith('+') ? 'text-primary' : 'text-error'
-                  )}>
-                    {mov.qty}
-                  </span>
+          {!isEditingStock ? (
+            <>
+              <div className="bg-surface-bright p-4 rounded-xl border border-outline-variant grid grid-cols-2 gap-4 relative">
+                <button 
+                  onClick={() => setIsEditingStock(true)}
+                  className="absolute top-2 right-2 p-1.5 hover:bg-surface rounded-lg text-primary transition-all text-[10px] font-bold uppercase flex items-center gap-1"
+                >
+                  <Edit3 size={12} /> Modificar
+                </button>
+                <div>
+                  <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Estado Actual</p>
+                  <h4 className="text-xl font-bold text-on-surface">{selectedItem?.stock} {selectedItem?.unit}</h4>
                 </div>
-              ))}
-            </div>
-          </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Mínimo Requerido</p>
+                  <h4 className="text-sm font-bold text-on-surface">{selectedItem?.minStock} {selectedItem?.unit}</h4>
+                </div>
+              </div>
 
-          <div className="pt-4">
-            <button onClick={() => setActiveModal(null)} className="w-full px-4 py-2 bg-surface border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-outline-variant transition-colors uppercase tracking-widest">Cerrar</button>
-          </div>
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-on-surface">
+                  <History size={16} className="text-primary" />
+                  <h5 className="text-[11px] font-bold uppercase tracking-widest">Movimientos Recientes</h5>
+                </div>
+                
+                <div className="space-y-2">
+                  {[
+                    { date: '10 Mayo, 2024', type: 'Entrada', qty: '+5', note: 'Reposición programada' },
+                    { date: '08 Mayo, 2024', type: 'Salida', qty: '-2', note: 'Uso en Cirugía #104' },
+                    { date: '05 Mayo, 2024', type: 'Salida', qty: '-1', note: 'Uso en Consulta #92' }
+                  ].map((mov, idx) => (
+                    <div key={idx} className="flex justify-between items-center p-3 bg-white border border-outline-variant rounded-lg group hover:border-primary/50 transition-colors">
+                      <div>
+                        <p className="text-[12px] font-bold text-on-surface">{mov.note}</p>
+                        <p className="text-[10px] text-on-surface-variant">{mov.date}</p>
+                      </div>
+                      <span className={cn(
+                        "text-[12px] font-bold",
+                        mov.qty.startsWith('+') ? 'text-primary' : 'text-error'
+                      )}>
+                        {mov.qty}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-4">
+                <button onClick={() => setActiveModal(null)} className="w-full px-4 py-2 bg-surface border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-outline-variant transition-colors uppercase tracking-widest">Cerrar</button>
+              </div>
+            </>
+          ) : (
+            <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); setIsEditingStock(false); }}>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Actual</label>
+                  <div className="relative">
+                    <input type="number" defaultValue={selectedItem?.stock} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-on-surface-variant">{selectedItem?.unit}</span>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Mínimo</label>
+                  <div className="relative">
+                    <input type="number" defaultValue={selectedItem?.minStock} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-on-surface-variant">{selectedItem?.unit}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Motivo del Ajuste</label>
+                <textarea rows={2} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary resize-none" placeholder="Indique la razón de la corrección manual..." />
+              </div>
+
+              <div className="pt-4 flex gap-3">
+                <button type="button" onClick={() => setIsEditingStock(false)} className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest">Atrás</button>
+                <button type="submit" className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest flex items-center justify-center gap-2">
+                  <Save size={14} /> Guardar Cambios
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       </Modal>
     </div>
