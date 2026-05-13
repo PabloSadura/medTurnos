@@ -1,10 +1,108 @@
-import { User, Mail, Shield, Smartphone, Globe, Camera, Save, Lock, Clock } from 'lucide-react';
-import { auth } from '../lib/firebase';
-import { motion } from 'motion/react';
+import { useState, useEffect } from 'react';
+import { User, Mail, Shield, Smartphone, Globe, Camera, Save, Lock, Clock, CheckCircle2 } from 'lucide-react';
+import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import { doc, onSnapshot, updateDoc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { sendEmailVerification } from 'firebase/auth';
 
 export function Profile() {
   const user = auth.currentUser;
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+
+  const handleVerifyEmail = async () => {
+    if (!auth.currentUser) return;
+    try {
+      await sendEmailVerification(auth.currentUser);
+      alert('Email de verificación enviado. Por favor, revise su bandeja de entrada.');
+    } catch (error: any) {
+      console.error('Error sending verification email:', error);
+      alert('Error al enviar el email de verificación. Intente nuevamente más tarde.');
+    }
+  };
+
+  const [profile, setProfile] = useState({
+    displayName: user?.displayName || '',
+    licenseNumber: '',
+    phone: '',
+    workingDays: [1, 2, 3, 4, 5], // 1=Mon, 7=Sun
+    morningStart: '08:00',
+    morningEnd: '12:00',
+    afternoonStart: '14:00',
+    afternoonEnd: '18:00'
+  });
+
+  useEffect(() => {
+    if (!user) return;
+
+    const unsubscribe = onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setProfile(prev => ({
+          ...prev,
+          displayName: data.name || prev.displayName,
+          licenseNumber: data.licenseNumber || '',
+          phone: data.phone || '',
+          workingDays: data.workingHours?.days || [1, 2, 3, 4, 5],
+          morningStart: data.workingHours?.morningStart || '08:00',
+          morningEnd: data.workingHours?.morningEnd || '12:00',
+          afternoonStart: data.workingHours?.afternoonStart || '14:00',
+          afternoonEnd: data.workingHours?.afternoonEnd || '18:00'
+        }));
+      }
+      setLoading(false);
+    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}`));
+
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleSave = async () => {
+    if (!user) return;
+    setSaving(true);
+    setSuccess(false);
+    try {
+      await setDoc(doc(db, 'users', user.uid), {
+        name: profile.displayName,
+        email: user.email,
+        licenseNumber: profile.licenseNumber,
+        phone: profile.phone,
+        workingHours: {
+          days: profile.workingDays,
+          morningStart: profile.morningStart,
+          morningEnd: profile.morningEnd,
+          afternoonStart: profile.afternoonStart,
+          afternoonEnd: profile.afternoonEnd
+        },
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleDay = (dayIndex: number) => {
+    setProfile(prev => ({
+      ...prev,
+      workingDays: prev.workingDays.includes(dayIndex)
+        ? prev.workingDays.filter(d => d !== dayIndex)
+        : [...prev.workingDays, dayIndex].sort()
+    }));
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -13,10 +111,31 @@ export function Profile() {
           <h1 className="headline-lg text-on-surface">Perfil Profesional</h1>
           <p className="body-md text-on-surface-variant">Gestione su identidad profesional y configuraciones de seguridad.</p>
         </div>
-        <button className="px-5 py-2 bg-primary text-white rounded-md text-[12px] font-bold flex items-center gap-2 hover:bg-primary/90 shadow-sm uppercase tracking-widest transition-all">
-          <Save size={16} />
-          Guardar Cambios
-        </button>
+        <div className="flex items-center gap-3">
+          <AnimatePresence>
+            {success && (
+              <motion.div 
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0 }}
+                className="flex items-center gap-1.5 text-primary bg-primary/10 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase"
+              >
+                <CheckCircle2 size={14} /> Guardado
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <button 
+            onClick={handleSave}
+            disabled={saving}
+            className={cn(
+              "px-5 py-2 rounded-md text-[12px] font-bold flex items-center gap-2 shadow-sm uppercase tracking-widest transition-all",
+              saving ? "bg-surface-dim text-on-surface-variant opacity-50 cursor-not-allowed" : "bg-primary text-white hover:bg-primary/90 active:scale-95"
+            )}
+          >
+            <Save size={16} />
+            {saving ? 'Guardando...' : 'Guardar Cambios'}
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -36,7 +155,7 @@ export function Profile() {
                 <Camera size={12} />
               </button>
             </div>
-            <h3 className="text-[16px] font-bold text-on-surface">{user?.displayName || 'Profesional Médico'}</h3>
+            <h3 className="text-[16px] font-bold text-on-surface">{profile.displayName || 'Profesional Médico'}</h3>
             <p className="text-[11px] text-on-surface-variant mb-3 uppercase font-bold tracking-wider opacity-60">Cirujano Dentista</p>
             <span className="text-[9px] font-black px-2 py-0.5 bg-tertiary-container text-on-tertiary-container rounded-full uppercase tracking-tighter">Sesión Activa</span>
           </div>
@@ -66,20 +185,35 @@ export function Profile() {
               <User size={16} className="text-primary" />
               Información General
             </h3>
-            <form className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <div className="col-span-2 space-y-1.5">
                 <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Nombre de Usuario</label>
-                <input type="text" defaultValue={user?.displayName || ''} className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" />
+                <input 
+                  type="text" 
+                  value={profile.displayName}
+                  onChange={(e) => setProfile({ ...profile, displayName: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" 
+                />
               </div>
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Matrícula Prof.</label>
-                <input type="text" defaultValue="ML-12345-X" className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" />
+                <input 
+                  type="text" 
+                  value={profile.licenseNumber}
+                  onChange={(e) => setProfile({ ...profile, licenseNumber: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" 
+                />
               </div>
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Teléfono Principal</label>
-                <input type="text" defaultValue="+1 (555) 000-1234" className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" />
+                <input 
+                  type="text" 
+                  value={profile.phone}
+                  onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" 
+                />
               </div>
-            </form>
+            </div>
           </div>
 
           <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
@@ -89,17 +223,27 @@ export function Profile() {
             </h3>
             <div className="space-y-6">
               <div className="grid grid-cols-7 gap-2">
-                {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((day, idx) => (
+                {[
+                  { label: 'L', index: 1 },
+                  { label: 'M', index: 2 },
+                  { label: 'X', index: 3 },
+                  { label: 'J', index: 4 },
+                  { label: 'V', index: 5 },
+                  { label: 'S', index: 6 },
+                  { label: 'D', index: 7 }
+                ].map((day) => (
                   <button 
-                    key={idx}
+                    key={day.index}
+                    type="button"
+                    onClick={() => toggleDay(day.index)}
                     className={cn(
                       "aspect-square rounded-lg border text-[11px] font-bold transition-all",
-                      idx < 5 
-                        ? "bg-primary-container border-primary text-primary" 
-                        : "bg-surface border-outline-variant text-on-surface-variant hover:border-primary/50"
+                      profile.workingDays.includes(day.index)
+                        ? "bg-primary border-primary text-white shadow-sm" 
+                        : "bg-surface border-outline-variant text-on-surface-variant hover:bg-outline-variant/10"
                     )}
                   >
-                    {day}
+                    {day.label}
                   </button>
                 ))}
               </div>
@@ -109,17 +253,37 @@ export function Profile() {
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Mañana</label>
                     <div className="flex items-center gap-2">
-                      <input type="time" defaultValue="08:00" className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" />
+                      <input 
+                        type="time" 
+                        value={profile.morningStart}
+                        onChange={(e) => setProfile({ ...profile, morningStart: e.target.value })}
+                        className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
+                      />
                       <span className="text-[10px] font-bold text-on-surface-variant">a</span>
-                      <input type="time" defaultValue="12:00" className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" />
+                      <input 
+                        type="time" 
+                        value={profile.morningEnd}
+                        onChange={(e) => setProfile({ ...profile, morningEnd: e.target.value })}
+                        className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
+                      />
                     </div>
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Tarde</label>
                     <div className="flex items-center gap-2">
-                      <input type="time" defaultValue="14:00" className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" />
+                      <input 
+                        type="time" 
+                        value={profile.afternoonStart}
+                        onChange={(e) => setProfile({ ...profile, afternoonStart: e.target.value })}
+                        className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
+                      />
                       <span className="text-[10px] font-bold text-on-surface-variant">a</span>
-                      <input type="time" defaultValue="18:00" className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" />
+                      <input 
+                        type="time" 
+                        value={profile.afternoonEnd}
+                        onChange={(e) => setProfile({ ...profile, afternoonEnd: e.target.value })}
+                        className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
+                      />
                     </div>
                   </div>
                 </div>
@@ -144,9 +308,21 @@ export function Profile() {
                   <div className="min-w-0">
                     <p className="text-[12px] font-bold text-on-surface">Email de Autenticación</p>
                     <p className="text-[11px] text-on-surface-variant truncate">{user?.email}</p>
+                    {user?.emailVerified ? (
+                      <span className="text-[9px] text-primary font-bold uppercase tracking-widest leading-none">Verificado</span>
+                    ) : (
+                      <span className="text-[9px] text-error font-bold uppercase tracking-widest leading-none">No Verificado</span>
+                    )}
                   </div>
                 </div>
-                <span className="text-[10px] font-black text-primary uppercase underline cursor-pointer tracking-widest">Verificar</span>
+                {!user?.emailVerified && (
+                  <button 
+                    onClick={handleVerifyEmail}
+                    className="text-[10px] font-black text-primary uppercase underline cursor-pointer tracking-widest hover:text-primary/80 transition-colors"
+                  >
+                    Verificar
+                  </button>
+                )}
               </div>
               <div className="flex items-center justify-between p-3 bg-surface border border-outline-variant rounded-lg">
                 <div className="flex items-center gap-3">

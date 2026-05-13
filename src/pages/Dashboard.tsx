@@ -1,26 +1,72 @@
+import { useState, useEffect } from 'react';
 import { TrendingUp, Users, CalendarCheck, CreditCard, ArrowUpRight, ArrowDownRight, Clock } from 'lucide-react';
 import { motion } from 'motion/react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { cn } from '../lib/utils';
-
-const data = [
-  { name: 'Mon', revenue: 4000, appointments: 24 },
-  { name: 'Tue', revenue: 3000, appointments: 18 },
-  { name: 'Wed', revenue: 2000, appointments: 12 },
-  { name: 'Thu', revenue: 2780, appointments: 22 },
-  { name: 'Fri', revenue: 1890, appointments: 15 },
-  { name: 'Sat', revenue: 2390, appointments: 19 },
-  { name: 'Sun', revenue: 3490, appointments: 25 },
-];
-
-const stats = [
-  { label: 'Ingresos Totales', value: '$24.5k', trend: '+12.5%', icon: CreditCard, color: 'bg-primary-container text-primary' },
-  { label: 'Nuevos Pacientes', value: '142', trend: '+5.2%', icon: Users, color: 'bg-secondary-container text-secondary' },
-  { label: 'Turnos Hoy', value: '48', trend: '-2.4%', icon: CalendarCheck, color: 'bg-tertiary-container text-tertiary' },
-  { label: 'Tiempo Promedio', value: '45m', trend: '+1.1%', icon: Clock, color: 'bg-error-container text-error' },
-];
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { collection, onSnapshot, query, where, orderBy, limit } from 'firebase/firestore';
 
 export function Dashboard() {
+  const [stats, setStats] = useState([
+    { label: 'Pacientes Totales', value: '0', trend: '+0%', icon: Users, color: 'bg-secondary-container text-secondary' },
+    { label: 'Turnos Hoy', value: '0', trend: '+0%', icon: CalendarCheck, color: 'bg-tertiary-container text-tertiary' },
+    { label: 'Tratamientos', value: '0', trend: '+0%', icon: CreditCard, color: 'bg-primary-container text-primary' },
+    { label: 'Tiempo Promedio', value: '30m', trend: '+0%', icon: Clock, color: 'bg-error-container text-error' },
+  ]);
+  const [upcomingAppointments, setUpcomingAppointments] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Patients count
+    const unsubscribePatients = onSnapshot(collection(db, 'patients'), (snapshot) => {
+      setStats(prev => {
+        const next = [...prev];
+        next[0].value = snapshot.size.toString();
+        return next;
+      });
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
+
+    // Today's appointments
+    const today = new Date().toISOString().split('T')[0];
+    const qToday = query(collection(db, 'appointments'), where('date', '==', today));
+    const unsubscribeToday = onSnapshot(qToday, (snapshot) => {
+      setStats(prev => {
+        const next = [...prev];
+        next[1].value = snapshot.size.toString();
+        return next;
+      });
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
+
+    // Treatments count
+    const unsubscribeTreatments = onSnapshot(collection(db, 'treatments'), (snapshot) => {
+      setStats(prev => {
+        const next = [...prev];
+        next[2].value = snapshot.size.toString();
+        return next;
+      });
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
+
+    // Upcoming appointments
+    const now = new Date();
+    const qUpcoming = query(
+      collection(db, 'appointments'),
+      where('startTime', '>=', now),
+      orderBy('startTime', 'asc'),
+      limit(6)
+    );
+    const unsubscribeUpcoming = onSnapshot(qUpcoming, (snapshot) => {
+      setUpcomingAppointments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setLoading(false);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
+
+    return () => {
+      unsubscribePatients();
+      unsubscribeToday();
+      unsubscribeTreatments();
+      unsubscribeUpcoming();
+    };
+  }, []);
+
   return (
     <div className="space-y-6">
       <div>
@@ -58,8 +104,8 @@ export function Dashboard() {
         <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
           <div className="flex justify-between items-center mb-6">
             <div>
-              <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider">Distribución de Ingresos</h2>
-              <p className="text-[11px] text-on-surface-variant">Resumen semanal de ingresos y volumen de pacientes.</p>
+              <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider">Actividad Semanal</h2>
+              <p className="text-[11px] text-on-surface-variant">Volumen de pacientes en los últimos días.</p>
             </div>
             <select className="bg-surface-bright border border-outline-variant rounded-md text-[11px] font-black uppercase tracking-wider px-3 py-1.5 focus:ring-1 focus:ring-primary outline-none">
               <option>Últimos 7 días</option>
@@ -68,7 +114,15 @@ export function Dashboard() {
           </div>
           <div className="h-[280px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data}>
+              <AreaChart data={[
+                { name: 'Mon', appointments: 12 },
+                { name: 'Tue', appointments: 18 },
+                { name: 'Wed', appointments: 15 },
+                { name: 'Thu', appointments: 22 },
+                { name: 'Fri', appointments: 25 },
+                { name: 'Sat', appointments: 10 },
+                { name: 'Sun', appointments: 5 },
+              ]}>
                 <defs>
                   <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#00478D" stopOpacity={0.1}/>
@@ -82,7 +136,7 @@ export function Dashboard() {
                   contentStyle={{ borderRadius: '8px', border: '1px solid #E2E8F0', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', fontSize: '11px', fontWeight: 'bold' }}
                   cursor={{ stroke: '#00478D', strokeWidth: 1 }}
                 />
-                <Area type="monotone" dataKey="revenue" stroke="#00478D" strokeWidth={2.5} fillOpacity={1} fill="url(#colorRev)" />
+                <Area type="monotone" dataKey="appointments" stroke="#00478D" strokeWidth={2.5} fillOpacity={1} fill="url(#colorRev)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -91,20 +145,26 @@ export function Dashboard() {
         <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm flex flex-col">
           <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider mb-4">Próximos Turnos</h2>
           <div className="flex-1 space-y-3">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
-              <div key={i} className="flex gap-3 group cursor-pointer items-center p-2 hover:bg-surface rounded-lg transition-colors border border-transparent hover:border-outline-variant/30">
-                <div className="w-9 h-9 rounded-full bg-surface-dim overflow-hidden shrink-0 border border-outline-variant">
-                  <img src={`https://i.pravatar.cc/150?u=${i}`} alt="Avatar" className="w-full h-full object-cover" />
+            {upcomingAppointments.map((apt) => (
+              <div key={apt.id} className="flex gap-3 group cursor-pointer items-center p-2 hover:bg-surface rounded-lg transition-colors border border-transparent hover:border-outline-variant/30">
+                <div className="w-9 h-9 rounded-full bg-primary-container flex items-center justify-center text-primary text-[12px] font-bold shrink-0 border border-outline-variant">
+                  {apt.patientName?.charAt(0)}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center">
-                    <h4 className="text-[12px] font-bold text-on-surface truncate">Sarah Connor</h4>
-                    <span className="text-[9px] font-black px-1.5 py-0.5 bg-primary-container text-primary rounded-md">14:00</span>
+                    <h4 className="text-[12px] font-bold text-on-surface truncate">{apt.patientName}</h4>
+                    <span className="text-[9px] font-black px-1.5 py-0.5 bg-primary-container text-primary rounded-md">{apt.time}</span>
                   </div>
-                  <p className="text-[10px] text-on-surface-variant/70 uppercase font-black tracking-tight truncate">Ajuste Ortodoncia</p>
+                  <p className="text-[10px] text-on-surface-variant/70 uppercase font-black tracking-tight truncate">{apt.type}</p>
                 </div>
               </div>
             ))}
+            {upcomingAppointments.length === 0 && !loading && (
+              <div className="text-center py-10 opacity-30">
+                <CalendarCheck size={32} className="mx-auto mb-2" />
+                <p className="text-[10px] font-bold uppercase tracking-widest">Sin turnos pendientes</p>
+              </div>
+            )}
           </div>
           <button className="w-full mt-4 py-2 text-[11px] font-black text-primary bg-primary/5 rounded-md hover:bg-primary/10 transition-all uppercase tracking-[0.2em] border border-primary/20">
             Ver Agenda Completa

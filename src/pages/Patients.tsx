@@ -1,28 +1,182 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion } from 'motion/react';
 import { Modal } from '../components/Modal';
-
-const mockPatients = [
-  { id: '1', name: 'Robert Fox', idNumber: '12.345.678', lastVisit: '2024-05-10', phone: '+1 234 567 890', email: 'robert@example.com', gender: 'Male', age: 34, status: 'active' },
-  { id: '2', name: 'Jane Cooper', idNumber: '23.456.789', lastVisit: '2024-05-12', phone: '+1 234 567 891', email: 'jane@example.com', gender: 'Female', age: 28, status: 'active' },
-  { id: '3', name: 'Wade Warren', idNumber: '34.567.890', lastVisit: '2024-04-28', phone: '+1 234 567 892', email: 'wade@example.com', gender: 'Male', age: 45, status: 'inactive' },
-  { id: '4', name: 'Esther Howard', idNumber: '45.678.901', lastVisit: '2024-05-01', phone: '+1 234 567 893', email: 'esther@example.com', gender: 'Female', age: 31, status: 'active' },
-];
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, where } from 'firebase/firestore';
 
 export function Patients() {
+  const [patients, setPatients] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'history' | 'add-entry' | null>(null);
   const [selectedPatient, setSelectedPatient] = useState<any>(null);
   const [isAddingEntry, setIsAddingEntry] = useState(false);
+  const [evolutions, setEvolutions] = useState<any[]>([]);
+  const [treatments, setTreatments] = useState<any[]>([]);
+  const [patientStats, setPatientStats] = useState({
+    attendance: 0,
+    absences: 0,
+    lastVisit: '-'
+  });
+
+  // Form states
+  const [formData, setFormData] = useState({
+    name: '',
+    idNumber: '',
+    phone: '',
+    email: '',
+    gender: 'Male',
+    age: '',
+    status: 'active'
+  });
+
+  const [evolutionData, setEvolutionData] = useState({
+    treatment: 'Check-up',
+    doctor: 'Dr. Smith',
+    note: ''
+  });
+
+  useEffect(() => {
+    const q = query(collection(db, 'patients'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setPatients(docs);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
+
+    const treatmentsQ = query(collection(db, 'treatments'), orderBy('name', 'asc'));
+    const unsubscribeTreatments = onSnapshot(treatmentsQ, (snapshot) => {
+      setTreatments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
+
+    return () => {
+      unsubscribe();
+      unsubscribeTreatments();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (selectedPatient && activeModal === 'history') {
+      // Fetch evolutions
+      const q = query(collection(db, `patients/${selectedPatient.id}/evolutions`), orderBy('date', 'desc'));
+      const unsubscribeEvolutions = onSnapshot(q, (snapshot) => {
+        const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setEvolutions(docs);
+      }, (error) => handleFirestoreError(error, OperationType.LIST, `patients/${selectedPatient.id}/evolutions`));
+
+      // Fetch appointments to calculate KPIs
+      const appQ = query(collection(db, 'appointments'), where('patientId', '==', selectedPatient.id));
+      const unsubscribeApps = onSnapshot(appQ, (snapshot) => {
+        const apps = snapshot.docs.map(doc => doc.data());
+        const attended = apps.filter(a => a.status === 'confirmed').length;
+        const total = apps.length;
+        const absences = apps.filter(a => a.status === 'canceled').length; // Or a specific 'no-show' status
+        
+        setPatientStats({
+          attendance: total > 0 ? Math.round((attended / total) * 100) : 0,
+          absences: absences,
+          lastVisit: selectedPatient.lastVisit || '-'
+        });
+      });
+
+      return () => {
+        unsubscribeEvolutions();
+        unsubscribeApps();
+      };
+    }
+  }, [selectedPatient, activeModal]);
 
   const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'history' | 'add-entry', patient?: any) => {
     setSelectedPatient(patient || null);
+    if (patient) {
+      setFormData({
+        name: patient.name,
+        idNumber: patient.idNumber,
+        phone: patient.phone || '',
+        email: patient.email || '',
+        gender: patient.gender || 'Male',
+        age: patient.age || '',
+        status: patient.status || 'active'
+      });
+    } else {
+      setFormData({
+        name: '',
+        idNumber: '',
+        phone: '',
+        email: '',
+        gender: 'Male',
+        age: '',
+        status: 'active'
+      });
+    }
     setActiveModal(type === 'add-entry' ? 'history' : type);
     if (type === 'add-entry') setIsAddingEntry(true);
     if (type === 'history') setIsAddingEntry(false);
   };
+
+  const handleSavePatient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const data = {
+        ...formData,
+        age: Number(formData.age),
+        updatedAt: serverTimestamp()
+      };
+
+      if (activeModal === 'edit' && selectedPatient) {
+        await updateDoc(doc(db, 'patients', selectedPatient.id), data);
+      } else {
+        await addDoc(collection(db, 'patients'), {
+          ...data,
+          createdAt: serverTimestamp(),
+          lastVisit: '-'
+        });
+      }
+      setActiveModal(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'patients');
+    }
+  };
+
+  const handleDeletePatient = async () => {
+    if (!selectedPatient) return;
+    try {
+      await deleteDoc(doc(db, 'patients', selectedPatient.id));
+      setActiveModal(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `patients/${selectedPatient.id}`);
+    }
+  };
+
+  const handleAddEvolution = async () => {
+    if (!selectedPatient || !evolutionData.note) return;
+    try {
+      const path = `patients/${selectedPatient.id}/evolutions`;
+      await addDoc(collection(db, path), {
+        ...evolutionData,
+        patientId: selectedPatient.id,
+        date: new Date().toISOString().split('T')[0],
+        status: 'Completed',
+        createdAt: serverTimestamp()
+      });
+      setIsAddingEntry(false);
+      setEvolutionData({ ...evolutionData, note: '' });
+      
+      // Update patient's last visit
+      await updateDoc(doc(db, 'patients', selectedPatient.id), {
+        lastVisit: new Date().toISOString().split('T')[0],
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `patients/${selectedPatient.id}/evolutions`);
+    }
+  };
+
+  const filteredPatients = patients.filter(p => 
+    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.idNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.phone?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
     <div className="space-y-6">
@@ -78,7 +232,7 @@ export function Patients() {
               </tr>
             </thead>
             <tbody className="divide-y divide-surface">
-              {mockPatients.map((patient) => (
+              {filteredPatients.map((patient) => (
                 <motion.tr 
                   key={patient.id}
                   initial={{ opacity: 0 }}
@@ -155,12 +309,11 @@ export function Patients() {
         </div>
         
         <div className="px-6 py-3 border-t border-outline-variant flex justify-between items-center bg-surface-bright">
-          <p className="text-[11px] font-medium text-on-surface-variant">Mostrando <b>4</b> de <b>128</b> pacientes</p>
+          <p className="text-[11px] font-medium text-on-surface-variant">Mostrando <b>{filteredPatients.length}</b> de <b>{patients.length}</b> pacientes</p>
           <div className="flex items-center gap-1">
             <button className="px-2 py-1 bg-white border border-outline-variant rounded text-[10px] font-medium text-on-surface-variant disabled:opacity-50" disabled>Ant.</button>
             <button className="px-2 py-1 bg-primary text-white rounded text-[10px] font-bold">1</button>
-            <button className="px-2 py-1 bg-white border border-outline-variant rounded text-[10px] font-medium text-on-surface-variant">2</button>
-            <button className="px-2 py-1 bg-white border border-outline-variant rounded text-[10px] font-medium text-on-surface-variant">Sig.</button>
+            <button className="px-2 py-1 bg-white border border-outline-variant rounded text-[10px] font-medium text-on-surface-variant disabled:opacity-50" disabled>Sig.</button>
           </div>
         </div>
       </div>
@@ -172,33 +325,63 @@ export function Patients() {
         title={activeModal === 'create' ? 'Registrar Nuevo Paciente' : 'Editar Paciente'}
         className="max-w-xl"
       >
-        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); setActiveModal(null); }}>
+        <form className="space-y-4" onSubmit={handleSavePatient}>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Nombre Completo</label>
-              <input type="text" defaultValue={selectedPatient?.name} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="Ej: Juan Pérez" />
+              <input 
+                type="text" 
+                required
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                placeholder="Ej: Juan Pérez" 
+              />
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">DNI / Identificación</label>
-              <input type="text" defaultValue={selectedPatient?.idNumber} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="Ej: 12.345.678" />
+              <input 
+                type="text" 
+                required
+                value={formData.idNumber}
+                onChange={(e) => setFormData({ ...formData, idNumber: e.target.value })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                placeholder="Ej: 12.345.678" 
+              />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Teléfono</label>
-              <input type="tel" defaultValue={selectedPatient?.phone} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="+1 234 567 890" />
+              <input 
+                type="tel" 
+                value={formData.phone}
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                placeholder="+1 234 567 890" 
+              />
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Email</label>
-              <input type="email" defaultValue={selectedPatient?.email} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="juan@example.com" />
+              <input 
+                type="email" 
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                placeholder="juan@example.com" 
+              />
             </div>
           </div>
 
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Género</label>
-              <select className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" defaultValue={selectedPatient?.gender || 'Male'}>
+              <select 
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                value={formData.gender}
+                onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
+              >
                 <option value="Male">Masculino</option>
                 <option value="Female">Femenino</option>
                 <option value="Other">Otro</option>
@@ -206,11 +389,20 @@ export function Patients() {
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Edad</label>
-              <input type="number" defaultValue={selectedPatient?.age} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+              <input 
+                type="number" 
+                value={formData.age}
+                onChange={(e) => setFormData({ ...formData, age: e.target.value })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+              />
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Estado</label>
-              <select className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" defaultValue={selectedPatient?.status || 'active'}>
+              <select 
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                value={formData.status}
+                onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+              >
                 <option value="active">Activo</option>
                 <option value="inactive">Inactivo</option>
               </select>
@@ -239,7 +431,7 @@ export function Patients() {
           <p className="text-on-surface">¿Está seguro de que desea eliminar al paciente <b>{selectedPatient?.name}</b>? Esta acción no se puede deshacer.</p>
           <div className="flex gap-3 pt-2">
             <button onClick={() => setActiveModal(null)} className="flex-1 px-4 py-2 bg-surface border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-outline-variant transition-colors uppercase tracking-widest">Cancelar</button>
-            <button onClick={() => setActiveModal(null)} className="flex-1 px-4 py-2 bg-error text-white rounded-lg text-[12px] font-bold hover:bg-error/90 transition-colors uppercase tracking-widest">Eliminar</button>
+            <button onClick={handleDeletePatient} className="flex-1 px-4 py-2 bg-error text-white rounded-lg text-[12px] font-bold hover:bg-error/90 transition-colors uppercase tracking-widest">Eliminar</button>
           </div>
         </div>
       </Modal>
@@ -273,17 +465,17 @@ export function Patients() {
           <div className="grid grid-cols-3 gap-3">
             <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
               <CheckCircle2 size={16} className="text-primary mb-1" />
-              <span className="text-[18px] font-bold text-on-surface">92%</span>
+              <span className="text-[18px] font-bold text-on-surface">{patientStats.attendance}%</span>
               <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Asistencia</span>
             </div>
             <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
               <AlertTriangle size={16} className="text-error mb-1" />
-              <span className="text-[18px] font-bold text-on-surface">2</span>
+              <span className="text-[18px] font-bold text-on-surface">{patientStats.absences}</span>
               <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Inasistencias</span>
             </div>
             <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
               <Calendar size={16} className="text-secondary mb-1" />
-              <span className="text-[18px] font-bold text-on-surface">3d</span>
+              <span className="text-[18px] font-bold text-on-surface">{patientStats.lastVisit}</span>
               <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Última Visita</span>
             </div>
           </div>
@@ -308,20 +500,39 @@ export function Patients() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-on-surface-variant uppercase">Tratamiento</label>
-                    <select className="w-full px-2 py-1.5 bg-white border border-outline-variant rounded-md text-[12px] outline-none">
-                      <option>Check-up</option>
-                      <option>Limpieza</option>
-                      <option>Consulta General</option>
+                    <select 
+                      className="w-full px-2 py-1.5 bg-white border border-outline-variant rounded-md text-[12px] outline-none"
+                      value={evolutionData.treatment}
+                      onChange={(e) => setEvolutionData({ ...evolutionData, treatment: e.target.value })}
+                    >
+                      <option value="">Seleccione...</option>
+                      {treatments.map(t => (
+                        <option key={t.id} value={t.name}>{t.name}</option>
+                      ))}
+                      <option value="Check-up">Check-up</option>
+                      <option value="Limpieza">Limpieza</option>
+                      <option value="Consulta General">Consulta General</option>
                     </select>
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-on-surface-variant uppercase">Doctor</label>
-                    <input type="text" className="w-full px-2 py-1.5 bg-white border border-outline-variant rounded-md text-[12px]" defaultValue="Dr. Smith" />
+                    <input 
+                      type="text" 
+                      className="w-full px-2 py-1.5 bg-white border border-outline-variant rounded-md text-[12px]" 
+                      value={evolutionData.doctor}
+                      onChange={(e) => setEvolutionData({ ...evolutionData, doctor: e.target.value })}
+                    />
                   </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-on-surface-variant uppercase">Evolución / Notas</label>
-                  <textarea rows={3} className="w-full px-2 py-1.5 bg-white border border-outline-variant rounded-md text-[12px] resize-none" placeholder="Describa el procedimiento..." />
+                  <textarea 
+                    rows={3} 
+                    className="w-full px-2 py-1.5 bg-white border border-outline-variant rounded-md text-[12px] resize-none" 
+                    placeholder="Describa el procedimiento..." 
+                    value={evolutionData.note}
+                    onChange={(e) => setEvolutionData({ ...evolutionData, note: e.target.value })}
+                  />
                 </div>
                 <div className="flex justify-end gap-2">
                   <button 
@@ -330,7 +541,10 @@ export function Patients() {
                   >
                     Cancelar
                   </button>
-                  <button className="px-3 py-1 bg-primary text-white text-[11px] font-bold rounded shadow-sm uppercase">
+                  <button 
+                    onClick={handleAddEvolution}
+                    className="px-3 py-1 bg-primary text-white text-[11px] font-bold rounded shadow-sm uppercase"
+                  >
                     Guardar Entrada
                   </button>
                 </div>
@@ -338,11 +552,8 @@ export function Patients() {
             )}
             
             <div className="space-y-3">
-              {[
-                { date: '2024-05-10', doctor: 'Dr. Smith', note: 'Paciente presenta mejoría en tratamiento de encías. Se recomienda continuar con higiene rigurosa.', treatment: 'Check-up', status: 'Completed' },
-                { date: '2024-04-15', doctor: 'Dr. Wilson', note: 'Extracción de molar realizada sin complicaciones. Post-operatorio normal.', treatment: 'Surgery', status: 'Completed' },
-              ].map((entry, idx) => (
-                <div key={idx} className="p-3 bg-white border border-outline-variant rounded-lg space-y-2 relative overflow-hidden group hover:border-primary/50 transition-colors">
+              {evolutions.map((entry) => (
+                <div key={entry.id} className="p-3 bg-white border border-outline-variant rounded-lg space-y-2 relative overflow-hidden group hover:border-primary/50 transition-colors">
                   <div className="absolute left-0 top-0 bottom-0 w-1 bg-secondary"></div>
                   <div className="flex justify-between items-start">
                     <div>
@@ -358,6 +569,12 @@ export function Patients() {
                   </div>
                 </div>
               ))}
+              {evolutions.length === 0 && (
+                <div className="text-center py-8 border-2 border-dashed border-outline-variant rounded-xl opacity-50">
+                  <FileText size={24} className="mx-auto mb-2 text-on-surface-variant" />
+                  <p className="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">Sin evoluciones registradas</p>
+                </div>
+              )}
             </div>
           </div>
 

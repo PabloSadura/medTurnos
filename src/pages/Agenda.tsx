@@ -1,29 +1,116 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs } from 'firebase/firestore';
 
 const hours = Array.from({ length: 11 }, (_, i) => i + 8); // 8:00 to 18:00
 const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-const mockAppointments = [
-  { id: 1, name: 'Robert Fox', type: 'Check-up General', time: '09:00', duration: 45, status: 'confirmed', day: 'Monday', attendance: 5 },
-  { id: 2, name: 'Jenny Wilson', type: 'Tratamiento de Conducto', time: '11:00', duration: 90, status: 'in-session', day: 'Monday', attendance: 1 },
-  { id: 3, name: 'Guy Hawkins', type: 'Limpieza Dental', time: '14:00', duration: 30, status: 'finished', day: 'Monday', attendance: 3 },
-  { id: 4, name: 'Cody Fisher', type: 'Ortodoncia', time: '16:00', duration: 45, status: 'confirmed', day: 'Monday', attendance: 12 },
-];
-
 export function Agenda() {
+  const [appointments, setAppointments] = useState<any[]>([]);
+  const [patients, setPatients] = useState<any[]>([]);
+  const [treatments, setTreatments] = useState<any[]>([]);
   const [view, setView] = useState<'day' | 'week' | 'month'>('day');
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  const [newApt, setNewApt] = useState({
+    patientId: '',
+    patientName: '',
+    date: new Date().toISOString().split('T')[0],
+    time: '09:00',
+    type: 'Check-up General',
+    notes: ''
+  });
+
+  useEffect(() => {
+    const q = query(collection(db, 'appointments'), orderBy('date', 'asc'), orderBy('time', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setAppointments(docs);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
+
+    const treatmentsQ = query(collection(db, 'treatments'), orderBy('name', 'asc'));
+    const unsubscribeTreatments = onSnapshot(treatmentsQ, (snapshot) => {
+      setTreatments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
+
+    return () => {
+      unsubscribe();
+      unsubscribeTreatments();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isNewAppointmentOpen) {
+      const fetchPatients = async () => {
+        try {
+          const q = query(collection(db, 'patients'), orderBy('name', 'asc'));
+          const snapshot = await getDocs(q);
+          setPatients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        } catch (error) {
+          handleFirestoreError(error, OperationType.LIST, 'patients');
+        }
+      };
+      fetchPatients();
+    }
+  }, [isNewAppointmentOpen]);
 
   const handleAppointmentClick = (apt: any) => {
     setSelectedAppointment(apt);
     setIsDetailModalOpen(true);
   };
+
+  const handleSaveAppointment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const patient = patients.find(p => p.id === newApt.patientId);
+      if (!patient) return;
+
+      // Calculate attendance count
+      const q = query(collection(db, 'appointments'), where('patientId', '==', newApt.patientId));
+      const snapshot = await getDocs(q);
+      const attendanceCount = snapshot.size + 1;
+
+      await addDoc(collection(db, 'appointments'), {
+        ...newApt,
+        patientName: patient.name,
+        status: 'confirmed',
+        duration: 30, // Default duration
+        attendance: attendanceCount,
+        startTime: new Date(`${newApt.date}T${newApt.time}`), // For reminders
+        createdAt: serverTimestamp()
+      });
+      setIsNewAppointmentOpen(false);
+      setNewApt({ ...newApt, patientId: '', patientName: '', notes: '' });
+      setSearchTerm('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'appointments');
+    }
+  };
+
+  const handleUpdateStatus = async (status: string) => {
+    if (!selectedAppointment) return;
+    try {
+      await updateDoc(doc(db, 'appointments', selectedAppointment.id), {
+        status,
+        updatedAt: serverTimestamp()
+      });
+      setIsDetailModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `appointments/${selectedAppointment.id}`);
+    }
+  };
+
+  const filteredPatients = patients.filter(p => 
+    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.idNumber.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
     <div className="space-y-6">
@@ -126,7 +213,7 @@ export function Agenda() {
                       <span className="text-[10px] font-bold text-on-surface-variant">{hour}:00</span>
                     </div>
                     <div className="relative border-b border-surface p-1 min-h-[100px] hover:bg-surface/30 transition-colors">
-                      {mockAppointments.filter(a => parseInt(a.time.split(':')[0]) === hour).map((apt) => (
+                      {appointments.filter(a => parseInt(a.time.split(':')[0]) === hour).map((apt) => (
                         <motion.div
                           key={apt.id}
                           layoutId={`apt-${apt.id}`}
@@ -135,16 +222,17 @@ export function Agenda() {
                             "absolute inset-x-2 p-3 rounded border-l-4 shadow-sm cursor-pointer group hover:shadow-md transition-all z-10 flex flex-col justify-center",
                             apt.status === 'confirmed' ? "bg-primary/5 border-primary text-primary" : 
                             apt.status === 'in-session' ? "bg-tertiary/5 border-tertiary text-tertiary" : 
+                            apt.status === 'finished' ? "bg-secondary/5 border-secondary text-secondary" :
                             "bg-surface border-outline-variant text-on-surface-variant opacity-80"
                           )}
                           style={{
                             top: `${(parseInt(apt.time.split(':')[1]) / 60) * 100}%`,
-                            height: `${(apt.duration / 60) * 100}px`
+                            height: `${((apt.duration || 30) / 60) * 100}px`
                           }}
                         >
                           <div className="flex justify-between items-start overflow-hidden">
                             <div className="min-w-0">
-                              <p className="text-[13px] font-bold truncate leading-tight">{apt.name}</p>
+                              <p className="text-[13px] font-bold truncate leading-tight">{apt.patientName}</p>
                               <div className="flex items-center gap-1.5 mt-1 text-[10px] font-bold opacity-80 uppercase tracking-tighter">
                                 <span>{apt.type}</span>
                                 <span>•</span>
@@ -182,9 +270,9 @@ export function Agenda() {
                     </div>
                     {days.map((day) => (
                       <div key={`${day}-${hour}`} className="border-b border-r border-surface min-h-[60px] hover:bg-surface/30 transition-colors">
-                        {mockAppointments.filter(a => a.day === day && parseInt(a.time.split(':')[0]) === hour).map((apt) => (
+                        {appointments.filter(a => parseInt(a.time.split(':')[0]) === hour).map((apt) => (
                           <div key={apt.id} className="m-0.5 p-1 rounded bg-primary-container/40 border-l-2 border-primary text-[10px] font-bold text-primary truncate">
-                            {apt.name}
+                            {apt.patientName}
                           </div>
                         ))}
                       </div>
@@ -225,17 +313,37 @@ export function Agenda() {
         onClose={() => setIsNewAppointmentOpen(false)} 
         title="Agendar Nuevo Turno"
       >
-        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); setIsNewAppointmentOpen(false); }}>
+        <form className="space-y-4" onSubmit={handleSaveAppointment}>
           <div className="space-y-2">
             <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Paciente</label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant" />
               <input 
                 type="text" 
-                placeholder="Buscar paciente..."
+                placeholder="Buscar paciente por nombre..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-9 pr-4 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]"
               />
+              {searchTerm && !newApt.patientId && (
+                <div className="absolute top-full left-0 right-0 z-50 bg-white border border-outline-variant rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
+                  {filteredPatients.map(p => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => {
+                        setNewApt({ ...newApt, patientId: p.id, patientName: p.name });
+                        setSearchTerm(p.name);
+                      }}
+                      className="w-full px-4 py-2 text-left text-[12px] hover:bg-surface transition-colors border-b last:border-0 border-outline-variant"
+                    >
+                      {p.name} ({p.idNumber})
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
+            <input type="hidden" required value={newApt.patientId} />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -243,27 +351,37 @@ export function Agenda() {
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Fecha</label>
               <input 
                 type="date" 
+                required
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]"
-                defaultValue="2024-05-13"
+                value={newApt.date}
+                onChange={(e) => setNewApt({ ...newApt, date: e.target.value })}
               />
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Hora</label>
               <input 
                 type="time" 
+                required
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]"
-                defaultValue="09:00"
+                value={newApt.time}
+                onChange={(e) => setNewApt({ ...newApt, time: e.target.value })}
               />
             </div>
           </div>
 
           <div className="space-y-2">
             <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Tratamiento</label>
-            <select className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]">
-              <option>Check-up General</option>
-              <option>Limpieza Dental</option>
-              <option>Tratamiento de Conducto</option>
-              <option>Ortodoncia</option>
+            <select 
+              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]"
+              value={newApt.type}
+              onChange={(e) => setNewApt({ ...newApt, type: e.target.value })}
+            >
+              <option value="">Seleccione...</option>
+              {treatments.map(t => (
+                <option key={t.id} value={t.name}>{t.name}</option>
+              ))}
+              <option value="Check-up General">Check-up General</option>
+              <option value="Limpieza Dental">Limpieza Dental</option>
             </select>
           </div>
 
@@ -273,6 +391,8 @@ export function Agenda() {
               rows={3}
               placeholder="Agregar observaciones..."
               className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px] resize-none"
+              value={newApt.notes}
+              onChange={(e) => setNewApt({ ...newApt, notes: e.target.value })}
             />
           </div>
 
@@ -286,13 +406,15 @@ export function Agenda() {
             </button>
             <button 
               type="submit"
-              className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors"
+              disabled={!newApt.patientId}
+              className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors disabled:opacity-50"
             >
               GUARDAR TURNO
             </button>
           </div>
         </form>
       </Modal>
+
       <Modal 
         isOpen={isDetailModalOpen} 
         onClose={() => setIsDetailModalOpen(false)} 
@@ -302,10 +424,10 @@ export function Agenda() {
           <div className="space-y-6">
             <div className="flex items-center gap-4 p-4 bg-surface-bright rounded-xl border border-outline-variant">
               <div className="w-12 h-12 rounded-full bg-primary-container text-primary flex items-center justify-center text-lg font-bold">
-                {selectedAppointment.name.charAt(0)}
+                {selectedAppointment.patientName.charAt(0)}
               </div>
               <div>
-                <h4 className="text-sm font-bold text-on-surface">{selectedAppointment.name}</h4>
+                <h4 className="text-sm font-bold text-on-surface">{selectedAppointment.patientName}</h4>
                 <p className="text-[11px] text-on-surface-variant tracking-wide uppercase font-bold">
                   {selectedAppointment.time} • {selectedAppointment.duration} min
                 </p>
@@ -336,7 +458,7 @@ export function Agenda() {
                 ].map((s) => (
                   <button
                     key={s.id}
-                    onClick={() => setIsDetailModalOpen(false)}
+                    onClick={() => handleUpdateStatus(s.id)}
                     className={cn(
                       "px-3 py-2 rounded-lg border text-[11px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2",
                       selectedAppointment.status === s.id 

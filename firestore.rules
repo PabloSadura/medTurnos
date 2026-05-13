@@ -1,77 +1,44 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default deny
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Global Helpers
+    // ------------------------------------------------------------
+    // Shared Primitives
+    // ------------------------------------------------------------
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
     }
 
-    function isValidId(id) {
-      return id is string && id.size() <= 128;
+    // ------------------------------------------------------------
+    // Collections
+    // ------------------------------------------------------------
+
+    match /appointments/{id} {
+      allow read, write: if isSignedIn();
     }
 
-    // Entities
-    match /users/{userId} {
-      function isValidUser(data) {
-        return data.keys().hasAll(['email', 'name']) &&
-               data.email is string && data.email.size() <= 256 &&
-               data.name is string && data.name.size() <= 128;
+    match /patients/{id} {
+      allow read, write: if isSignedIn();
+      
+      match /evolutions/{eid} {
+        allow read, write: if isSignedIn();
       }
-
-      allow get: if isSignedIn();
-      allow list: if isSignedIn();
-      allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if isOwner(userId) && isValidUser(request.resource.data) &&
-                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'specialty', 'licenseNumber', 'photoUrl', 'availability']);
     }
 
-    match /patients/{patientId} {
-      function isValidPatient(data) {
-        return data.keys().hasAll(['name', 'idNumber']) &&
-               data.name is string && data.name.size() <= 128 &&
-               data.idNumber is string && data.idNumber.size() <= 64;
-      }
-
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidPatient(request.resource.data);
-      allow update: if isSignedIn() && isValidPatient(request.resource.data);
-      allow delete: if isSignedIn();
+    match /treatments/{id} {
+      allow read, write: if isSignedIn();
     }
 
-    match /appointments/{appointmentId} {
-      function isValidAppointment(data) {
-        return data.keys().hasAll(['patientId', 'professionalId', 'date', 'time', 'status']) &&
-               data.status in ['pending', 'confirmed', 'rescheduled', 'in-session', 'finished', 'canceled'];
-      }
-
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidAppointment(request.resource.data);
-      allow update: if isSignedIn() && isValidAppointment(request.resource.data);
-      allow delete: if isSignedIn();
+    match /inventory/{id} {
+      allow read, write: if isSignedIn();
     }
 
-    match /inventory/{itemId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
-    }
-
-    match /treatments/{treatmentId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
-    }
-    
-    match /test/connection {
-      allow get: if true;
+    match /users/{id} {
+      allow read, write: if isSignedIn() && request.auth.uid == id;
     }
   }
 }

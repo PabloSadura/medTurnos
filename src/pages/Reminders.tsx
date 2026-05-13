@@ -1,24 +1,89 @@
+import { useState, useEffect } from 'react';
 import { MessageSquare, CalendarClock, History, Settings, Send, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
 import { cn } from '../lib/utils';
-
-const notifications = [
-  { id: 1, type: 'WhatsApp', patient: 'Theresa Webb', time: '10:00 AM', status: 'Sent', date: 'Upcoming', message: 'Hi Theresa! Remember your appointment today...' },
-  { id: 2, type: 'WhatsApp', patient: 'Courtney Henry', time: '11:45 AM', status: 'Pending', date: 'Upcoming', message: 'Hello Courtney, your consultation starts in 1 hour.' },
-  { id: 3, type: 'WhatsApp', patient: 'Eleanor Pena', time: 'Yesterday', status: 'Delivered', date: 'Past', message: 'Thanks for visiting us yesterday! How are you feeling?' },
-];
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { collection, onSnapshot, query, where, orderBy, getDoc, doc } from 'firebase/firestore';
 
 export function Reminders() {
+  const [reminders, setReminders] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Fetch upcoming appointments for today and tomorrow
+    const now = new Date();
+    const tomorrow = new Date();
+    tomorrow.setDate(now.getDate() + 1);
+    tomorrow.setHours(23, 59, 59, 999);
+
+    const q = query(
+      collection(db, 'appointments'),
+      where('startTime', '>=', now),
+      where('startTime', '<=', tomorrow),
+      orderBy('startTime', 'asc')
+    );
+
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const appointments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      
+      // Enrich with patient data
+      const enriched = await Promise.all(appointments.map(async (app: any) => {
+        let patientName = 'Unknown Patient';
+        let patientPhone = '';
+        if (app.patientId) {
+          const pDoc = await getDoc(doc(db, 'patients', app.patientId));
+          if (pDoc.exists()) {
+            const pData = pDoc.data();
+            patientName = pData.name;
+            patientPhone = pData.phone;
+          }
+        }
+        
+        const date = app.startTime?.toDate() || new Date();
+        const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const dateStr = date.toDateString() === new Date().toDateString() ? 'Today' : 'Tomorrow';
+        
+        const message = `Hola ${patientName}, te recordamos tu turno el ${dateStr} a las ${timeStr}. ¡Te esperamos!`;
+        
+        return {
+          id: app.id,
+          patient: patientName,
+          phone: patientPhone,
+          time: timeStr,
+          date: dateStr,
+          status: app.status || 'Pending',
+          message
+        };
+      }));
+
+      setReminders(enriched);
+      setLoading(false);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleSendWhatsApp = (reminder: any) => {
+    if (!reminder.phone) {
+      alert('El paciente no tiene un número de teléfono registrado.');
+      return;
+    }
+    // Clean phone number (remove +, spaces, etc)
+    const cleanPhone = reminder.phone.replace(/\D/g, '');
+    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(reminder.message)}`;
+    window.open(url, '_blank');
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h1 className="headline-lg text-on-surface">Recordatorios Automáticos</h1>
-          <p className="body-md text-on-surface-variant">Configure y monitoree las notificaciones de WhatsApp y Email para pacientes.</p>
+          <h1 className="headline-lg text-on-surface">Recordatorios de WhatsApp</h1>
+          <p className="body-md text-on-surface-variant">Monitoree y envíe recordatorios manuales a sus pacientes.</p>
         </div>
         <div className="flex gap-2">
           <button className="px-3 py-1.5 bg-white border border-outline-variant text-[11px] font-bold text-on-surface-variant rounded-md flex items-center gap-2 hover:bg-surface transition-all uppercase tracking-wider">
             <Settings size={14} />
-            Configurar Bot
+            Configuración
           </button>
         </div>
       </div>
@@ -27,13 +92,13 @@ export function Reminders() {
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-white rounded-xl border border-outline-variant shadow-sm overflow-hidden">
             <div className="px-6 py-3 border-b border-outline-variant flex justify-between items-center bg-surface-bright">
-              <h3 className="text-sm font-bold text-on-surface">Cola de Mensajes Activa</h3>
-              <span className="text-[10px] font-bold bg-primary-container text-primary px-2 py-0.5 rounded uppercase">12 Pendientes</span>
+              <h3 className="text-sm font-bold text-on-surface">Cola de Recordatorios</h3>
+              <span className="text-[10px] font-bold bg-primary-container text-primary px-2 py-0.5 rounded uppercase">{reminders.length} Pendientes</span>
             </div>
             
             <div className="divide-y divide-surface">
-              {notifications.map((msg) => (
-                <div key={msg.id} className="p-4 hover:bg-surface/50 transition-colors group cursor-pointer">
+              {reminders.map((msg) => (
+                <div key={msg.id} className="p-4 hover:bg-surface/50 transition-colors group">
                   <div className="flex justify-between items-center mb-2">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 bg-[#25D366]/10 text-[#25D366] rounded-full flex items-center justify-center">
@@ -46,30 +111,32 @@ export function Reminders() {
                     </div>
                     <div className={cn(
                       "flex items-center gap-1 text-[10px] font-black uppercase tracking-wider",
-                      msg.status === 'Sent' ? 'text-primary' : msg.status === 'Pending' ? 'text-on-surface-variant/40' : 'text-tertiary'
+                      msg.status === 'confirmed' ? 'text-primary' : 'text-on-surface-variant/40'
                     )}>
-                      {msg.status === 'Sent' && <CheckCircle2 size={12} />}
-                      {msg.status === 'Pending' && <Clock size={12} />}
-                      {msg.status === 'Delivered' && <CheckCircle2 size={12} className="text-tertiary" />}
+                      {msg.status === 'confirmed' && <CheckCircle2 size={12} />}
+                      {msg.status === 'pending' && <Clock size={12} />}
                       {msg.status}
                     </div>
                   </div>
                   <div className="flex justify-between items-center group/btn">
                     <p className="text-[12px] text-on-surface-variant italic bg-surface-bright px-3 py-2 rounded-lg border border-surface flex-1">"{msg.message}"</p>
                     <button 
-                      onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(msg.message)}`, '_blank')}
-                      className="ml-3 p-2 bg-[#25D366] text-white rounded-lg opacity-0 group-hover:opacity-100 group-hover/btn:opacity-100 transition-all hover:scale-105 active:scale-95 shadow-sm"
-                      title="Abrir en WhatsApp"
+                      onClick={() => handleSendWhatsApp(msg)}
+                      className="ml-3 p-2 bg-[#25D366] text-white rounded-lg opacity-100 md:opacity-0 group-hover:opacity-100 group-hover/btn:opacity-100 transition-all hover:scale-105 active:scale-95 shadow-sm"
+                      title="Enviar WhatsApp"
                     >
                       <Send size={14} />
                     </button>
                   </div>
                 </div>
               ))}
+              {reminders.length === 0 && !loading && (
+                <div className="p-12 text-center text-on-surface-variant">
+                  <CalendarClock size={40} className="mx-auto mb-3 opacity-20" />
+                  <p className="text-sm font-bold uppercase tracking-widest opacity-40">No hay recordatorios próximos</p>
+                </div>
+              )}
             </div>
-            <button className="w-full py-2 bg-white text-[11px] text-primary hover:bg-surface transition-all uppercase font-bold border-t border-outline-variant tracking-widest">
-              Ver Historial Completo
-            </button>
           </div>
         </div>
 

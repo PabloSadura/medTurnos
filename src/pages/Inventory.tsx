@@ -1,24 +1,129 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Package, Plus, Search, AlertCircle, TrendingDown, RefreshCw, BarChart3, ChevronRight, Save, History, ArrowUpRight, ArrowDownRight, Edit3 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
-
-const mockInventory = [
-  { id: '1', name: 'Dental Resin A2', sku: 'DR-A2-001', stock: 12, minStock: 5, unit: 'pcs', category: 'Supplies', status: 'normal' },
-  { id: '2', name: 'Latex Gloves (S)', sku: 'LG-S-042', stock: 3, minStock: 10, unit: 'boxes', category: 'Disposable', status: 'low' },
-  { id: '3', name: 'Surgical Masks', sku: 'SM-001', stock: 0, minStock: 8, unit: 'boxes', category: 'Disposable', status: 'out' },
-  { id: '4', name: 'Anesthetic Carpules', sku: 'AC-L-012', stock: 45, minStock: 20, unit: 'pcs', category: 'Medicine', status: 'normal' },
-];
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where } from 'firebase/firestore';
 
 export function Inventory() {
+  const [inventory, setInventory] = useState<any[]>([]);
   const [activeModal, setActiveModal] = useState<'create' | 'adjust' | 'details' | null>(null);
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [isEditingStock, setIsEditingStock] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'low'>('all');
+
+  const [formData, setFormData] = useState({
+    name: '',
+    sku: '',
+    category: 'Suministros',
+    stock: 0,
+    minStock: 0,
+    unit: 'pcs'
+  });
+
+  const [adjustmentData, setAdjustmentData] = useState({
+    type: 'in' as 'in' | 'out',
+    quantity: 0,
+    reason: ''
+  });
+
+  useEffect(() => {
+    const q = query(collection(db, 'inventory'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const items = snapshot.docs.map(doc => {
+        const data = doc.data();
+        let status = 'normal';
+        if (data.stock <= 0) status = 'out';
+        else if (data.stock <= data.minStock) status = 'low';
+        return { id: doc.id, ...data, status };
+      });
+      setInventory(items);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'inventory'));
+
+    return () => unsubscribe();
+  }, []);
 
   const handleOpenModal = (type: 'create' | 'adjust' | 'details', item?: any) => {
     setSelectedItem(item || null);
+    if (item) {
+      setFormData({
+        name: item.name,
+        sku: item.sku,
+        category: item.category,
+        stock: item.stock,
+        minStock: item.minStock,
+        unit: item.unit
+      });
+    } else {
+      setFormData({
+        name: '',
+        sku: '',
+        category: 'Suministros',
+        stock: 0,
+        minStock: 0,
+        unit: 'pcs'
+      });
+    }
     setActiveModal(type);
     setIsEditingStock(false);
+  };
+
+  const handleSaveItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (selectedItem) {
+        await updateDoc(doc(db, 'inventory', selectedItem.id), {
+          ...formData,
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        await addDoc(collection(db, 'inventory'), {
+          ...formData,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
+      setActiveModal(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'inventory');
+    }
+  };
+
+  const handleAdjustStock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedItem) return;
+    try {
+      const newStock = adjustmentData.type === 'in' 
+        ? selectedItem.stock + adjustmentData.quantity 
+        : selectedItem.stock - adjustmentData.quantity;
+
+      await updateDoc(doc(db, 'inventory', selectedItem.id), {
+        stock: Math.max(0, newStock),
+        updatedAt: serverTimestamp()
+      });
+
+      // Optionally log movement here in a subcollection
+      
+      setActiveModal(null);
+      setAdjustmentData({ type: 'in', quantity: 0, reason: '' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `inventory/${selectedItem.id}`);
+    }
+  };
+
+  const filteredInventory = inventory.filter(item => {
+    const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                         item.sku.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesStatus = statusFilter === 'all' || item.status === 'low' || item.status === 'out';
+    return matchesSearch && matchesStatus;
+  });
+
+  const stats = {
+    totalItems: inventory.length,
+    lowStock: inventory.filter(i => i.status === 'low' || i.status === 'out').length,
+    consumption: '+12%', // Mocked for now
+    monthlyCost: '$2.4k'   // Mocked for now
   };
 
   return (
@@ -48,10 +153,10 @@ export function Inventory() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: 'Total Ítems', value: '1,204', icon: Package, color: 'bg-primary-container text-primary' },
-          { label: 'Stock Bajo', value: '14', icon: AlertCircle, color: 'bg-error-container text-error' },
-          { label: 'Consumo', value: '+12%', icon: TrendingDown, color: 'bg-tertiary-container text-on-tertiary-container' },
-          { label: 'Costo Mensual', value: '$2.4k', icon: BarChart3, color: 'bg-secondary-container text-secondary' },
+          { label: 'Total Ítems', value: stats.totalItems, icon: Package, color: 'bg-primary-container text-primary' },
+          { label: 'Stock Bajo', value: stats.lowStock, icon: AlertCircle, color: 'bg-error-container text-error' },
+          { label: 'Consumo', value: stats.consumption, icon: TrendingDown, color: 'bg-tertiary-container text-on-tertiary-container' },
+          { label: 'Costo Mensual', value: stats.monthlyCost, icon: BarChart3, color: 'bg-secondary-container text-secondary' },
         ].map((stat) => (
           <div key={stat.label} className="bg-white p-4 rounded-xl border border-outline-variant shadow-sm flex items-center gap-4">
             <div className={cn("p-2 rounded-lg", stat.color)}>
@@ -72,12 +177,30 @@ export function Inventory() {
             <input 
               type="text" 
               placeholder="Buscar ítem o SKU..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-9 pr-4 py-1.5 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary text-[13px] outline-none" 
             />
           </div>
           <div className="flex gap-1">
-            <button className="px-3 py-1.5 rounded-md text-[11px] font-bold bg-surface text-on-surface-variant hover:bg-outline-variant transition-all">Todos</button>
-            <button className="px-3 py-1.5 rounded-md text-[11px] font-bold bg-error-container text-error hover:bg-error/10 transition-all">Stock Bajo</button>
+            <button 
+              onClick={() => setStatusFilter('all')}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-[11px] font-bold transition-all uppercase tracking-wider",
+                statusFilter === 'all' ? "bg-primary text-white" : "bg-surface text-on-surface-variant hover:bg-outline-variant"
+              )}
+            >
+              Todos
+            </button>
+            <button 
+              onClick={() => setStatusFilter('low')}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-[11px] font-bold transition-all uppercase tracking-wider",
+                statusFilter === 'low' ? "bg-error text-white" : "bg-error-container text-error hover:bg-error/10"
+              )}
+            >
+              Stock Bajo
+            </button>
           </div>
         </div>
 
@@ -93,7 +216,7 @@ export function Inventory() {
               </tr>
             </thead>
             <tbody className="divide-y divide-surface">
-              {mockInventory.map((item) => (
+              {filteredInventory.map((item) => (
                 <tr key={item.id} className="hover:bg-surface/50 transition-colors group">
                   <td className="px-6 py-3">
                     <p className="text-[13px] font-bold text-on-surface">{item.name}</p>
@@ -144,22 +267,40 @@ export function Inventory() {
       <Modal
         isOpen={activeModal === 'create'}
         onClose={() => setActiveModal(null)}
-        title="Agregar Nuevo Ítem"
+        title={selectedItem ? "Editar Ítem" : "Agregar Nuevo Ítem"}
       >
-        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); setActiveModal(null); }}>
+        <form className="space-y-4" onSubmit={handleSaveItem}>
           <div className="space-y-2">
             <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Nombre del Producto</label>
-            <input type="text" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="Ej: Guantes de Látex" />
+            <input 
+              type="text" 
+              required
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+              placeholder="Ej: Guantes de Látex" 
+            />
           </div>
           
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">SKU / Código</label>
-              <input type="text" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="Ej: GL-001" />
+              <input 
+                type="text" 
+                required
+                value={formData.sku}
+                onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                placeholder="Ej: GL-001" 
+              />
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Categoría</label>
-              <select className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary">
+              <select 
+                value={formData.category}
+                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary"
+              >
                 <option>Suministros</option>
                 <option>Descartables</option>
                 <option>Medicamentos</option>
@@ -171,15 +312,34 @@ export function Inventory() {
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Inicial</label>
-              <input type="number" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+              <input 
+                type="number" 
+                required
+                value={formData.stock}
+                onChange={(e) => setFormData({ ...formData, stock: parseInt(e.target.value) })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+              />
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Mínimo</label>
-              <input type="number" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+              <input 
+                type="number" 
+                required
+                value={formData.minStock}
+                onChange={(e) => setFormData({ ...formData, minStock: parseInt(e.target.value) })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+              />
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Unidad</label>
-              <input type="text" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="Pzs, cajas.." />
+              <input 
+                type="text" 
+                required
+                value={formData.unit}
+                onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                placeholder="Pzs, cajas.." 
+              />
             </div>
           </div>
 
@@ -195,11 +355,16 @@ export function Inventory() {
         onClose={() => setActiveModal(null)}
         title="Ajustar Stock"
       >
-        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); setActiveModal(null); }}>
+        <form className="space-y-4" onSubmit={handleAdjustStock}>
           <div className="space-y-2">
             <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Producto</label>
-            <select className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary">
-              {mockInventory.map(item => (
+            <select 
+              value={selectedItem?.id}
+              onChange={(e) => setSelectedItem(inventory.find(i => i.id === e.target.value))}
+              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="">Seleccione un producto</option>
+              {inventory.map(item => (
                 <option key={item.id} value={item.id}>{item.name} ({item.stock} {item.unit})</option>
               ))}
             </select>
@@ -209,23 +374,50 @@ export function Inventory() {
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Tipo de Ajuste</label>
               <div className="flex gap-2">
-                <button type="button" className="flex-1 py-2 flex items-center justify-center gap-1.5 rounded-lg border border-primary bg-primary/10 text-primary text-[12px] font-bold">
+                <button 
+                  type="button" 
+                  onClick={() => setAdjustmentData({ ...adjustmentData, type: 'in' })}
+                  className={cn(
+                    "flex-1 py-2 flex items-center justify-center gap-1.5 rounded-lg border text-[12px] font-bold",
+                    adjustmentData.type === 'in' ? "border-primary bg-primary/10 text-primary" : "border-outline-variant hover:bg-surface text-on-surface-variant"
+                  )}
+                >
                   <ArrowUpRight size={14} /> ENTRADA
                 </button>
-                <button type="button" className="flex-1 py-2 flex items-center justify-center gap-1.5 rounded-lg border border-outline-variant hover:bg-surface text-on-surface-variant text-[12px] font-bold">
+                <button 
+                  type="button" 
+                  onClick={() => setAdjustmentData({ ...adjustmentData, type: 'out' })}
+                  className={cn(
+                    "flex-1 py-2 flex items-center justify-center gap-1.5 rounded-lg border text-[12px] font-bold",
+                    adjustmentData.type === 'out' ? "border-primary bg-primary/10 text-primary" : "border-outline-variant hover:bg-surface text-on-surface-variant"
+                  )}
+                >
                   <ArrowDownRight size={14} /> SALIDA
                 </button>
               </div>
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Cantidad</label>
-              <input type="number" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="0" />
+              <input 
+                type="number" 
+                required
+                value={adjustmentData.quantity}
+                onChange={(e) => setAdjustmentData({ ...adjustmentData, quantity: parseInt(e.target.value) })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                placeholder="0" 
+              />
             </div>
           </div>
 
           <div className="space-y-2">
             <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Motivo</label>
-            <textarea rows={2} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary resize-none" placeholder="Ej: Compra a proveedor, descarte por vencimiento..." />
+            <textarea 
+              rows={2} 
+              value={adjustmentData.reason}
+              onChange={(e) => setAdjustmentData({ ...adjustmentData, reason: e.target.value })}
+              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary resize-none" 
+              placeholder="Ej: Compra a proveedor, descarte por vencimiento..." 
+            />
           </div>
 
           <div className="pt-4 flex gap-3">
@@ -293,19 +485,29 @@ export function Inventory() {
               </div>
             </>
           ) : (
-            <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); setIsEditingStock(false); }}>
+            <form className="space-y-4" onSubmit={handleSaveItem}>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Actual</label>
                   <div className="relative">
-                    <input type="number" defaultValue={selectedItem?.stock} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+                    <input 
+                      type="number" 
+                      value={formData.stock}
+                      onChange={(e) => setFormData({ ...formData, stock: parseInt(e.target.value) })}
+                      className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                    />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-on-surface-variant">{selectedItem?.unit}</span>
                   </div>
                 </div>
                 <div className="space-y-2">
                   <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Mínimo</label>
                   <div className="relative">
-                    <input type="number" defaultValue={selectedItem?.minStock} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+                    <input 
+                      type="number" 
+                      value={formData.minStock}
+                      onChange={(e) => setFormData({ ...formData, minStock: parseInt(e.target.value) })}
+                      className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                    />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-on-surface-variant">{selectedItem?.unit}</span>
                   </div>
                 </div>

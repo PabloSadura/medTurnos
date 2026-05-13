@@ -1,31 +1,133 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Stethoscope, Plus, Search, DollarSign, Clock, ChevronRight, Package, Edit3, Trash2, Save, AlertTriangle, X, Info } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 import { motion } from 'motion/react';
-
-const mockTreatments = [
-  { id: '1', name: 'Dental Cleaning', cost: 120, duration: 45, category: 'General', stockLinked: 3 },
-  { id: '2', name: 'Teeth Whitening', cost: 350, duration: 60, category: 'Cosmetic', stockLinked: 5 },
-  { id: '3', name: 'Root Canal', cost: 800, duration: 90, category: 'Specialized', stockLinked: 12 },
-  { id: '4', name: 'Filling Replacement', cost: 150, duration: 30, category: 'General', stockLinked: 4 },
-];
-
-const mockSupplies = [
-  { id: '1', name: 'Dental Resin A2', unit: 'pcs', qty: 1 },
-  { id: '2', name: 'Latex Gloves (Box)', unit: 'box', qty: 0.1 },
-  { id: '3', name: 'Anesthesia Vials', unit: 'pcs', qty: 2 },
-];
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { collection, onSnapshot, query, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 
 export function Treatments() {
+  const [treatments, setTreatments] = useState<any[]>([]);
+  const [inventory, setInventory] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'category' | 'supplies' | null>(null);
   const [selectedTreatment, setSelectedTreatment] = useState<any>(null);
+  const [isLinking, setIsLinking] = useState(false);
+  const [currentSupplies, setCurrentSupplies] = useState<any[]>([]);
+  const [inventorySearch, setInventorySearch] = useState('');
+
+  const [formData, setFormData] = useState({
+    name: '',
+    cost: 0,
+    duration: 30,
+    category: 'General',
+    supplies: [] as any[]
+  });
+
+  useEffect(() => {
+    const q = query(collection(db, 'treatments'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setTreatments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
+
+    const invQ = query(collection(db, 'inventory'), orderBy('name', 'asc'));
+    const unsubscribeInv = onSnapshot(invQ, (snapshot) => {
+      setInventory(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'inventory'));
+
+    return () => {
+      unsubscribe();
+      unsubscribeInv();
+    };
+  }, []);
 
   const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'category'| 'supplies', treatment?: any) => {
     setSelectedTreatment(treatment || null);
+    if (treatment) {
+      setFormData({
+        name: treatment.name,
+        cost: treatment.cost,
+        duration: treatment.duration,
+        category: treatment.category,
+        supplies: treatment.supplies || []
+      });
+      setCurrentSupplies(treatment.supplies || []);
+    } else {
+      setFormData({
+        name: '',
+        cost: 0,
+        duration: 30,
+        category: 'General',
+        supplies: []
+      });
+      setCurrentSupplies([]);
+    }
     setActiveModal(type);
+    setIsLinking(false);
   };
+
+  const handleSaveTreatment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const data = {
+        ...formData,
+        supplies: currentSupplies,
+        updatedAt: serverTimestamp()
+      };
+
+      if (selectedTreatment) {
+        await updateDoc(doc(db, 'treatments', selectedTreatment.id), data);
+      } else {
+        await addDoc(collection(db, 'treatments'), {
+          ...data,
+          createdAt: serverTimestamp()
+        });
+      }
+      setActiveModal(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'treatments');
+    }
+  };
+
+  const handleDeleteTreatment = async () => {
+    if (!selectedTreatment) return;
+    try {
+      await deleteDoc(doc(db, 'treatments', selectedTreatment.id));
+      setActiveModal(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `treatments/${selectedTreatment.id}`);
+    }
+  };
+
+  const addSupply = (item: any) => {
+    if (!currentSupplies.find(s => s.id === item.id)) {
+      setCurrentSupplies([...currentSupplies, { 
+        id: item.id, 
+        name: item.name, 
+        unit: item.unit, 
+        qty: 1 
+      }]);
+    }
+    setIsLinking(false);
+  };
+
+  const removeSupply = (id: string) => {
+    setCurrentSupplies(currentSupplies.filter(s => s.id !== id));
+  };
+
+  const updateSupplyQty = (id: string, qty: number) => {
+    setCurrentSupplies(currentSupplies.map(s => s.id === id ? { ...s, qty } : s));
+  };
+
+  const filteredTreatments = treatments.filter(t => 
+    t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    t.category.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const filteredInventory = inventory.filter(i => 
+    i.name.toLowerCase().includes(inventorySearch.toLowerCase()) &&
+    !currentSupplies.find(cs => cs.id === i.id)
+  );
 
   return (
     <div className="space-y-6">
@@ -44,7 +146,7 @@ export function Treatments() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {mockTreatments.map((treatment) => (
+        {filteredTreatments.map((treatment) => (
           <div key={treatment.id} className="bg-white border border-outline-variant rounded-xl shadow-sm hover:shadow-md transition-all overflow-hidden group flex flex-col">
             <div className="p-4 flex-1">
               <div className="flex justify-between items-start mb-3">
@@ -88,7 +190,7 @@ export function Treatments() {
             >
               <div className="flex items-center gap-1.5 text-on-surface-variant group-hover/link:text-primary transition-colors">
                 <Package size={12} />
-                <span className="text-[10px] font-bold uppercase tracking-tight">{treatment.stockLinked} Insumos Vinculados</span>
+                <span className="text-[10px] font-bold uppercase tracking-tight">{treatment.supplies?.length || 0} Insumos Vinculados</span>
               </div>
               <ChevronRight size={14} className="text-on-surface-variant group-hover/link:text-primary group-hover/link:translate-x-1 transition-all" />
             </button>
@@ -110,30 +212,53 @@ export function Treatments() {
         onClose={() => setActiveModal(null)}
         title={activeModal === 'create' ? 'Nuevo Tratamiento' : 'Editar Tratamiento'}
       >
-        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); setActiveModal(null); }}>
+        <form className="space-y-4" onSubmit={handleSaveTreatment}>
           <div className="space-y-2">
             <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Nombre del Tratamiento</label>
-            <input type="text" defaultValue={selectedTreatment?.name} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="Ej: Limpieza Completa" />
+            <input 
+              type="text" 
+              required
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+              placeholder="Ej: Limpieza Completa" 
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Costo ($)</label>
-              <input type="number" defaultValue={selectedTreatment?.cost} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+              <input 
+                type="number" 
+                required
+                value={formData.cost}
+                onChange={(e) => setFormData({ ...formData, cost: parseInt(e.target.value) })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+              />
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Duración (min)</label>
-              <input type="number" defaultValue={selectedTreatment?.duration} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+              <input 
+                type="number" 
+                required
+                value={formData.duration}
+                onChange={(e) => setFormData({ ...formData, duration: parseInt(e.target.value) })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+              />
             </div>
           </div>
 
           <div className="space-y-2">
             <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Categoría</label>
-            <select className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" defaultValue={selectedTreatment?.category || 'General'}>
+            <select 
+              value={formData.category}
+              onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary"
+            >
               <option value="General">General</option>
-              <option value="Cosmetic">Estética</option>
-              <option value="Specialized">Especializado</option>
-              <option value="Surgery">Cirugía</option>
+              <option value="Estética">Estética</option>
+              <option value="Especializado">Especializado</option>
+              <option value="Cirugía">Cirugía</option>
             </select>
           </div>
 
@@ -179,42 +304,116 @@ export function Treatments() {
             </div>
           </div>
 
-          <div className="space-y-3">
-             <div className="flex justify-between items-center">
-               <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Insumos Vinculados</h5>
-               <button className="text-[10px] font-bold text-primary hover:underline uppercase tracking-wider flex items-center gap-1">
-                 <Plus size={12} /> Vincular Nuevo
-               </button>
-             </div>
+          {!isLinking ? (
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Insumos Vinculados</h5>
+                <button 
+                  onClick={() => setIsLinking(true)}
+                  className="text-[10px] font-bold text-primary hover:underline uppercase tracking-wider flex items-center gap-1"
+                >
+                  <Plus size={12} /> Vincular Nuevo
+                </button>
+              </div>
 
-             <div className="space-y-2">
-               {mockSupplies.map((supply) => (
-                 <div key={supply.id} className="flex justify-between items-center p-3 bg-white border border-outline-variant rounded-lg group">
-                   <div>
-                     <p className="text-[13px] font-bold text-on-surface">{supply.name}</p>
-                     <p className="text-[10px] text-on-surface-variant uppercase font-bold tracking-tight">Cantidad por uso: {supply.qty} {supply.unit}</p>
-                   </div>
-                   <div className="flex items-center gap-2">
-                     <button className="p-1.5 hover:bg-surface rounded text-on-surface-variant transition-all">
-                       <Edit3 size={14} />
-                     </button>
-                     <button className="p-1.5 hover:bg-error-container text-error rounded transition-all opacity-0 group-hover:opacity-100">
-                       <X size={14} />
-                     </button>
-                   </div>
-                 </div>
-               ))}
-               {mockSupplies.length === 0 && (
-                 <div className="text-center py-8 border-2 border-dashed border-outline-variant rounded-xl opacity-50">
+              <div className="space-y-2">
+                {currentSupplies.map((supply) => (
+                  <motion.div 
+                    layout
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    key={supply.id} 
+                    className="flex justify-between items-center p-3 bg-white border border-outline-variant rounded-lg group"
+                  >
+                    <div className="flex-1">
+                      <p className="text-[13px] font-bold text-on-surface">{supply.name}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <p className="text-[10px] text-on-surface-variant uppercase font-bold tracking-tight">Cant por uso:</p>
+                        <input 
+                          type="number"
+                          step="0.1"
+                          value={supply.qty}
+                          onChange={(e) => updateSupplyQty(supply.id, parseFloat(e.target.value))}
+                          className="w-16 px-1 py-0.5 border border-outline-variant rounded text-[11px] font-bold bg-surface outline-none"
+                        />
+                        <span className="text-[10px] text-on-surface-variant font-bold uppercase">{supply.unit}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => removeSupply(supply.id)}
+                        className="p-1.5 hover:bg-error-container text-error rounded transition-all opacity-0 group-hover:opacity-100"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </motion.div>
+                ))}
+                {currentSupplies.length === 0 && (
+                  <div className="text-center py-8 border-2 border-dashed border-outline-variant rounded-xl opacity-50">
                     <Package size={24} className="mx-auto mb-2" />
                     <span className="text-[11px] font-bold uppercase tracking-widest">Sin insumos vinculados</span>
-                 </div>
-               )}
-             </div>
-          </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <motion.div 
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="space-y-4"
+            >
+              <div className="flex justify-between items-center">
+                <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Seleccionar Insumo del Inventario</h5>
+                <button 
+                  onClick={() => setIsLinking(false)}
+                  className="text-[10px] font-bold text-on-surface-variant hover:underline uppercase"
+                >
+                  Atrás
+                </button>
+              </div>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" size={16} />
+                <input 
+                  type="text" 
+                  placeholder="Buscar en el inventario..." 
+                  value={inventorySearch}
+                  onChange={(e) => setInventorySearch(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+              <div className="max-h-[200px] overflow-y-auto custom-scrollbar space-y-1 pr-1">
+                {filteredInventory.map((item) => (
+                  <button 
+                    key={item.id}
+                    onClick={() => addSupply(item)}
+                    className="w-full text-left p-3 rounded-lg hover:bg-primary/5 border border-transparent hover:border-primary/20 transition-all flex justify-between items-center group/item"
+                  >
+                    <div>
+                      <span className="text-[13px] font-bold text-on-surface group-hover/item:text-primary transition-colors">{item.name}</span>
+                      <p className="text-[9px] font-bold text-on-surface-variant uppercase tracking-widest">{item.unit}</p>
+                    </div>
+                    <Plus size={14} className="text-primary opacity-0 group-hover/item:opacity-100 transition-opacity" />
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          )}
 
           <div className="pt-4 flex gap-3">
-            <button onClick={() => setActiveModal(null)} className="w-full px-4 py-2 border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-surface transition-colors uppercase tracking-widest">Cerrar</button>
+            <button 
+              onClick={() => setActiveModal(null)} 
+              className="flex-1 px-4 py-2 border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-surface transition-colors uppercase tracking-widest"
+            >
+              Cancelar
+            </button>
+            <button 
+              onClick={handleSaveTreatment}
+              className="flex-1 px-4 py-2 bg-primary text-white rounded-lg text-[12px] font-bold hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest flex items-center justify-center gap-2"
+            >
+              <Save size={16} />
+              Guardar Cambios
+            </button>
           </div>
         </div>
       </Modal>
@@ -231,7 +430,7 @@ export function Treatments() {
           <p className="text-on-surface">¿Está seguro de que desea eliminar el tratamiento <b>{selectedTreatment?.name}</b>?</p>
           <div className="flex gap-3 pt-2">
             <button onClick={() => setActiveModal(null)} className="flex-1 px-4 py-2 bg-surface border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-outline-variant transition-colors uppercase tracking-widest">Cancelar</button>
-            <button onClick={() => setActiveModal(null)} className="flex-1 px-4 py-2 bg-error text-white rounded-lg text-[12px] font-bold hover:bg-error/90 transition-colors uppercase tracking-widest">Eliminar</button>
+            <button onClick={handleDeleteTreatment} className="flex-1 px-4 py-2 bg-error text-white rounded-lg text-[12px] font-bold hover:bg-error/90 transition-colors uppercase tracking-widest">Eliminar</button>
           </div>
         </div>
       </Modal>

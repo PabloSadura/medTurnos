@@ -2,19 +2,21 @@
   "entities": {
     "Appointment": {
       "title": "Appointment",
-      "description": "A scheduled medical consultation",
+      "description": "A scheduled dental consultation",
       "type": "object",
       "properties": {
         "patientId": { "type": "string" },
-        "professionalId": { "type": "string" },
+        "patientName": { "type": "string" },
         "date": { "type": "string", "format": "date" },
         "time": { "type": "string" },
         "duration": { "type": "number" },
-        "status": { "type": "string", "enum": ["pending", "confirmed", "rescheduled", "in-session", "finished", "canceled"] },
+        "status": { "type": "string", "enum": ["confirmed", "in-session", "finished", "cancelled"] },
         "type": { "type": "string" },
-        "notes": { "type": "string" }
+        "attendance": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["patientId", "professionalId", "date", "time", "status"]
+      "required": ["patientId", "patientName", "date", "time", "status", "type"]
     },
     "Patient": {
       "title": "Patient",
@@ -25,31 +27,54 @@
         "email": { "type": "string", "format": "email" },
         "phone": { "type": "string" },
         "idNumber": { "type": "string" },
-        "specialty": { "type": "string" },
-        "bloodType": { "type": "string" },
-        "allergies": { "type": "string" },
-        "photoUrl": { "type": "string" }
+        "gender": { "type": "string" },
+        "age": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "lastVisit": { "type": "string", "format": "date" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["name", "idNumber"]
+      "required": ["name", "idNumber", "status"]
+    },
+    "Evolution": {
+      "title": "Evolution",
+      "description": "A clinical evolution entry for a patient",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "doctor": { "type": "string" },
+        "note": { "type": "string" },
+        "treatment": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["patientId", "date", "doctor", "note"]
     },
     "Treatment": {
       "title": "Treatment",
-      "description": "A medical procedure or treatment offered",
+      "description": "A dental procedure or treatment offered",
       "type": "object",
       "properties": {
         "name": { "type": "string" },
         "duration": { "type": "number" },
         "cost": { "type": "number" },
-        "inventoryItems": {
+        "category": { "type": "string" },
+        "stockLinked": { "type": "number" },
+        "supplies": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
               "itemId": { "type": "string" },
-              "quantity": { "type": "number" }
+              "name": { "type": "string" },
+              "qty": { "type": "number" },
+              "unit": { "type": "string" }
             }
           }
-        }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["name", "cost"]
     },
@@ -63,38 +88,31 @@
         "category": { "type": "string" },
         "stock": { "type": "number" },
         "minStock": { "type": "number" },
-        "maxStock": { "type": "number" },
-        "unit": { "type": "string" }
+        "unit": { "type": "string" },
+        "status": { "type": "string", "enum": ["In Stock", "Low Stock", "Out of Stock"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["name", "stock"]
+      "required": ["name", "stock", "minStock"]
     },
-    "User": {
-      "title": "User",
-      "description": "A medical professional user",
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Settings for the clinician",
       "type": "object",
       "properties": {
         "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
         "specialty": { "type": "string" },
-        "licenseNumber": { "type": "string" },
-        "photoUrl": { "type": "string" },
-        "availability": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "day": { "type": "string" },
-              "slots": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "start": { "type": "string" },
-                    "end": { "type": "string" }
-                  }
-                }
-              }
-            }
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "schedule": {
+          "type": "object",
+          "properties": {
+            "morningStart": { "type": "string" },
+            "morningEnd": { "type": "string" },
+            "afternoonStart": { "type": "string" },
+            "afternoonEnd": { "type": "string" },
+            "workingDays": { "type": "array", "items": { "type": "number" } }
           }
         }
       },
@@ -104,23 +122,27 @@
   "firestore": {
     "/appointments": {
       "schema": "Appointment",
-      "description": "Collection of all appointments"
+      "description": "Collection of all dental appointments"
     },
     "/patients": {
       "schema": "Patient",
       "description": "Collection of patient records"
     },
+    "/patients/{patientId}/evolutions": {
+      "schema": "Evolution",
+      "description": "History of evolutions for a patient"
+    },
     "/treatments": {
       "schema": "Treatment",
-      "description": "Collection of available treatments"
+      "description": "Collection of available dental treatments"
     },
     "/inventory": {
       "schema": "InventoryItem",
       "description": "Clinic inventory catalog"
     },
-    "/users": {
-      "schema": "User",
-      "description": "Clinic staff and user profiles"
+    "/profiles": {
+      "schema": "UserProfile",
+      "description": "User specific settings and profiles"
     }
   }
 }
