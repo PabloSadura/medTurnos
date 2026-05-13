@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Package, Plus, Search, AlertCircle, TrendingDown, RefreshCw, BarChart3, ChevronRight } from 'lucide-react';
+import { Package, Plus, Search, AlertCircle, TrendingDown, RefreshCw, BarChart3, ChevronRight, Save, History, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { Modal } from '../components/Modal';
 
 const mockInventory = [
   { id: '1', name: 'Dental Resin A2', sku: 'DR-A2-001', stock: 12, minStock: 5, unit: 'pcs', category: 'Supplies', status: 'normal' },
@@ -10,6 +11,14 @@ const mockInventory = [
 ];
 
 export function Inventory() {
+  const [activeModal, setActiveModal] = useState<'create' | 'adjust' | 'details' | null>(null);
+  const [selectedItem, setSelectedItem] = useState<any>(null);
+
+  const handleOpenModal = (type: 'create' | 'adjust' | 'details', item?: any) => {
+    setSelectedItem(item || null);
+    setActiveModal(type);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -18,11 +27,17 @@ export function Inventory() {
           <p className="body-md text-on-surface-variant">Seguimiento de niveles de stock, consumo de materiales y alertas de reposición.</p>
         </div>
         <div className="flex gap-2">
-          <button className="px-3 py-1.5 bg-white border border-outline-variant rounded-md text-[11px] font-bold flex items-center gap-2 hover:bg-surface transition-all text-on-surface-variant uppercase tracking-wider">
+          <button 
+            onClick={() => handleOpenModal('adjust')}
+            className="px-3 py-1.5 bg-white border border-outline-variant rounded-md text-[11px] font-bold flex items-center gap-2 hover:bg-surface transition-all text-on-surface-variant uppercase tracking-wider"
+          >
             <RefreshCw size={14} />
             AJUSTAR STOCK
           </button>
-          <button className="px-4 py-2 bg-primary text-white rounded-md text-[12px] font-bold flex items-center gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-sm uppercase tracking-wider">
+          <button 
+            onClick={() => handleOpenModal('create')}
+            className="px-4 py-2 bg-primary text-white rounded-md text-[12px] font-bold flex items-center gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-sm uppercase tracking-wider"
+          >
             <Plus size={16} />
             NUEVO ÍTEM
           </button>
@@ -109,7 +124,10 @@ export function Inventory() {
                     </span>
                   </td>
                   <td className="px-6 py-3 text-right">
-                    <button className="p-1.5 hover:bg-surface text-on-surface-variant rounded-md transition-all">
+                    <button 
+                      onClick={() => handleOpenModal('details', item)}
+                      className="p-1.5 hover:bg-surface text-on-surface-variant rounded-md transition-all"
+                    >
                       <ChevronRight size={14} />
                     </button>
                   </td>
@@ -119,6 +137,152 @@ export function Inventory() {
           </table>
         </div>
       </div>
+
+      {/* Modals */}
+      <Modal
+        isOpen={activeModal === 'create'}
+        onClose={() => setActiveModal(null)}
+        title="Agregar Nuevo Ítem"
+      >
+        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); setActiveModal(null); }}>
+          <div className="space-y-2">
+            <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Nombre del Producto</label>
+            <input type="text" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="Ej: Guantes de Látex" />
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">SKU / Código</label>
+              <input type="text" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="Ej: GL-001" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Categoría</label>
+              <select className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary">
+                <option>Suministros</option>
+                <option>Descartables</option>
+                <option>Medicamentos</option>
+                <option>Equipamiento</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Inicial</label>
+              <input type="number" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Mínimo</label>
+              <input type="number" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Unidad</label>
+              <input type="text" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="Pzs, cajas.." />
+            </div>
+          </div>
+
+          <div className="pt-4 flex gap-3">
+            <button type="button" onClick={() => setActiveModal(null)} className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest">Cancelar</button>
+            <button type="submit" className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest">Guardar</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={activeModal === 'adjust'}
+        onClose={() => setActiveModal(null)}
+        title="Ajustar Stock"
+      >
+        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); setActiveModal(null); }}>
+          <div className="space-y-2">
+            <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Producto</label>
+            <select className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary">
+              {mockInventory.map(item => (
+                <option key={item.id} value={item.id}>{item.name} ({item.stock} {item.unit})</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Tipo de Ajuste</label>
+              <div className="flex gap-2">
+                <button type="button" className="flex-1 py-2 flex items-center justify-center gap-1.5 rounded-lg border border-primary bg-primary/10 text-primary text-[12px] font-bold">
+                  <ArrowUpRight size={14} /> ENTRADA
+                </button>
+                <button type="button" className="flex-1 py-2 flex items-center justify-center gap-1.5 rounded-lg border border-outline-variant hover:bg-surface text-on-surface-variant text-[12px] font-bold">
+                  <ArrowDownRight size={14} /> SALIDA
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Cantidad</label>
+              <input type="number" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="0" />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Motivo</label>
+            <textarea rows={2} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary resize-none" placeholder="Ej: Compra a proveedor, descarte por vencimiento..." />
+          </div>
+
+          <div className="pt-4 flex gap-3">
+            <button type="button" onClick={() => setActiveModal(null)} className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest">Cancelar</button>
+            <button type="submit" className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest">Confirmar</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={activeModal === 'details'}
+        onClose={() => setActiveModal(null)}
+        title={`Detalle de Stock: ${selectedItem?.name}`}
+      >
+        <div className="space-y-6">
+          <div className="bg-surface-bright p-4 rounded-xl border border-outline-variant grid grid-cols-2 gap-4">
+            <div>
+              <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Estado Actual</p>
+              <h4 className="text-xl font-bold text-on-surface">{selectedItem?.stock} {selectedItem?.unit}</h4>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Código SKU</p>
+              <h4 className="text-sm font-mono font-bold text-on-surface">{selectedItem?.sku}</h4>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-on-surface">
+              <History size={16} className="text-primary" />
+              <h5 className="text-[11px] font-bold uppercase tracking-widest">Movimientos Recientes</h5>
+            </div>
+            
+            <div className="space-y-2">
+              {[
+                { date: '10 Mayo, 2024', type: 'Entrada', qty: '+5', note: 'Reposición programada' },
+                { date: '08 Mayo, 2024', type: 'Salida', qty: '-2', note: 'Uso en Cirugía #104' },
+                { date: '05 Mayo, 2024', type: 'Salida', qty: '-1', note: 'Uso en Consulta #92' }
+              ].map((mov, idx) => (
+                <div key={idx} className="flex justify-between items-center p-3 bg-white border border-outline-variant rounded-lg">
+                  <div>
+                    <p className="text-[12px] font-bold text-on-surface">{mov.note}</p>
+                    <p className="text-[10px] text-on-surface-variant">{mov.date}</p>
+                  </div>
+                  <span className={cn(
+                    "text-[12px] font-bold",
+                    mov.qty.startsWith('+') ? 'text-primary' : 'text-error'
+                  )}>
+                    {mov.qty}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="pt-4">
+            <button onClick={() => setActiveModal(null)} className="w-full px-4 py-2 bg-surface border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-outline-variant transition-colors uppercase tracking-widest">Cerrar</button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
