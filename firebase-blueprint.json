@@ -1,0 +1,126 @@
+{
+  "entities": {
+    "Appointment": {
+      "title": "Appointment",
+      "description": "A scheduled medical consultation",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string" },
+        "professionalId": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "time": { "type": "string" },
+        "duration": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "rescheduled", "in-session", "finished", "canceled"] },
+        "type": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["patientId", "professionalId", "date", "time", "status"]
+    },
+    "Patient": {
+      "title": "Patient",
+      "description": "A patient record",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "idNumber": { "type": "string" },
+        "specialty": { "type": "string" },
+        "bloodType": { "type": "string" },
+        "allergies": { "type": "string" },
+        "photoUrl": { "type": "string" }
+      },
+      "required": ["name", "idNumber"]
+    },
+    "Treatment": {
+      "title": "Treatment",
+      "description": "A medical procedure or treatment offered",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "duration": { "type": "number" },
+        "cost": { "type": "number" },
+        "inventoryItems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "itemId": { "type": "string" },
+              "quantity": { "type": "number" }
+            }
+          }
+        }
+      },
+      "required": ["name", "cost"]
+    },
+    "InventoryItem": {
+      "title": "Inventory Item",
+      "description": "Stock item in the clinic",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "sku": { "type": "string" },
+        "category": { "type": "string" },
+        "stock": { "type": "number" },
+        "minStock": { "type": "number" },
+        "maxStock": { "type": "number" },
+        "unit": { "type": "string" }
+      },
+      "required": ["name", "stock"]
+    },
+    "User": {
+      "title": "User",
+      "description": "A medical professional user",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "specialty": { "type": "string" },
+        "licenseNumber": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "availability": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "day": { "type": "string" },
+              "slots": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "start": { "type": "string" },
+                    "end": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": ["email", "name"]
+    }
+  },
+  "firestore": {
+    "/appointments": {
+      "schema": "Appointment",
+      "description": "Collection of all appointments"
+    },
+    "/patients": {
+      "schema": "Patient",
+      "description": "Collection of patient records"
+    },
+    "/treatments": {
+      "schema": "Treatment",
+      "description": "Collection of available treatments"
+    },
+    "/inventory": {
+      "schema": "InventoryItem",
+      "description": "Clinic inventory catalog"
+    },
+    "/users": {
+      "schema": "User",
+      "description": "Clinic staff and user profiles"
+    }
+  }
+}

@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Manrope", ui-sans-serif, system-ui, sans-serif;
+
+  --color-surface: #f1f5f9;
+  --color-surface-dim: #e2e8f0;
+  --color-surface-bright: #f8fafc;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f8fafc;
+  --color-surface-container: #f1f5f9;
+  --color-surface-container-high: #e2e8f0;
+  --color-surface-container-highest: #cbd5e1;
+  --color-on-surface: #1e293b;
+  --color-on-surface-variant: #64748b;
+  --color-inverse-surface: #0f172a;
+  --color-inverse-on-surface: #f8fafc;
+  --color-outline: #cbd5e1;
+  --color-outline-variant: #e2e8f0;
+  --color-surface-tint: #2563eb;
+  --color-primary: #2563eb;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #dbeafe;
+  --color-on-primary-container: #1e40af;
+  --color-inverse-primary: #93c5fd;
+  --color-secondary: #475569;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #f1f5f9;
+  --color-on-secondary-container: #1e293b;
+  --color-tertiary: #0d9488;
+  --color-on-tertiary: #ffffff;
+  --color-tertiary-container: #ccfbf1;
+  --color-on-tertiary-container: #115e59;
+  --color-error: #ef4444;
+  --color-on-error: #ffffff;
+  --color-error-container: #fee2e2;
+  --color-on-error-container: #991b1b;
+  --color-background: #f1f5f9;
+
+  --radius-sm: 0.125rem;
+  --radius-DEFAULT: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+
+@layer base {
+  body {
+    @apply bg-surface text-on-surface font-sans antialiased;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display font-bold tracking-tight;
+  }
+}
+
+@layer components {
+  .headline-lg {
+    @apply text-[28px] leading-[36px] font-bold font-display;
+  }
+  .headline-md {
+    @apply text-[20px] leading-[28px] font-semibold font-display;
+  }
+  .headline-sm {
+    @apply text-[16px] leading-[24px] font-semibold font-display;
+  }
+  .body-lg {
+    @apply text-[16px] leading-[24px] font-normal;
+  }
+  .body-md {
+    @apply text-[14px] leading-[20px] font-normal;
+  }
+  .body-sm {
+    @apply text-[13px] leading-[18px] font-normal;
+  }
+  .label-md {
+    @apply text-[11px] leading-[14px] font-bold tracking-widest uppercase text-on-surface-variant;
+  }
+  
+  .data-grid-container {
+    @apply bg-outline-variant border border-outline-variant rounded-lg overflow-hidden;
+  }
+  .data-grid-header {
+    @apply bg-surface-bright p-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider;
+  }
+  .data-grid-cell {
+    @apply bg-white p-3 text-[13px] text-on-surface border-b border-surface;
+  }
+}
+
+.medical-grid {
+  background-color: #f1f5f9;
+  background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
+  background-size: 20px 20px;
+}
