@@ -82,16 +82,15 @@
       "type": "object",
       "properties": {
         "name": { "type": "string" },
-        "sku": { "type": "string" },
-        "category": { "type": "string" },
         "stock": { "type": "number" },
         "minStock": { "type": "number" },
+        "price": { "type": "number" },
         "unit": { "type": "string" },
         "status": { "type": "string", "enum": ["normal", "low", "out"] },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["name", "stock", "minStock"]
+      "required": ["name", "stock", "minStock", "price"]
     },
     "UserProfile": {
       "title": "User Profile",

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
@@ -9,6 +10,7 @@ import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp,
 const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
 export function Agenda() {
+  const navigate = useNavigate();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(new Date());
   const [appointments, setAppointments] = useState<any[]>([]);
@@ -29,25 +31,67 @@ export function Agenda() {
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreatingNewPatient, setIsCreatingNewPatient] = useState(false);
+  const [selectedPatientStats, setSelectedPatientStats] = useState<{ attendance: number, absences: number } | null>(null);
+
   const [newPatientData, setNewPatientData] = useState({
     name: '',
     phone: '',
     idNumber: ''
   });
   
+  const formatLocalDate = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
   const [newApt, setNewApt] = useState({
     patientId: '',
     patientName: '',
-    date: new Date().toISOString().split('T')[0],
+    date: formatLocalDate(new Date()),
     time: '09:00',
     type: 'Check-up General',
     notes: ''
   });
 
   useEffect(() => {
-    const q = query(collection(db, 'appointments'), orderBy('date', 'asc'), orderBy('time', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    if (newApt.patientId && !isCreatingNewPatient) {
+      // Fetch stats for this specific patient
+      const appQ = query(collection(db, 'appointments'), where('patientId', '==', newApt.patientId));
+      getDocs(appQ).then(snapshot => {
+        const apps = snapshot.docs.map(doc => doc.data());
+        const finishedCount = apps.filter(a => a.status === 'finished').length;
+        const absencesCount = apps.filter(a => a.status === 'cancelado' || a.status === 'ausente').length;
+        const total = finishedCount + absencesCount;
+        
+        setSelectedPatientStats({
+          attendance: total > 0 ? Math.round((finishedCount / total) * 100) : 100,
+          absences: absencesCount
+        });
+      });
+    } else {
+      setSelectedPatientStats(null);
+    }
+  }, [newApt.patientId, isCreatingNewPatient]);
+
+  useEffect(() => {
+    // Only subscribe to appointments for the current month and the selected date's surrounding
+    const q = query(
+      collection(db, 'appointments'),
+      orderBy('date', 'asc')
+    );
+    
+    // Using a broader query for the month view but real-time
+    const unsubscribeApps = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+      // Client-side sub-sort by time to avoid composite index requirement
+      docs.sort((a, b) => {
+        if (a.date === b.date) {
+          return (a.time || '').localeCompare(b.time || '');
+        }
+        return 0; // Already sorted by date by Firestore
+      });
       setAppointments(docs);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
@@ -62,7 +106,7 @@ export function Agenda() {
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
     return () => {
-      unsubscribe();
+      unsubscribeApps();
       unsubscribeTreatments();
       unsubscribePatients();
     };
@@ -102,6 +146,11 @@ export function Agenda() {
       const snapshot = await getDocs(q);
       const attendanceCount = snapshot.size + 1;
 
+      // Standardize date and time for startTime
+      const [year, month, day] = newApt.date.split('-').map(Number);
+      const [hours, minutes] = newApt.time.split(':').map(Number);
+      const appointmentDate = new Date(year, month - 1, day, hours, minutes);
+
       await addDoc(collection(db, 'appointments'), {
         ...newApt,
         patientId,
@@ -109,8 +158,9 @@ export function Agenda() {
         status: 'pendiente',
         duration: 30, // Default duration
         attendance: attendanceCount,
-        startTime: new Date(`${newApt.date}T${newApt.time}`), // For reminders
-        createdAt: serverTimestamp()
+        startTime: appointmentDate, // Save as JS Date, Firestore converts to Timestamp
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
       });
 
       setIsNewAppointmentOpen(false);
@@ -141,6 +191,13 @@ export function Agenda() {
             });
           }
         }
+        
+        // Update patient's last visit date
+        const patientRef = doc(db, 'patients', selectedAppointment.patientId);
+        batch.update(patientRef, {
+          lastVisit: selectedAppointment.date,
+          updatedAt: serverTimestamp()
+        });
       }
 
       await batch.update(doc(db, 'appointments', selectedAppointment.id), {
@@ -188,14 +245,7 @@ export function Agenda() {
     return days;
   };
 
-  const formatDate = (date: Date) => {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  };
-
-  const selectedDateAppointments = appointments.filter(a => a.date === formatDate(selectedDate));
+  const selectedDateAppointments = appointments.filter(a => a.date === formatLocalDate(selectedDate));
 
   const changeMonth = (offset: number) => {
     const next = new Date(viewDate.getFullYear(), viewDate.getMonth() + offset, 1);
@@ -371,7 +421,7 @@ export function Agenda() {
                       </span>
                       <div className="w-full space-y-1">
                         {appointments
-                          .filter(a => a.date === formatDate(item.date))
+                          .filter(a => a.date === formatLocalDate(item.date))
                           .slice(0, 3)
                           .map((apt) => (
                             <div 
@@ -390,9 +440,9 @@ export function Agenda() {
                             </div>
                           ))
                         }
-                        {appointments.filter(a => a.date === formatDate(item.date)).length > 3 && (
+                        {appointments.filter(a => a.date === formatLocalDate(item.date)).length > 3 && (
                           <div className="text-[10px] font-black text-on-surface-variant/50 px-1">
-                            + {appointments.filter(a => a.date === formatDate(item.date)).length - 3} más
+                            + {appointments.filter(a => a.date === formatLocalDate(item.date)).length - 3} más
                           </div>
                         )}
                       </div>
@@ -430,7 +480,7 @@ export function Agenda() {
                           <div key={hour} className="h-[60px] border-b border-outline-variant border-dashed opacity-20"></div>
                         ))}
                         {appointments
-                          .filter(a => a.date === formatDate(dayDate))
+                          .filter(a => a.date === formatLocalDate(dayDate))
                           .map((apt) => {
                             const [h, m] = apt.time.split(':').map(Number);
                             if (h < 8 || h >= 22) return null;
@@ -675,6 +725,31 @@ export function Agenda() {
                 )}
               </div>
             )}
+            {!isCreatingNewPatient && newApt.patientId && selectedPatientStats && (
+              <div className={cn(
+                "mt-2 p-2 rounded-lg border flex items-center gap-3 animate-in fade-in slide-in-from-top-1",
+                selectedPatientStats.attendance < 80 || selectedPatientStats.absences >= 2 
+                  ? "bg-error-container/30 border-error/20" 
+                  : "bg-surface-bright border-outline-variant"
+              )}>
+                <div className={cn(
+                  "p-1.5 rounded-full",
+                  selectedPatientStats.attendance < 80 || selectedPatientStats.absences >= 2 ? "bg-error text-white" : "bg-tertiary text-white"
+                )}>
+                  {selectedPatientStats.attendance < 80 || selectedPatientStats.absences >= 2 ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Estado de Asistencia</p>
+                  <p className={cn(
+                    "text-[12px] font-bold",
+                    selectedPatientStats.attendance < 80 || selectedPatientStats.absences >= 2 ? "text-error" : "text-tertiary"
+                  )}>
+                    {selectedPatientStats.attendance}% Asistencia • {selectedPatientStats.absences} Ausencias
+                    {selectedPatientStats.attendance < 80 && " • Baja probabilidad de asistencia"}
+                  </p>
+                </div>
+              </div>
+            )}
             {!isCreatingNewPatient && <input type="hidden" required value={newApt.patientId} />}
           </div>
 
@@ -785,7 +860,8 @@ export function Agenda() {
                   { id: 'confirmed', label: 'Confirmado', color: 'bg-primary' },
                   { id: 'in-session', label: 'En Sesión', color: 'bg-tertiary' },
                   { id: 'finished', label: 'Finalizado', color: 'bg-secondary' },
-                  { id: 'cancelled', label: 'Cancelado', color: 'bg-error' },
+                  { id: 'cancelado', label: 'Cancelado', color: 'bg-error' },
+                  { id: 'ausente', label: 'Ausente', color: 'bg-error-container' },
                 ].map((s) => (
                   <button
                     key={s.id}
@@ -814,6 +890,12 @@ export function Agenda() {
               </button>
               <button 
                 type="button"
+                onClick={() => {
+                  if (selectedAppointment?.patientId) {
+                    navigate(`/patients?id=${selectedAppointment.patientId}`);
+                  }
+                  setIsDetailModalOpen(false);
+                }}
                 className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest"
               >
                 Ver Ficha

@@ -15,10 +15,9 @@ export function Inventory() {
 
   const [formData, setFormData] = useState({
     name: '',
-    sku: '',
-    category: 'Suministros',
     stock: 0,
     minStock: 0,
+    price: 0,
     unit: 'pcs'
   });
 
@@ -49,19 +48,17 @@ export function Inventory() {
     if (item) {
       setFormData({
         name: item.name,
-        sku: item.sku,
-        category: item.category,
         stock: item.stock,
         minStock: item.minStock,
+        price: item.price || 0,
         unit: item.unit
       });
     } else {
       setFormData({
         name: '',
-        sku: '',
-        category: 'Suministros',
         stock: 0,
         minStock: 0,
+        price: 0,
         unit: 'pcs'
       });
     }
@@ -114,9 +111,7 @@ export function Inventory() {
 
   const filteredInventory = inventory.filter(item => {
     const itemName = item.name || '';
-    const itemSku = item.sku || '';
-    const matchesSearch = itemName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                         itemSku.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = itemName.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'all' || item.status === 'low' || item.status === 'out';
     return matchesSearch && matchesStatus;
   });
@@ -125,7 +120,7 @@ export function Inventory() {
     totalItems: inventory.length,
     lowStock: inventory.filter(i => i.status === 'low' || i.status === 'out').length,
     consumption: '+12%', // Mocked for now
-    monthlyCost: '$2.4k'   // Mocked for now
+    totalValue: inventory.reduce((acc, curr) => acc + (curr.stock * (curr.price || 0)), 0)
   };
 
   return (
@@ -158,7 +153,7 @@ export function Inventory() {
           { label: 'Total Ítems', value: stats.totalItems, icon: Package, color: 'bg-primary-container text-primary' },
           { label: 'Stock Bajo', value: stats.lowStock, icon: AlertCircle, color: 'bg-error-container text-error' },
           { label: 'Consumo', value: stats.consumption, icon: TrendingDown, color: 'bg-tertiary-container text-on-tertiary-container' },
-          { label: 'Costo Mensual', value: stats.monthlyCost, icon: BarChart3, color: 'bg-secondary-container text-secondary' },
+          { label: 'Valor Total', value: `$${stats.totalValue.toLocaleString()}`, icon: BarChart3, color: 'bg-secondary-container text-secondary' },
         ].map((stat) => (
           <div key={stat.label} className="bg-white p-4 rounded-xl border border-outline-variant shadow-sm flex items-center gap-4">
             <div className={cn("p-2 rounded-lg", stat.color)}>
@@ -178,7 +173,7 @@ export function Inventory() {
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
             <input 
               type="text" 
-              placeholder="Buscar ítem o SKU..." 
+              placeholder="Buscar producto..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-9 pr-4 py-1.5 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary text-[13px] outline-none" 
@@ -211,9 +206,8 @@ export function Inventory() {
             <thead>
               <tr className="bg-surface-bright border-b border-outline-variant">
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Producto</th>
-                <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Categoría</th>
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">En Stock</th>
-                <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Status</th>
+                <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Precio</th>
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider text-right">Acciones</th>
               </tr>
             </thead>
@@ -222,9 +216,8 @@ export function Inventory() {
                 <tr key={item.id} className="hover:bg-surface/50 transition-colors group">
                   <td className="px-6 py-3">
                     <p className="text-[13px] font-bold text-on-surface">{item.name}</p>
-                    <p className="text-[10px] font-mono text-on-surface-variant uppercase">{item.sku}</p>
                   </td>
-                  <td className="px-6 py-3 text-[11px] font-medium text-on-surface-variant">{item.category}</td>
+
                   <td className="px-6 py-3">
                     <div className="flex flex-col gap-1 w-24">
                       <div className="flex justify-between items-end">
@@ -242,13 +235,8 @@ export function Inventory() {
                     </div>
                   </td>
                   <td className="px-6 py-3">
-                    <span className={cn("px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider",
-                      item.status === 'normal' ? 'bg-tertiary-container text-on-tertiary-container' :
-                      item.status === 'low' ? 'bg-error-container text-error' :
-                      'bg-error text-white shadow-sm'
-                    )}>
-                      {item.status.replace('-', ' ')}
-                    </span>
+                    <p className="text-[12px] font-bold text-on-surface">${(item.price || 0).toLocaleString()}</p>
+                    <p className="text-[10px] text-on-surface-variant">Valor: ${(item.stock * (item.price || 0)).toLocaleString()}</p>
                   </td>
                   <td className="px-6 py-3 text-right">
                     <button 
@@ -286,49 +274,36 @@ export function Inventory() {
           
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">SKU / Código</label>
-              <input 
-                type="text" 
-                required
-                value={formData.sku}
-                onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
-                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
-                placeholder="Ej: GL-001" 
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Categoría</label>
-              <select 
-                value={formData.category}
-                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary"
-              >
-                <option>Suministros</option>
-                <option>Descartables</option>
-                <option>Medicamentos</option>
-                <option>Equipamiento</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-4">
-            <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Inicial</label>
               <input 
                 type="number" 
                 required
                 value={formData.stock}
-                onChange={(e) => setFormData({ ...formData, stock: parseInt(e.target.value) })}
+                onChange={(e) => setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })}
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
               />
             </div>
             <div className="space-y-2">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Mínimo</label>
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Precio Unitario ($)</label>
+              <input 
+                type="number" 
+                required
+                value={formData.price}
+                onChange={(e) => setFormData({ ...formData, price: parseFloat(e.target.value) || 0 })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                placeholder="0.00"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Mínimo Stock</label>
               <input 
                 type="number" 
                 required
                 value={formData.minStock}
-                onChange={(e) => setFormData({ ...formData, minStock: parseInt(e.target.value) })}
+                onChange={(e) => setFormData({ ...formData, minStock: parseInt(e.target.value) || 0 })}
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
               />
             </div>
@@ -340,7 +315,7 @@ export function Inventory() {
                 value={formData.unit}
                 onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
-                placeholder="Pzs, cajas.." 
+                placeholder="Ej: Pzs, Cajas" 
               />
             </div>
           </div>
@@ -437,19 +412,30 @@ export function Inventory() {
         <div className="space-y-6">
           {!isEditingStock ? (
             <>
-              <div className="bg-surface-bright p-4 rounded-xl border border-outline-variant grid grid-cols-2 gap-4 relative">
+              <div className="flex justify-between items-center mb-4">
+                <h4 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Resumen de Inventario</h4>
                 <button 
                   onClick={() => setIsEditingStock(true)}
-                  className="absolute top-2 right-2 p-1.5 hover:bg-surface rounded-lg text-primary transition-all text-[10px] font-bold uppercase flex items-center gap-1"
+                  className="p-1.5 px-3 hover:bg-primary/10 rounded-lg text-primary transition-all text-[11px] font-bold uppercase flex items-center gap-1.5 border border-primary/20"
                 >
-                  <Edit3 size={12} /> Modificar
+                  <Edit3 size={14} /> Modificar Datos
                 </button>
+              </div>
+              <div className="bg-surface-bright p-4 rounded-xl border border-outline-variant grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Estado Actual</p>
                   <h4 className="text-xl font-bold text-on-surface">{selectedItem?.stock} {selectedItem?.unit}</h4>
                 </div>
-                <div className="text-right">
-                  <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Mínimo Requerido</p>
+                <div>
+                   <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Valor Total</p>
+                  <h4 className="text-xl font-bold text-primary">${(selectedItem?.stock * (selectedItem?.price || 0)).toLocaleString()}</h4>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Precio Unitario</p>
+                  <h4 className="text-sm font-bold text-on-surface">${(selectedItem?.price || 0).toLocaleString()}</h4>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Mínimo</p>
                   <h4 className="text-sm font-bold text-on-surface">{selectedItem?.minStock} {selectedItem?.unit}</h4>
                 </div>
               </div>
@@ -488,6 +474,17 @@ export function Inventory() {
             </>
           ) : (
             <form className="space-y-4" onSubmit={handleSaveItem}>
+              <div className="space-y-2">
+                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Nombre del Producto</label>
+                <input 
+                  type="text" 
+                  required
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                />
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Actual</label>
@@ -495,29 +492,51 @@ export function Inventory() {
                     <input 
                       type="number" 
                       value={formData.stock}
-                      onChange={(e) => setFormData({ ...formData, stock: parseInt(e.target.value) })}
+                      onChange={(e) => setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })}
                       className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
                     />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-on-surface-variant">{selectedItem?.unit}</span>
                   </div>
                 </div>
                 <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Precio Unitario ($)</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    value={formData.price}
+                    onChange={(e) => setFormData({ ...formData, price: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
                   <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Mínimo</label>
                   <div className="relative">
                     <input 
                       type="number" 
                       value={formData.minStock}
-                      onChange={(e) => setFormData({ ...formData, minStock: parseInt(e.target.value) })}
+                      onChange={(e) => setFormData({ ...formData, minStock: parseInt(e.target.value) || 0 })}
                       className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
                     />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-on-surface-variant">{selectedItem?.unit}</span>
                   </div>
                 </div>
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Unidad</label>
+                  <input 
+                    type="text" 
+                    value={formData.unit}
+                    onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+                    className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                  />
+                </div>
               </div>
 
               <div className="space-y-2">
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Motivo del Ajuste</label>
-                <textarea rows={2} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary resize-none" placeholder="Indique la razón de la corrección manual..." />
+                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Notas / Motivo</label>
+                <textarea rows={2} className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary resize-none" placeholder="Indique la razón de la corrección..." />
               </div>
 
               <div className="pt-4 flex gap-3">

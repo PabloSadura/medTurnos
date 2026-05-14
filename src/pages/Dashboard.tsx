@@ -8,12 +8,13 @@ import { collection, onSnapshot, query, where, orderBy, limit } from 'firebase/f
 
 export function Dashboard() {
   const [stats, setStats] = useState([
-    { label: 'Pacientes Totales', value: '0', trend: '+0%', icon: Users, color: 'bg-secondary-container text-secondary' },
-    { label: 'Turnos Hoy', value: '0', trend: '+0%', icon: CalendarCheck, color: 'bg-tertiary-container text-tertiary' },
-    { label: 'Tratamientos', value: '0', trend: '+0%', icon: CreditCard, color: 'bg-primary-container text-primary' },
-    { label: 'Tiempo Promedio', value: '30m', trend: '+0%', icon: Clock, color: 'bg-error-container text-error' },
+    { label: 'Pacientes Totales', value: '0', trend: '', icon: Users, color: 'bg-secondary-container text-secondary' },
+    { label: 'Turnos Hoy', value: '0', trend: '', icon: CalendarCheck, color: 'bg-tertiary-container text-tertiary' },
+    { label: 'Tratamientos', value: '0', trend: '', icon: CreditCard, color: 'bg-primary-container text-primary' },
+    { label: 'Ingresos Hoy', value: '$0', trend: '', icon: TrendingUp, color: 'bg-error-container text-error' },
   ]);
   const [upcomingAppointments, setUpcomingAppointments] = useState<any[]>([]);
+  const [weeklyActivity, setWeeklyActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -26,25 +27,71 @@ export function Dashboard() {
       });
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
-    // Today's appointments
-    const today = new Date().toISOString().split('T')[0];
-    const qToday = query(collection(db, 'appointments'), where('date', '==', today));
+    // Treatments and Revenue calculation
+    let currentTreatments: any[] = [];
+    const unsubscribeTreatments = onSnapshot(collection(db, 'treatments'), (snapshot) => {
+      currentTreatments = snapshot.docs.map(doc => doc.data());
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
+
+    // Today's appointments and revenue
+    const todayStr = new Date().toISOString().split('T')[0];
+    const qToday = query(collection(db, 'appointments'), where('date', '==', todayStr));
     const unsubscribeToday = onSnapshot(qToday, (snapshot) => {
+      const todayApps = snapshot.docs.map(d => d.data());
       setStats(prev => {
         const next = [...prev];
         next[1].value = snapshot.size.toString();
+        
+        const revenue = todayApps.filter(a => a.status === 'finished').reduce((acc, app) => {
+          const t = currentTreatments.find(trait => trait.name === app.type);
+          return acc + (t?.price || 0);
+        }, 0);
+        next[3].value = `$${revenue.toLocaleString()}`;
+        
         return next;
       });
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
-    // Treatments count
-    const unsubscribeTreatments = onSnapshot(collection(db, 'treatments'), (snapshot) => {
+    // Weekly activity data (real-time)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const qWeekly = query(collection(db, 'appointments'), where('startTime', '>=', sevenDaysAgo), orderBy('startTime', 'asc'));
+    const unsubscribeWeekly = onSnapshot(qWeekly, (snapshot) => {
+      const dayMap: Record<string, number> = { 'Lun': 0, 'Mar': 0, 'Mie': 0, 'Jue': 0, 'Vie': 0, 'Sab': 0, 'Dom': 0 };
+      const days = ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'];
+      
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        let date: Date;
+        if (data.startTime?.toDate) date = data.startTime.toDate();
+        else date = new Date(data.startTime);
+        
+        const dayName = days[date.getDay()];
+        if (dayMap[dayName] !== undefined) dayMap[dayName]++;
+      });
+
+      const chartData = Object.entries(dayMap).map(([name, appointments]) => ({ name, appointments }));
+      // Sort to start from Monday
+      const reordered = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'].map(name => ({
+        name,
+        appointments: dayMap[name]
+      }));
+      setWeeklyActivity(reordered);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
+
+    // Inventory Value
+    const unsubscribeInventory = onSnapshot(collection(db, 'stocks'), (snapshot) => {
+      const total = snapshot.docs.reduce((acc, doc) => {
+        const data = doc.data();
+        return acc + ((data.stock || 0) * (data.price || 0));
+      }, 0);
       setStats(prev => {
         const next = [...prev];
-        next[2].value = snapshot.size.toString();
+        next[2].value = `$${total.toLocaleString()}`;
+        next[2].label = 'Valor Inventario';
         return next;
       });
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'stocks'));
 
     // Upcoming appointments
     const now = new Date();
@@ -62,8 +109,10 @@ export function Dashboard() {
     return () => {
       unsubscribePatients();
       unsubscribeToday();
-      unsubscribeTreatments();
+      unsubscribeInventory();
       unsubscribeUpcoming();
+      unsubscribeWeekly();
+      unsubscribeTreatments();
     };
   }, []);
 
@@ -114,15 +163,7 @@ export function Dashboard() {
           </div>
           <div className="h-[280px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={[
-                { name: 'Mon', appointments: 12 },
-                { name: 'Tue', appointments: 18 },
-                { name: 'Wed', appointments: 15 },
-                { name: 'Thu', appointments: 22 },
-                { name: 'Fri', appointments: 25 },
-                { name: 'Sat', appointments: 10 },
-                { name: 'Sun', appointments: 5 },
-              ]}>
+              <AreaChart data={weeklyActivity}>
                 <defs>
                   <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#00478D" stopOpacity={0.1}/>

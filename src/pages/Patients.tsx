@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save, TrendingUp } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion } from 'motion/react';
 import { Modal } from '../components/Modal';
@@ -7,6 +8,7 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, where } from 'firebase/firestore';
 
 export function Patients() {
+  const [searchParams] = useSearchParams();
   const [patients, setPatients] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'history' | 'add-entry' | null>(null);
@@ -17,7 +19,9 @@ export function Patients() {
   const [patientStats, setPatientStats] = useState({
     attendance: 0,
     absences: 0,
-    lastVisit: '-'
+    lastVisit: '-',
+    nextApt: '-',
+    totalSpent: 0
   });
 
   // Form states
@@ -55,6 +59,17 @@ export function Patients() {
     };
   }, []);
 
+  // Handle URL param selection
+  useEffect(() => {
+    const patientId = searchParams.get('id');
+    if (patientId && patients.length > 0) {
+      const patient = patients.find(p => p.id === patientId);
+      if (patient) {
+        handleOpenModal('history', patient);
+      }
+    }
+  }, [searchParams, patients]);
+
   useEffect(() => {
     if (selectedPatient && activeModal === 'history') {
       // Fetch evolutions
@@ -68,14 +83,36 @@ export function Patients() {
       const appQ = query(collection(db, 'appointments'), where('patientId', '==', selectedPatient.id));
       const unsubscribeApps = onSnapshot(appQ, (snapshot) => {
         const apps = snapshot.docs.map(doc => doc.data());
-        const attended = apps.filter(a => a.status === 'confirmed').length;
-        const total = apps.length;
-        const absences = apps.filter(a => a.status === 'canceled').length; // Or a specific 'no-show' status
+        const finished = apps.filter(a => a.status === 'finished');
+        const attendedCount = finished.length;
+        const total = apps.filter(a => a.status !== 'pendiente').length; // total that should have happened
+        const absences = apps.filter(a => a.status === 'cancelado' || a.status === 'ausente').length;
         
+        // Calculate Total Spent based on treatment prices
+        // Since appointments don't store price directly yet, we'll try to find the treatment price
+        // or we can use a default if not found. 
+        // For now, let's assume treatments list is available.
+        const spent = finished.reduce((acc, app) => {
+          const treatment = treatments.find(t => t.name === app.type);
+          return acc + (treatment?.price || 0);
+        }, 0);
+
+        // Find last visit (finished)
+        const sortedFinished = [...finished].sort((a, b) => b.date.localeCompare(a.date));
+        const lastVisitDate = sortedFinished.length > 0 ? sortedFinished[0].date : '-';
+
+        // Find next visit (pendiente or confirmado)
+        const todayStr = new Date().toISOString().split('T')[0];
+        const nextApts = apps.filter(a => (a.status === 'pendiente' || a.status === 'confirmado') && a.date >= todayStr);
+        const sortedNext = [...nextApts].sort((a, b) => a.date.localeCompare(b.date));
+        const nextVisitDate = sortedNext.length > 0 ? sortedNext[0].date : '-';
+
         setPatientStats({
-          attendance: total > 0 ? Math.round((attended / total) * 100) : 0,
+          attendance: (attendedCount + absences) > 0 ? Math.round((attendedCount / (attendedCount + absences)) * 100) : 0,
           absences: absences,
-          lastVisit: selectedPatient.lastVisit || '-'
+          lastVisit: lastVisitDate,
+          nextApt: nextVisitDate,
+          totalSpent: spent
         });
       });
 
@@ -84,7 +121,7 @@ export function Patients() {
         unsubscribeApps();
       };
     }
-  }, [selectedPatient, activeModal]);
+  }, [selectedPatient, activeModal, treatments]);
 
   const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'history' | 'add-entry', patient?: any) => {
     setSelectedPatient(patient || null);
@@ -463,21 +500,26 @@ export function Patients() {
           </div>
 
           {/* Attendance KPIs */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-4 gap-2">
             <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
-              <CheckCircle2 size={16} className="text-primary mb-1" />
+              <CheckCircle2 size={16} className="text-tertiary mb-1" />
               <span className="text-[18px] font-bold text-on-surface">{patientStats.attendance}%</span>
               <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Asistencia</span>
             </div>
             <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
               <AlertTriangle size={16} className="text-error mb-1" />
               <span className="text-[18px] font-bold text-on-surface">{patientStats.absences}</span>
-              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Inasistencias</span>
+              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Faltas</span>
             </div>
             <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
-              <Calendar size={16} className="text-secondary mb-1" />
-              <span className="text-[18px] font-bold text-on-surface">{patientStats.lastVisit}</span>
-              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Última Visita</span>
+              <Plus size={16} className="text-primary mb-1" />
+              <span className="text-[13px] font-bold text-on-surface truncate w-full text-center">{patientStats.nextApt}</span>
+              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Próximo Turno</span>
+            </div>
+            <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
+              <TrendingUp size={16} className="text-secondary mb-1" />
+              <span className="text-[13px] font-bold text-on-surface">${patientStats.totalSpent.toLocaleString()}</span>
+              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Total Invertido</span>
             </div>
           </div>
 
