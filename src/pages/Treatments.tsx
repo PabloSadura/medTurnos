@@ -10,7 +10,7 @@ export function Treatments() {
   const [treatments, setTreatments] = useState<any[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'category' | 'materials' | null>(null);
+  const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'materials' | null>(null);
   const [selectedTreatment, setSelectedTreatment] = useState<any>(null);
   const [isLinking, setIsLinking] = useState(false);
   const [currentMaterials, setCurrentMaterials] = useState<any[]>([]);
@@ -20,7 +20,6 @@ export function Treatments() {
     name: '',
     cost: 0,
     duration: 30,
-    category: 'General',
     materials: [] as any[]
   });
 
@@ -41,14 +40,13 @@ export function Treatments() {
     };
   }, []);
 
-  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'category'| 'materials', treatment?: any) => {
+  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'materials', treatment?: any) => {
     setSelectedTreatment(treatment || null);
     if (treatment) {
       setFormData({
         name: treatment.name,
         cost: treatment.cost,
         duration: treatment.duration,
-        category: treatment.category,
         materials: treatment.materials || []
       });
       setCurrentMaterials(treatment.materials || []);
@@ -57,7 +55,6 @@ export function Treatments() {
         name: '',
         cost: 0,
         duration: 30,
-        category: 'General',
         materials: []
       });
       setCurrentMaterials([]);
@@ -118,8 +115,7 @@ export function Treatments() {
   };
 
   const filteredTreatments = treatments.filter(t => 
-    t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    t.category.toLowerCase().includes(searchTerm.toLowerCase())
+    t.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const filteredInventory = inventory.filter(i => 
@@ -168,7 +164,6 @@ export function Treatments() {
               </div>
               
               <h3 className="text-[14px] font-bold text-on-surface mb-1">{treatment.name}</h3>
-              <p className="text-[10px] uppercase font-bold tracking-widest text-on-surface-variant mb-4">{treatment.category}</p>
               
               <div className="grid grid-cols-2 gap-2">
                 <div className="flex items-center gap-2 text-on-surface">
@@ -194,14 +189,6 @@ export function Treatments() {
             </button>
           </div>
         ))}
-        
-        <button 
-          onClick={() => handleOpenModal('category')}
-          className="border-2 border-dashed border-outline-variant rounded-xl flex flex-col items-center justify-center p-6 text-on-surface-variant hover:border-primary hover:text-primary transition-all bg-surface/30 min-h-[160px]"
-        >
-          <Plus size={24} className="mb-2 opacity-50" />
-          <span className="text-[11px] uppercase font-bold tracking-widest">Añadir Categoría</span>
-        </button>
       </div>
 
       {/* Modals */}
@@ -246,43 +233,12 @@ export function Treatments() {
             </div>
           </div>
 
-          <div className="space-y-2">
-            <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Categoría</label>
-            <select 
-              value={formData.category}
-              onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary"
-            >
-              <option value="General">General</option>
-              <option value="Estética">Estética</option>
-              <option value="Especializado">Especializado</option>
-              <option value="Cirugía">Cirugía</option>
-            </select>
-          </div>
-
           <div className="pt-4 flex gap-3">
             <button type="button" onClick={() => setActiveModal(null)} className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest">Cancelar</button>
             <button type="submit" className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest flex items-center justify-center gap-2">
               <Save size={16} />
               {activeModal === 'create' ? 'Guardar' : 'Actualizar'}
             </button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal
-        isOpen={activeModal === 'category'}
-        onClose={() => setActiveModal(null)}
-        title="Añadir Nueva Categoría"
-      >
-        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); setActiveModal(null); }}>
-          <div className="space-y-2">
-            <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Nombre de la Categoría</label>
-            <input type="text" className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" placeholder="Ej: Ortodoncia" />
-          </div>
-          <div className="pt-4 flex gap-3">
-            <button type="button" onClick={() => setActiveModal(null)} className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest">Cancelar</button>
-            <button type="submit" className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 transition-colors uppercase tracking-widest">Añadir</button>
           </div>
         </form>
       </Modal>

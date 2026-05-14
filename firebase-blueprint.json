@@ -60,7 +60,6 @@
         "name": { "type": "string" },
         "duration": { "type": "number" },
         "cost": { "type": "number" },
-        "category": { "type": "string" },
         "materials": {
           "type": "array",
           "items": {

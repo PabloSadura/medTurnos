@@ -94,7 +94,7 @@ export function Patients() {
         // For now, let's assume treatments list is available.
         const spent = finished.reduce((acc, app) => {
           const treatment = treatments.find(t => t.name === app.type);
-          return acc + (treatment?.price || 0);
+          return acc + (treatment?.cost || 0);
         }, 0);
 
         // Find last visit (finished)

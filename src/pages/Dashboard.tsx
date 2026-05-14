@@ -1,58 +1,86 @@
 import { useState, useEffect } from 'react';
-import { TrendingUp, Users, CalendarCheck, CreditCard, ArrowUpRight, ArrowDownRight, Clock } from 'lucide-react';
+import { TrendingUp, Users, CalendarCheck, CreditCard, ArrowUpRight, ArrowDownRight, Clock, PieChart as PieChartIcon } from 'lucide-react';
 import { motion } from 'motion/react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { cn } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, where, orderBy, limit } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
 
 export function Dashboard() {
+  const [revenueMode, setRevenueMode] = useState<'daily' | 'monthly'>('daily');
   const [stats, setStats] = useState([
-    { label: 'Pacientes Totales', value: '0', trend: '', icon: Users, color: 'bg-secondary-container text-secondary' },
-    { label: 'Turnos Hoy', value: '0', trend: '', icon: CalendarCheck, color: 'bg-tertiary-container text-tertiary' },
-    { label: 'Tratamientos', value: '0', trend: '', icon: CreditCard, color: 'bg-primary-container text-primary' },
-    { label: 'Ingresos Hoy', value: '$0', trend: '', icon: TrendingUp, color: 'bg-error-container text-error' },
+    { id: 'patients', label: 'Pacientes Totales', value: '0', trend: '', icon: Users, color: 'bg-secondary-container text-secondary' },
+    { id: 'appointments', label: 'Turnos Hoy', value: '0', trend: '', icon: CalendarCheck, color: 'bg-tertiary-container text-tertiary' },
+    { id: 'inventory', label: 'Valor Inventario', value: '$0', trend: '', icon: CreditCard, color: 'bg-primary-container text-primary' },
+    { id: 'revenue', label: 'Ingresos Hoy', value: '$0', trend: '', icon: TrendingUp, color: 'bg-error-container text-error' },
   ]);
   const [upcomingAppointments, setUpcomingAppointments] = useState<any[]>([]);
   const [weeklyActivity, setWeeklyActivity] = useState<any[]>([]);
+  const [statusData, setStatusData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     // Patients count
     const unsubscribePatients = onSnapshot(collection(db, 'patients'), (snapshot) => {
-      setStats(prev => {
-        const next = [...prev];
-        next[0].value = snapshot.size.toString();
-        return next;
-      });
+      setStats(prev => prev.map(s => s.id === 'patients' ? { ...s, value: snapshot.size.toString() } : s));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
-    // Treatments and Revenue calculation
+    // Treatments mapping
     let currentTreatments: any[] = [];
     const unsubscribeTreatments = onSnapshot(collection(db, 'treatments'), (snapshot) => {
       currentTreatments = snapshot.docs.map(doc => doc.data());
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
 
-    // Today's appointments and revenue
-    const todayStr = new Date().toISOString().split('T')[0];
-    const qToday = query(collection(db, 'appointments'), where('date', '==', todayStr));
-    const unsubscribeToday = onSnapshot(qToday, (snapshot) => {
-      const todayApps = snapshot.docs.map(d => d.data());
-      setStats(prev => {
-        const next = [...prev];
-        next[1].value = snapshot.size.toString();
-        
-        const revenue = todayApps.filter(a => a.status === 'finished').reduce((acc, app) => {
-          const t = currentTreatments.find(trait => trait.name === app.type);
-          return acc + (t?.price || 0);
-        }, 0);
-        next[3].value = `$${revenue.toLocaleString()}`;
-        
-        return next;
-      });
+    // Revenue and Appointments today
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const monthStr = todayStr.substring(0, 7); // YYYY-MM
+
+    const qRevenue = query(collection(db, 'appointments'), where('date', '>=', monthStr + '-01'));
+    
+    const unsubscribeRevenue = onSnapshot(qRevenue, (snapshot) => {
+      const allApps = snapshot.docs.map(d => d.data());
+      const todayApps = allApps.filter(a => a.date === todayStr);
+      
+      const dailyRevenue = todayApps.filter(a => a.status === 'finished').reduce((acc, app) => {
+        const t = currentTreatments.find(trait => trait.name === app.type);
+        return acc + (t?.cost || 0);
+      }, 0);
+
+      const monthlyRevenue = allApps.filter(a => a.status === 'finished' && a.date.startsWith(monthStr)).reduce((acc, app) => {
+        const t = currentTreatments.find(trait => trait.name === app.type);
+        return acc + (t?.cost || 0);
+      }, 0);
+
+      // Appointment status data for chart (all time or recent)
+      const statusCounts = allApps.reduce((acc: any, app) => {
+        const s = app.status || 'pendiente';
+        acc[s] = (acc[s] || 0) + 1;
+        return acc;
+      }, {});
+
+      const chartData = [
+        { name: 'Finalizados', value: statusCounts['finished'] || 0, color: '#00478D' },
+        { name: 'Pendientes', value: (statusCounts['pendiente'] || 0) + (statusCounts['confirmado'] || 0), color: '#7E91AF' },
+        { name: 'Ausentes/Canc', value: (statusCounts['ausente'] || 0) + (statusCounts['cancelado'] || 0), color: '#BA1A1A' },
+      ].filter(d => d.value > 0);
+      
+      setStatusData(chartData);
+
+      setStats(prev => prev.map(s => {
+        if (s.id === 'appointments') return { ...s, value: todayApps.length.toString() };
+        if (s.id === 'revenue') {
+          return { 
+            ...s, 
+            label: revenueMode === 'daily' ? 'Ingresos Hoy' : 'Ingresos Mensuales',
+            value: `$${(revenueMode === 'daily' ? dailyRevenue : monthlyRevenue).toLocaleString()}` 
+          };
+        }
+        return s;
+      }));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
-    // Weekly activity data (real-time)
+    // Weekly activity
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const qWeekly = query(collection(db, 'appointments'), where('startTime', '>=', sevenDaysAgo), orderBy('startTime', 'asc'));
@@ -70,8 +98,6 @@ export function Dashboard() {
         if (dayMap[dayName] !== undefined) dayMap[dayName]++;
       });
 
-      const chartData = Object.entries(dayMap).map(([name, appointments]) => ({ name, appointments }));
-      // Sort to start from Monday
       const reordered = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'].map(name => ({
         name,
         appointments: dayMap[name]
@@ -79,22 +105,16 @@ export function Dashboard() {
       setWeeklyActivity(reordered);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
-    // Inventory Value
+    // Inventory
     const unsubscribeInventory = onSnapshot(collection(db, 'stocks'), (snapshot) => {
-      const total = snapshot.docs.reduce((acc, doc) => {
+      const totalValue = snapshot.docs.reduce((acc, doc) => {
         const data = doc.data();
         return acc + ((data.stock || 0) * (data.price || 0));
       }, 0);
-      setStats(prev => {
-        const next = [...prev];
-        next[2].value = `$${total.toLocaleString()}`;
-        next[2].label = 'Valor Inventario';
-        return next;
-      });
+      setStats(prev => prev.map(s => s.id === 'inventory' ? { ...s, value: `$${totalValue.toLocaleString()}` } : s));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'stocks'));
 
-    // Upcoming appointments
-    const now = new Date();
+    // Upcoming
     const qUpcoming = query(
       collection(db, 'appointments'),
       where('startTime', '>=', now),
@@ -108,13 +128,13 @@ export function Dashboard() {
 
     return () => {
       unsubscribePatients();
-      unsubscribeToday();
+      unsubscribeRevenue();
       unsubscribeInventory();
       unsubscribeUpcoming();
       unsubscribeWeekly();
       unsubscribeTreatments();
     };
-  }, []);
+  }, [revenueMode]);
 
   return (
     <div className="space-y-6">
@@ -126,15 +146,22 @@ export function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((stat, i) => (
           <motion.div
-            key={stat.label}
+            key={stat.id}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
-            className="bg-white p-4 rounded-xl border border-outline-variant shadow-sm hover:shadow-md transition-all cursor-pointer group"
+            onClick={stat.id === 'revenue' ? () => setRevenueMode(prev => prev === 'daily' ? 'monthly' : 'daily') : undefined}
+            className={cn(
+              "bg-white p-4 rounded-xl border border-outline-variant shadow-sm hover:shadow-md transition-all group",
+              stat.id === 'revenue' ? "cursor-pointer ring-1 ring-transparent hover:ring-primary/20" : "cursor-default"
+            )}
           >
             <div className="flex justify-between items-center mb-3">
-              <p className="text-[10px] font-black uppercase tracking-[0.15em] text-on-surface-variant group-hover:text-primary transition-colors">{stat.label}</p>
-              <div className={`flex items-center gap-1 text-[11px] font-bold ${stat.trend.startsWith('+') ? 'text-primary' : 'text-error'}`}>
+              <p className="text-[10px] font-black uppercase tracking-[0.15em] text-on-surface-variant group-hover:text-primary transition-colors">
+                {stat.label}
+                {stat.id === 'revenue' && <span className="ml-1 text-[8px] opacity-40">(Click para cambiar)</span>}
+              </p>
+              <div className={`flex items-center gap-1 text-[11px] font-bold ${stat.trend.startsWith('+') ? 'text-primary' : stat.trend ? 'text-error' : 'hidden'}`}>
                 {stat.trend}
                 {stat.trend.startsWith('+') ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
               </div>
@@ -156,10 +183,6 @@ export function Dashboard() {
               <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider">Actividad Semanal</h2>
               <p className="text-[11px] text-on-surface-variant">Volumen de pacientes en los últimos días.</p>
             </div>
-            <select className="bg-surface-bright border border-outline-variant rounded-md text-[11px] font-black uppercase tracking-wider px-3 py-1.5 focus:ring-1 focus:ring-primary outline-none">
-              <option>Últimos 7 días</option>
-              <option>Últimos 30 días</option>
-            </select>
           </div>
           <div className="h-[280px] w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -184,32 +207,71 @@ export function Dashboard() {
         </div>
 
         <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm flex flex-col">
-          <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider mb-4">Próximos Turnos</h2>
-          <div className="flex-1 space-y-3">
-            {upcomingAppointments.map((apt) => (
-              <div key={apt.id} className="flex gap-3 group cursor-pointer items-center p-2 hover:bg-surface rounded-lg transition-colors border border-transparent hover:border-outline-variant/30">
-                <div className="w-9 h-9 rounded-full bg-primary-container flex items-center justify-center text-primary text-[12px] font-bold shrink-0 border border-outline-variant">
-                  {apt.patientName?.charAt(0)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-center">
-                    <h4 className="text-[12px] font-bold text-on-surface truncate">{apt.patientName}</h4>
-                    <span className="text-[9px] font-black px-1.5 py-0.5 bg-primary-container text-primary rounded-md">{apt.time}</span>
-                  </div>
-                  <p className="text-[10px] text-on-surface-variant/70 uppercase font-black tracking-tight truncate">{apt.type}</p>
-                </div>
-              </div>
-            ))}
-            {upcomingAppointments.length === 0 && !loading && (
-              <div className="text-center py-10 opacity-30">
-                <CalendarCheck size={32} className="mx-auto mb-2" />
-                <p className="text-[10px] font-bold uppercase tracking-widest">Sin turnos pendientes</p>
+          <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider mb-4">Estado de Turnos</h2>
+          <div className="flex-1 h-[200px] w-full flex items-center justify-center">
+            {statusData.length > 0 ? (
+               <ResponsiveContainer width="100%" height="100%">
+               <PieChart>
+                 <Pie
+                   data={statusData}
+                   innerRadius={60}
+                   outerRadius={80}
+                   paddingAngle={5}
+                   dataKey="value"
+                 >
+                   {statusData.map((entry, index) => (
+                     <Cell key={`cell-${index}`} fill={entry.color} />
+                   ))}
+                 </Pie>
+                 <Tooltip contentStyle={{ fontSize: '10px', borderRadius: '8px' }} />
+               </PieChart>
+             </ResponsiveContainer>
+            ) : (
+              <div className="text-center opacity-30">
+                <PieChartIcon size={32} className="mx-auto mb-2" />
+                <p className="text-[10px] font-bold uppercase tracking-widest">Sin datos suficientes</p>
               </div>
             )}
           </div>
-          <button className="w-full mt-4 py-2 text-[11px] font-black text-primary bg-primary/5 rounded-md hover:bg-primary/10 transition-all uppercase tracking-[0.2em] border border-primary/20">
-            Ver Agenda Completa
-          </button>
+          <div className="space-y-2 mt-4">
+            {statusData.map(item => (
+              <div key={item.name} className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
+                  <span className="text-[11px] font-medium text-on-surface-variant">{item.name}</span>
+                </div>
+                <span className="text-[11px] font-bold text-on-surface">{item.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
+        <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider mb-4">Próximos Turnos</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {upcomingAppointments.map((apt) => (
+            <div key={apt.id} className="flex gap-3 items-center p-3 bg-surface-bright rounded-lg border border-outline-variant/30 hover:border-primary/30 transition-all cursor-pointer">
+              <div className="w-10 h-10 rounded-full bg-primary-container flex items-center justify-center text-primary text-[14px] font-bold shrink-0">
+                {apt.patientName?.charAt(0)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex justify-between items-center mb-0.5">
+                  <h4 className="text-[12px] font-bold text-on-surface truncate">{apt.patientName}</h4>
+                  <span className="text-[9px] font-black px-1.5 py-0.5 bg-primary-container text-primary rounded-md">{apt.time}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] text-on-surface-variant/70 uppercase font-black tracking-tight truncate">{apt.type}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+          {upcomingAppointments.length === 0 && !loading && (
+            <div className="col-span-full text-center py-10 opacity-30">
+              <CalendarCheck size={32} className="mx-auto mb-2" />
+              <p className="text-[10px] font-bold uppercase tracking-widest">Sin turnos pendientes</p>
+            </div>
+          )}
         </div>
       </div>
     </div>
