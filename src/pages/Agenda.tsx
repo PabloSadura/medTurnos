@@ -4,7 +4,7 @@ import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment } from 'firebase/firestore';
 
 const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
@@ -56,26 +56,19 @@ export function Agenda() {
       setTreatments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
 
+    const patientsQ = query(collection(db, 'patients'), orderBy('name', 'asc'));
+    const unsubscribePatients = onSnapshot(patientsQ, (snapshot) => {
+      setPatients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
+
     return () => {
       unsubscribe();
       unsubscribeTreatments();
+      unsubscribePatients();
     };
   }, []);
 
-  useEffect(() => {
-    if (isNewAppointmentOpen) {
-      const fetchPatients = async () => {
-        try {
-          const q = query(collection(db, 'patients'), orderBy('name', 'asc'));
-          const snapshot = await getDocs(q);
-          setPatients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        } catch (error) {
-          handleFirestoreError(error, OperationType.LIST, 'patients');
-        }
-      };
-      fetchPatients();
-    }
-  }, [isNewAppointmentOpen]);
+  // Removed redundant fetchPatients as it's now real-time in the main useEffect
 
   const handleAppointmentClick = (apt: any) => {
     setSelectedAppointment(apt);
@@ -113,7 +106,7 @@ export function Agenda() {
         ...newApt,
         patientId,
         patientName,
-        status: 'confirmed',
+        status: 'pendiente',
         duration: 30, // Default duration
         attendance: attendanceCount,
         startTime: new Date(`${newApt.date}T${newApt.time}`), // For reminders
@@ -133,10 +126,29 @@ export function Agenda() {
   const handleUpdateStatus = async (status: string) => {
     if (!selectedAppointment) return;
     try {
-      await updateDoc(doc(db, 'appointments', selectedAppointment.id), {
+      const { writeBatch } = await import('firebase/firestore');
+      const batch = writeBatch(db);
+
+      // Impact logic: If changing to 'finished', deduct materials from stocks
+      if (status === 'finished' && selectedAppointment.status !== 'finished') {
+        const treatment = treatments.find(t => t.name === selectedAppointment.type);
+        if (treatment && treatment.materials && treatment.materials.length > 0) {
+          for (const item of treatment.materials) {
+            const stockRef = doc(db, 'stocks', item.materialId);
+            batch.update(stockRef, {
+              stock: increment(-item.qty),
+              updatedAt: serverTimestamp()
+            });
+          }
+        }
+      }
+
+      await batch.update(doc(db, 'appointments', selectedAppointment.id), {
         status,
         updatedAt: serverTimestamp()
       });
+
+      await batch.commit();
       setIsDetailModalOpen(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `appointments/${selectedAppointment.id}`);
@@ -366,6 +378,7 @@ export function Agenda() {
                               key={apt.id} 
                               className={cn(
                                 "w-full px-1.5 py-0.5 rounded text-[10px] font-bold truncate border flex items-center gap-1",
+                                apt.status === 'pendiente' ? "bg-amber-100/50 text-amber-700 border-amber-200" :
                                 apt.status === 'confirmed' ? "bg-primary-container/30 text-primary border-primary/20" :
                                 apt.status === 'in-session' ? "bg-tertiary-container/30 text-tertiary border-tertiary/20" :
                                 apt.status === 'finished' ? "bg-secondary-container/30 text-secondary border-secondary/20" :
@@ -427,6 +440,7 @@ export function Agenda() {
                                 onClick={() => handleAppointmentClick(apt)}
                                 className={cn(
                                   "absolute left-1 right-1 p-2 rounded-lg border-l-4 shadow-sm cursor-pointer z-10 transition-all hover:scale-[1.02] overflow-hidden",
+                                  apt.status === 'pendiente' ? "bg-amber-50 border-amber-400 text-amber-700" :
                                   apt.status === 'confirmed' ? "bg-primary-container/20 border-primary text-primary" : 
                                   apt.status === 'in-session' ? "bg-tertiary-container/20 border-tertiary text-tertiary" : 
                                   apt.status === 'finished' ? "bg-secondary-container/20 border-secondary text-secondary" :
@@ -474,6 +488,7 @@ export function Agenda() {
                         onClick={() => handleAppointmentClick(apt)}
                         className={cn(
                           "absolute left-4 right-8 p-4 rounded-xl border-l-[6px] shadow-md cursor-pointer z-10 flex flex-col justify-center gap-1 transition-all hover:translate-x-1",
+                          apt.status === 'pendiente' ? "bg-amber-50 border-amber-400 text-amber-700 shadow-amber-950/5" :
                           apt.status === 'confirmed' ? "bg-primary-container/30 border-primary text-primary" : 
                           apt.status === 'in-session' ? "bg-tertiary-container/30 border-tertiary text-tertiary shadow-tertiary/10" : 
                           apt.status === 'finished' ? "bg-secondary-container/30 border-secondary text-secondary" :
@@ -517,6 +532,7 @@ export function Agenda() {
                   onClick={() => handleAppointmentClick(apt)}
                   className={cn(
                     "p-4 rounded-xl border border-outline-variant shadow-none hover:shadow-md transition-all cursor-pointer group relative overflow-hidden",
+                    apt.status === 'pendiente' ? "hover:border-amber-400 bg-amber-50/30" :
                     apt.status === 'confirmed' ? "hover:border-primary/40" :
                     apt.status === 'in-session' ? "hover:border-tertiary/40 bg-tertiary-container/10" :
                     apt.status === 'finished' ? "hover:border-secondary/40 opacity-70" : "opacity-50"
@@ -528,6 +544,7 @@ export function Agenda() {
                     </span>
                     <div className={cn(
                       "w-2 h-2 rounded-full",
+                      apt.status === 'pendiente' ? "bg-amber-500" :
                       apt.status === 'confirmed' ? "bg-primary" :
                       apt.status === 'in-session' ? "bg-tertiary" :
                       apt.status === 'finished' ? "bg-secondary" : "bg-on-surface-variant"
@@ -764,6 +781,7 @@ export function Agenda() {
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Cambiar Estado</label>
               <div className="grid grid-cols-2 gap-2">
                 {[
+                  { id: 'pendiente', label: 'Pendiente', color: 'bg-amber-500' },
                   { id: 'confirmed', label: 'Confirmado', color: 'bg-primary' },
                   { id: 'in-session', label: 'En Sesión', color: 'bg-tertiary' },
                   { id: 'finished', label: 'Finalizado', color: 'bg-secondary' },

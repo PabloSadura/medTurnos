@@ -172,11 +172,12 @@ export function Patients() {
     }
   };
 
-  const filteredPatients = patients.filter(p => 
-    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.idNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.phone?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredPatients = patients.filter(p => {
+    const nameMatch = p.name?.toLowerCase().includes(searchTerm.toLowerCase()) || false;
+    const idMatch = p.idNumber?.toLowerCase().includes(searchTerm.toLowerCase()) || false;
+    const phoneMatch = p.phone?.toLowerCase().includes(searchTerm.toLowerCase()) || false;
+    return nameMatch || idMatch || phoneMatch;
+  });
 
   return (
     <div className="space-y-6">

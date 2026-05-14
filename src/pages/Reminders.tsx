@@ -5,11 +5,21 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, where, orderBy, getDoc, doc } from 'firebase/firestore';
 
 export function Reminders() {
-  const [reminders, setReminders] = useState<any[]>([]);
+  const [appointments, setAppointments] = useState<any[]>([]);
+  const [patients, setPatients] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Fetch upcoming appointments for today and tomorrow
+    // Sync patients for enrichment
+    const unsubscribePatients = onSnapshot(collection(db, 'patients'), (snapshot) => {
+      const pMap: Record<string, any> = {};
+      snapshot.docs.forEach(doc => {
+        pMap[doc.id] = doc.data();
+      });
+      setPatients(pMap);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
+
+    // Fetch upcoming appointments
     const now = new Date();
     const tomorrow = new Date();
     tomorrow.setDate(now.getDate() + 1);
@@ -22,45 +32,52 @@ export function Reminders() {
       orderBy('startTime', 'asc')
     );
 
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const appointments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      
-      // Enrich with patient data
-      const enriched = await Promise.all(appointments.map(async (app: any) => {
-        let patientName = 'Unknown Patient';
-        let patientPhone = '';
-        if (app.patientId) {
-          const pDoc = await getDoc(doc(db, 'patients', app.patientId));
-          if (pDoc.exists()) {
-            const pData = pDoc.data();
-            patientName = pData.name;
-            patientPhone = pData.phone;
-          }
-        }
-        
-        const date = app.startTime?.toDate() || new Date();
-        const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const dateStr = date.toDateString() === new Date().toDateString() ? 'Today' : 'Tomorrow';
-        
-        const message = `Hola ${patientName}, te recordamos tu turno el ${dateStr} a las ${timeStr}. ¡Te esperamos!`;
-        
-        return {
-          id: app.id,
-          patient: patientName,
-          phone: patientPhone,
-          time: timeStr,
-          date: dateStr,
-          status: app.status || 'Pending',
-          message
-        };
-      }));
-
-      setReminders(enriched);
+    const unsubscribeApps = onSnapshot(q, (snapshot) => {
+      setAppointments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       setLoading(false);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribePatients();
+      unsubscribeApps();
+    };
   }, []);
+
+  const reminders = appointments.map((app: any) => {
+    const patientData = app.patientId ? patients[app.patientId] : null;
+    const patientName = patientData?.name || app.patientName || 'Paciente Desconocido';
+    const patientPhone = patientData?.phone || '';
+    
+    // Convert Firestore Timestamp to Date reliably
+    let date: Date;
+    if (app.startTime?.toDate) {
+      date = app.startTime.toDate();
+    } else if (app.startTime instanceof Date) {
+      date = app.startTime;
+    } else if (typeof app.startTime === 'string') {
+      date = new Date(app.startTime);
+    } else if (app.date && app.time) {
+      date = new Date(`${app.date}T${app.time}`);
+    } else {
+      date = new Date();
+    }
+
+    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const isToday = date.toDateString() === new Date().toDateString();
+    const dateStr = isToday ? 'Hoy' : 'Mañana';
+    
+    const message = `Hola ${patientName}, te recordamos tu turno el ${dateStr} a las ${timeStr}. ¡Te esperamos!`;
+    
+    return {
+      id: app.id,
+      patient: patientName,
+      phone: patientPhone,
+      time: timeStr,
+      date: dateStr,
+      status: app.status || 'pendiente',
+      message
+    };
+  });
 
   const handleSendWhatsApp = (reminder: any) => {
     if (!reminder.phone) {

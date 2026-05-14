@@ -29,7 +29,7 @@ export function Inventory() {
   });
 
   useEffect(() => {
-    const q = query(collection(db, 'inventory'), orderBy('name', 'asc'));
+    const q = query(collection(db, 'stocks'), orderBy('name', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const items = snapshot.docs.map(doc => {
         const data = doc.data();
@@ -39,7 +39,7 @@ export function Inventory() {
         return { id: doc.id, ...data, status };
       });
       setInventory(items);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'inventory'));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'stocks'));
 
     return () => unsubscribe();
   }, []);
@@ -73,12 +73,12 @@ export function Inventory() {
     e.preventDefault();
     try {
       if (selectedItem) {
-        await updateDoc(doc(db, 'inventory', selectedItem.id), {
+        await updateDoc(doc(db, 'stocks', selectedItem.id), {
           ...formData,
           updatedAt: serverTimestamp()
         });
       } else {
-        await addDoc(collection(db, 'inventory'), {
+        await addDoc(collection(db, 'stocks'), {
           ...formData,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
@@ -86,7 +86,7 @@ export function Inventory() {
       }
       setActiveModal(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'inventory');
+      handleFirestoreError(error, OperationType.WRITE, 'stocks');
     }
   };
 
@@ -98,7 +98,7 @@ export function Inventory() {
         ? selectedItem.stock + adjustmentData.quantity 
         : selectedItem.stock - adjustmentData.quantity;
 
-      await updateDoc(doc(db, 'inventory', selectedItem.id), {
+      await updateDoc(doc(db, 'stocks', selectedItem.id), {
         stock: Math.max(0, newStock),
         updatedAt: serverTimestamp()
       });
@@ -108,13 +108,15 @@ export function Inventory() {
       setActiveModal(null);
       setAdjustmentData({ type: 'in', quantity: 0, reason: '' });
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `inventory/${selectedItem.id}`);
+      handleFirestoreError(error, OperationType.WRITE, `stocks/${selectedItem.id}`);
     }
   };
 
   const filteredInventory = inventory.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                         item.sku.toLowerCase().includes(searchTerm.toLowerCase());
+    const itemName = item.name || '';
+    const itemSku = item.sku || '';
+    const matchesSearch = itemName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                         itemSku.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'all' || item.status === 'low' || item.status === 'out';
     return matchesSearch && matchesStatus;
   });

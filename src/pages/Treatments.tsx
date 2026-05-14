@@ -10,10 +10,10 @@ export function Treatments() {
   const [treatments, setTreatments] = useState<any[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'category' | 'supplies' | null>(null);
+  const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'category' | 'materials' | null>(null);
   const [selectedTreatment, setSelectedTreatment] = useState<any>(null);
   const [isLinking, setIsLinking] = useState(false);
-  const [currentSupplies, setCurrentSupplies] = useState<any[]>([]);
+  const [currentMaterials, setCurrentMaterials] = useState<any[]>([]);
   const [inventorySearch, setInventorySearch] = useState('');
 
   const [formData, setFormData] = useState({
@@ -21,7 +21,7 @@ export function Treatments() {
     cost: 0,
     duration: 30,
     category: 'General',
-    supplies: [] as any[]
+    materials: [] as any[]
   });
 
   useEffect(() => {
@@ -30,10 +30,10 @@ export function Treatments() {
       setTreatments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
 
-    const invQ = query(collection(db, 'inventory'), orderBy('name', 'asc'));
+    const invQ = query(collection(db, 'stocks'), orderBy('name', 'asc'));
     const unsubscribeInv = onSnapshot(invQ, (snapshot) => {
       setInventory(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'inventory'));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'stocks'));
 
     return () => {
       unsubscribe();
@@ -41,7 +41,7 @@ export function Treatments() {
     };
   }, []);
 
-  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'category'| 'supplies', treatment?: any) => {
+  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'category'| 'materials', treatment?: any) => {
     setSelectedTreatment(treatment || null);
     if (treatment) {
       setFormData({
@@ -49,18 +49,18 @@ export function Treatments() {
         cost: treatment.cost,
         duration: treatment.duration,
         category: treatment.category,
-        supplies: treatment.supplies || []
+        materials: treatment.materials || []
       });
-      setCurrentSupplies(treatment.supplies || []);
+      setCurrentMaterials(treatment.materials || []);
     } else {
       setFormData({
         name: '',
         cost: 0,
         duration: 30,
         category: 'General',
-        supplies: []
+        materials: []
       });
-      setCurrentSupplies([]);
+      setCurrentMaterials([]);
     }
     setActiveModal(type);
     setIsLinking(false);
@@ -71,7 +71,7 @@ export function Treatments() {
     try {
       const data = {
         ...formData,
-        supplies: currentSupplies,
+        materials: currentMaterials,
         updatedAt: serverTimestamp()
       };
 
@@ -99,24 +99,22 @@ export function Treatments() {
     }
   };
 
-  const addSupply = (item: any) => {
-    if (!currentSupplies.find(s => s.id === item.id)) {
-      setCurrentSupplies([...currentSupplies, { 
-        id: item.id, 
-        name: item.name, 
-        unit: item.unit, 
+  const addMaterial = (item: any) => {
+    if (!currentMaterials.find(m => m.materialId === item.id)) {
+      setCurrentMaterials([...currentMaterials, { 
+        materialId: item.id, 
         qty: 1 
       }]);
     }
     setIsLinking(false);
   };
 
-  const removeSupply = (id: string) => {
-    setCurrentSupplies(currentSupplies.filter(s => s.id !== id));
+  const removeMaterial = (materialId: string) => {
+    setCurrentMaterials(currentMaterials.filter(m => m.materialId !== materialId));
   };
 
-  const updateSupplyQty = (id: string, qty: number) => {
-    setCurrentSupplies(currentSupplies.map(s => s.id === id ? { ...s, qty } : s));
+  const updateMaterialQty = (materialId: string, qty: number) => {
+    setCurrentMaterials(currentMaterials.map(m => m.materialId === materialId ? { ...m, qty } : m));
   };
 
   const filteredTreatments = treatments.filter(t => 
@@ -126,7 +124,7 @@ export function Treatments() {
 
   const filteredInventory = inventory.filter(i => 
     i.name.toLowerCase().includes(inventorySearch.toLowerCase()) &&
-    !currentSupplies.find(cs => cs.id === i.id)
+    !currentMaterials.find(cm => cm.materialId === i.id)
   );
 
   return (
@@ -185,12 +183,12 @@ export function Treatments() {
             </div>
 
             <button 
-              onClick={() => handleOpenModal('supplies', treatment)}
+              onClick={() => handleOpenModal('materials', treatment)}
               className="w-full border-t border-outline-variant bg-surface-bright px-4 py-2.5 flex justify-between items-center mt-auto hover:bg-surface transition-colors group/link"
             >
               <div className="flex items-center gap-1.5 text-on-surface-variant group-hover/link:text-primary transition-colors">
                 <Package size={12} />
-                <span className="text-[10px] font-bold uppercase tracking-tight">{treatment.supplies?.length || 0} Insumos Vinculados</span>
+                <span className="text-[10px] font-bold uppercase tracking-tight">{treatment.materials?.length || 0} Materiales Vinculados</span>
               </div>
               <ChevronRight size={14} className="text-on-surface-variant group-hover/link:text-primary group-hover/link:translate-x-1 transition-all" />
             </button>
@@ -290,16 +288,16 @@ export function Treatments() {
       </Modal>
 
       <Modal
-        isOpen={activeModal === 'supplies'}
+        isOpen={activeModal === 'materials'}
         onClose={() => setActiveModal(null)}
-        title={`Insumos: ${selectedTreatment?.name}`}
+        title={`Materiales: ${selectedTreatment?.name}`}
         className="max-w-xl"
       >
         <div className="space-y-6">
           <div className="bg-surface p-4 rounded-xl border border-outline-variant flex items-start gap-4">
             <Info className="text-secondary shrink-0 mt-0.5" size={18} />
             <div>
-              <h4 className="text-[12px] font-bold text-on-surface uppercase tracking-wider">Gestión de Insumos</h4>
+              <h4 className="text-[12px] font-bold text-on-surface uppercase tracking-wider">Gestión de Materiales</h4>
               <p className="text-[11px] text-on-surface-variant leading-relaxed">Vincule materiales del inventario a este tratamiento para descontarlos automáticamente al ser realizado.</p>
             </div>
           </div>
@@ -307,7 +305,7 @@ export function Treatments() {
           {!isLinking ? (
             <div className="space-y-3">
               <div className="flex justify-between items-center">
-                <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Insumos Vinculados</h5>
+                <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Materiales Vinculados</h5>
                 <button 
                   onClick={() => setIsLinking(true)}
                   className="text-[10px] font-bold text-primary hover:underline uppercase tracking-wider flex items-center gap-1"
@@ -317,42 +315,45 @@ export function Treatments() {
               </div>
 
               <div className="space-y-2">
-                {currentSupplies.map((supply) => (
-                  <motion.div 
-                    layout
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    key={supply.id} 
-                    className="flex justify-between items-center p-3 bg-white border border-outline-variant rounded-lg group"
-                  >
-                    <div className="flex-1">
-                      <p className="text-[13px] font-bold text-on-surface">{supply.name}</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <p className="text-[10px] text-on-surface-variant uppercase font-bold tracking-tight">Cant por uso:</p>
-                        <input 
-                          type="number"
-                          step="0.1"
-                          value={supply.qty}
-                          onChange={(e) => updateSupplyQty(supply.id, parseFloat(e.target.value))}
-                          className="w-16 px-1 py-0.5 border border-outline-variant rounded text-[11px] font-bold bg-surface outline-none"
-                        />
-                        <span className="text-[10px] text-on-surface-variant font-bold uppercase">{supply.unit}</span>
+                {currentMaterials.map((material) => {
+                  const stockItem = inventory.find(i => i.id === material.materialId);
+                  return (
+                    <motion.div 
+                      layout
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      key={material.materialId} 
+                      className="flex justify-between items-center p-3 bg-white border border-outline-variant rounded-lg group"
+                    >
+                      <div className="flex-1">
+                        <p className="text-[13px] font-bold text-on-surface">{stockItem?.name || 'Cargando...'}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <p className="text-[10px] text-on-surface-variant uppercase font-bold tracking-tight">Cant por uso:</p>
+                          <input 
+                            type="number"
+                            step="0.1"
+                            value={material.qty}
+                            onChange={(e) => updateMaterialQty(material.materialId, parseFloat(e.target.value))}
+                            className="w-16 px-1 py-0.5 border border-outline-variant rounded text-[11px] font-bold bg-surface outline-none"
+                          />
+                          <span className="text-[10px] text-on-surface-variant font-bold uppercase">{stockItem?.unit}</span>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button 
-                        onClick={() => removeSupply(supply.id)}
-                        className="p-1.5 hover:bg-error-container text-error rounded transition-all opacity-0 group-hover:opacity-100"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                  </motion.div>
-                ))}
-                {currentSupplies.length === 0 && (
+                      <div className="flex items-center gap-2">
+                        <button 
+                          onClick={() => removeMaterial(material.materialId)}
+                          className="p-1.5 hover:bg-error-container text-error rounded transition-all opacity-0 group-hover:opacity-100"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+                {currentMaterials.length === 0 && (
                   <div className="text-center py-8 border-2 border-dashed border-outline-variant rounded-xl opacity-50">
                     <Package size={24} className="mx-auto mb-2" />
-                    <span className="text-[11px] font-bold uppercase tracking-widest">Sin insumos vinculados</span>
+                    <span className="text-[11px] font-bold uppercase tracking-widest">Sin materiales vinculados</span>
                   </div>
                 )}
               </div>
@@ -364,7 +365,7 @@ export function Treatments() {
               className="space-y-4"
             >
               <div className="flex justify-between items-center">
-                <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Seleccionar Insumo del Inventario</h5>
+                <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Seleccionar Material del Inventario</h5>
                 <button 
                   onClick={() => setIsLinking(false)}
                   className="text-[10px] font-bold text-on-surface-variant hover:underline uppercase"
@@ -386,7 +387,7 @@ export function Treatments() {
                 {filteredInventory.map((item) => (
                   <button 
                     key={item.id}
-                    onClick={() => addSupply(item)}
+                    onClick={() => addMaterial(item)}
                     className="w-full text-left p-3 rounded-lg hover:bg-primary/5 border border-transparent hover:border-primary/20 transition-all flex justify-between items-center group/item"
                   >
                     <div>

@@ -33,7 +33,7 @@ service cloud.firestore {
       allow read, write: if isSignedIn();
     }
 
-    match /inventory/{id} {
+    match /stocks/{id} {
       allow read, write: if isSignedIn();
     }
 

@@ -9,8 +9,9 @@
         "patientName": { "type": "string" },
         "date": { "type": "string", "format": "date" },
         "time": { "type": "string" },
+        "startTime": { "type": "string", "format": "date-time" },
         "duration": { "type": "number" },
-        "status": { "type": "string", "enum": ["confirmed", "in-session", "finished", "cancelled"] },
+        "status": { "type": "string", "enum": ["pendiente", "confirmed", "in-session", "finished", "cancelled"] },
         "type": { "type": "string" },
         "attendance": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -60,16 +61,13 @@
         "duration": { "type": "number" },
         "cost": { "type": "number" },
         "category": { "type": "string" },
-        "stockLinked": { "type": "number" },
-        "supplies": {
+        "materials": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "itemId": { "type": "string" },
-              "name": { "type": "string" },
-              "qty": { "type": "number" },
-              "unit": { "type": "string" }
+              "materialId": { "type": "string" },
+              "qty": { "type": "number" }
             }
           }
         },
@@ -89,7 +87,7 @@
         "stock": { "type": "number" },
         "minStock": { "type": "number" },
         "unit": { "type": "string" },
-        "status": { "type": "string", "enum": ["In Stock", "Low Stock", "Out of Stock"] },
+        "status": { "type": "string", "enum": ["normal", "low", "out"] },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -136,9 +134,9 @@
       "schema": "Treatment",
       "description": "Collection of available dental treatments"
     },
-    "/inventory": {
+    "/stocks": {
       "schema": "InventoryItem",
-      "description": "Clinic inventory catalog"
+      "description": "Clinic stocks catalog"
     },
     "/profiles": {
       "schema": "UserProfile",
