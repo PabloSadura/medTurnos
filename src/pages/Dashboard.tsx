@@ -8,6 +8,8 @@ import { collection, onSnapshot, query, where, orderBy, limit, getDocs } from 'f
 
 export function Dashboard() {
   const [revenueMode, setRevenueMode] = useState<'daily' | 'monthly'>('daily');
+  const [activityMode, setActivityMode] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [chartMode, setChartMode] = useState<'weekly' | 'monthly'>('weekly');
   const [stats, setStats] = useState([
     { id: 'patients', label: 'Pacientes Totales', value: '0', trend: '', icon: Users, color: 'bg-secondary-container text-secondary' },
     { id: 'appointments', label: 'Turnos Hoy', value: '0', trend: '', icon: CalendarCheck, color: 'bg-tertiary-container text-tertiary' },
@@ -15,7 +17,7 @@ export function Dashboard() {
     { id: 'revenue', label: 'Ingresos Hoy', value: '$0', trend: '', icon: TrendingUp, color: 'bg-error-container text-error' },
   ]);
   const [upcomingAppointments, setUpcomingAppointments] = useState<any[]>([]);
-  const [weeklyActivity, setWeeklyActivity] = useState<any[]>([]);
+  const [activityChartData, setActivityChartData] = useState<any[]>([]);
   const [statusData, setStatusData] = useState<any[]>([]);
   const [treatments, setTreatments] = useState<any[]>([]);
   const [appointments, setAppointments] = useState<any[]>([]);
@@ -49,36 +51,6 @@ export function Dashboard() {
       // Filter by date range on client
       const filteredApps = allApps.filter(a => a.date >= monthStr + '-01');
       setAppointments(filteredApps);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
-
-    // Weekly activity
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const qWeekly = query(
-      collection(db, 'appointments'), 
-      where('userId', '==', userId)
-    );
-    const unsubscribeWeekly = onSnapshot(qWeekly, (snapshot) => {
-      const dayMap: Record<string, number> = { 'Lun': 0, 'Mar': 0, 'Mie': 0, 'Jue': 0, 'Vie': 0, 'Sab': 0, 'Dom': 0 };
-      const days = ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'];
-      
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        let date: Date;
-        if (data.startTime?.toDate) date = data.startTime.toDate();
-        else date = new Date(data.startTime);
-        
-        if (date >= sevenDaysAgo) {
-          const dayName = days[date.getDay()];
-          if (dayMap[dayName] !== undefined) dayMap[dayName]++;
-        }
-      });
-
-      const reordered = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'].map(name => ({
-        name,
-        appointments: dayMap[name]
-      }));
-      setWeeklyActivity(reordered);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
     // Inventory
@@ -118,7 +90,6 @@ export function Dashboard() {
       unsubscribeRevenue();
       unsubscribeInventory();
       unsubscribeUpcoming();
-      unsubscribeWeekly();
       unsubscribeTreatments();
       unsubscribePatients();
     };
@@ -133,6 +104,55 @@ export function Dashboard() {
 
     const todayApps = appointments.filter(a => a.date === todayStr);
     
+    // Weekly apps (last 7 days)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
+    const weeklyApps = appointments.filter(a => a.date >= sevenDaysAgoStr && a.date <= todayStr);
+    
+    // Monthly apps
+    const monthlyApps = appointments.filter(a => a.date.startsWith(monthStr));
+
+    // Chart Data Calculation
+    if (chartMode === 'weekly') {
+      const dayMap: Record<string, number> = { 'Lun': 0, 'Mar': 0, 'Mie': 0, 'Jue': 0, 'Vie': 0, 'Sab': 0, 'Dom': 0 };
+      const days = ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'];
+      
+      // We use weeklyApps for the weekly chart
+      weeklyApps.forEach(app => {
+        let date: Date;
+        if (app.startTime?.toDate) date = app.startTime.toDate();
+        else date = new Date(app.startTime || app.date);
+        
+        const dayName = days[date.getDay()];
+        if (dayMap[dayName] !== undefined) dayMap[dayName]++;
+      });
+
+      const reordered = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'].map(name => ({
+        name,
+        appointments: dayMap[name]
+      }));
+      setActivityChartData(reordered);
+    } else {
+      // Monthly chart - group by days of month
+      const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const monthlyMap: Record<string, number> = {};
+      for (let i = 1; i <= daysInMonth; i++) {
+        monthlyMap[i.toString().padStart(2, '0')] = 0;
+      }
+
+      monthlyApps.forEach(app => {
+        const day = app.date.split('-')[2];
+        if (monthlyMap[day] !== undefined) monthlyMap[day]++;
+      });
+
+      const sorted = Object.keys(monthlyMap).sort().map(day => ({
+        name: day,
+        appointments: monthlyMap[day]
+      }));
+      setActivityChartData(sorted);
+    }
+
     const dailyRevenue = todayApps.filter(a => a.status === 'finished').reduce((acc, app) => {
       const t = treatments.find(trait => trait.name === app.type);
       return acc + (t?.cost || 0);
@@ -160,7 +180,18 @@ export function Dashboard() {
     setStatusData(chartData);
 
     setStats(prev => prev.map(s => {
-      if (s.id === 'appointments') return { ...s, value: todayApps.length.toString() };
+      if (s.id === 'appointments') {
+        let label = 'Turnos Hoy';
+        let value = todayApps.length.toString();
+        if (activityMode === 'weekly') {
+          label = 'Turnos Semana';
+          value = weeklyApps.length.toString();
+        } else if (activityMode === 'monthly') {
+          label = 'Turnos Mes';
+          value = monthlyApps.length.toString();
+        }
+        return { ...s, label, value };
+      }
       if (s.id === 'revenue') {
         return { 
           ...s, 
@@ -170,7 +201,7 @@ export function Dashboard() {
       }
       return s;
     }));
-  }, [appointments, treatments, revenueMode]);
+  }, [appointments, treatments, revenueMode, activityMode, chartMode]);
 
   return (
     <div className="space-y-6">
@@ -186,16 +217,19 @@ export function Dashboard() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
-            onClick={stat.id === 'revenue' ? () => setRevenueMode(prev => prev === 'daily' ? 'monthly' : 'daily') : undefined}
+            onClick={() => {
+              if (stat.id === 'revenue') setRevenueMode(prev => prev === 'daily' ? 'monthly' : 'daily');
+              if (stat.id === 'appointments') setActivityMode(prev => prev === 'daily' ? 'weekly' : prev === 'weekly' ? 'monthly' : 'daily');
+            }}
             className={cn(
               "bg-white p-4 rounded-xl border border-outline-variant shadow-sm hover:shadow-md transition-all group",
-              stat.id === 'revenue' ? "cursor-pointer ring-1 ring-transparent hover:ring-primary/20" : "cursor-default"
+              (stat.id === 'revenue' || stat.id === 'appointments') ? "cursor-pointer ring-1 ring-transparent hover:ring-primary/20" : "cursor-default"
             )}
           >
             <div className="flex justify-between items-center mb-3">
               <p className="text-[10px] font-black uppercase tracking-[0.15em] text-on-surface-variant group-hover:text-primary transition-colors">
                 {stat.label}
-                {stat.id === 'revenue' && <span className="ml-1 text-[8px] opacity-40">(Click para cambiar)</span>}
+                {(stat.id === 'revenue' || stat.id === 'appointments') && <span className="ml-1 text-[8px] opacity-40">(Click para cambiar)</span>}
               </p>
               <div className={`flex items-center gap-1 text-[11px] font-bold ${stat.trend.startsWith('+') ? 'text-primary' : stat.trend ? 'text-error' : 'hidden'}`}>
                 {stat.trend}
@@ -216,13 +250,37 @@ export function Dashboard() {
         <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
           <div className="flex justify-between items-center mb-6">
             <div>
-              <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider">Actividad Semanal</h2>
-              <p className="text-[11px] text-on-surface-variant">Volumen de pacientes en los últimos días.</p>
+              <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider">
+                {chartMode === 'weekly' ? 'Actividad Semanal' : 'Actividad Mensual'}
+              </h2>
+              <p className="text-[11px] text-on-surface-variant">
+                {chartMode === 'weekly' ? 'Volumen de pacientes en los últimos 7 días.' : 'Volumen de pacientes en el mes actual.'}
+              </p>
+            </div>
+            <div className="flex bg-surface-container rounded-lg p-1 scale-90 origin-right">
+              <button 
+                onClick={() => setChartMode('weekly')}
+                className={cn(
+                  "px-3 py-1 text-[10px] font-bold uppercase transition-all rounded-md",
+                  chartMode === 'weekly' ? "bg-white text-primary shadow-sm" : "text-on-surface-variant hover:text-on-surface"
+                )}
+              >
+                Semana
+              </button>
+              <button 
+                onClick={() => setChartMode('monthly')}
+                className={cn(
+                  "px-3 py-1 text-[10px] font-bold uppercase transition-all rounded-md",
+                  chartMode === 'monthly' ? "bg-white text-primary shadow-sm" : "text-on-surface-variant hover:text-on-surface"
+                )}
+              >
+                Mes
+              </button>
             </div>
           </div>
           <div className="h-[280px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={weeklyActivity}>
+              <AreaChart data={activityChartData}>
                 <defs>
                   <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#00478D" stopOpacity={0.1}/>
@@ -230,11 +288,19 @@ export function Dashboard() {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b', fontWeight: 'bold' }} dy={10} />
+                <XAxis 
+                  dataKey="name" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fontSize: 10, fill: '#64748b', fontWeight: 'bold' }} 
+                  dy={10}
+                  interval={chartMode === 'monthly' ? 4 : 0}
+                />
                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} />
                 <Tooltip 
                   contentStyle={{ borderRadius: '8px', border: '1px solid #E2E8F0', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', fontSize: '11px', fontWeight: 'bold' }}
                   cursor={{ stroke: '#00478D', strokeWidth: 1 }}
+                  labelFormatter={(value) => chartMode === 'weekly' ? value : `Día ${value}`}
                 />
                 <Area type="monotone" dataKey="appointments" stroke="#00478D" strokeWidth={2.5} fillOpacity={1} fill="url(#colorRev)" />
               </AreaChart>
