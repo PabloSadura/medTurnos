@@ -3,8 +3,8 @@ import { Stethoscope, Plus, Search, DollarSign, Clock, ChevronRight, Package, Ed
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 import { motion } from 'motion/react';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, orderBy } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { collection, onSnapshot, query, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, orderBy, where } from 'firebase/firestore';
 
 export function Treatments() {
   const [treatments, setTreatments] = useState<any[]>([]);
@@ -24,21 +24,32 @@ export function Treatments() {
   });
 
   useEffect(() => {
-    const q = query(collection(db, 'treatments'), orderBy('name', 'asc'));
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    const q = query(
+      collection(db, 'treatments'), 
+      where('userId', '==', userId)
+    );
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setTreatments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTreatments(docs.sort((a: any, b: any) => a.name.localeCompare(b.name)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
 
-    const invQ = query(collection(db, 'stocks'), orderBy('name', 'asc'));
+    const invQ = query(
+      collection(db, 'stocks'), 
+      where('userId', '==', userId)
+    );
     const unsubscribeInv = onSnapshot(invQ, (snapshot) => {
-      setInventory(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setInventory(docs.sort((a: any, b: any) => a.name.localeCompare(b.name)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'stocks'));
 
     return () => {
       unsubscribe();
       unsubscribeInv();
     };
-  }, []);
+  }, [auth.currentUser?.uid]);
 
   const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'materials', treatment?: any) => {
     setSelectedTreatment(treatment || null);
@@ -77,6 +88,7 @@ export function Treatments() {
       } else {
         await addDoc(collection(db, 'treatments'), {
           ...data,
+          userId: auth.currentUser?.uid,
           createdAt: serverTimestamp()
         });
       }
@@ -115,11 +127,11 @@ export function Treatments() {
   };
 
   const filteredTreatments = treatments.filter(t => 
-    t.name.toLowerCase().includes(searchTerm.toLowerCase())
+    t.name?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const filteredInventory = inventory.filter(i => 
-    i.name.toLowerCase().includes(inventorySearch.toLowerCase()) &&
+    i.name?.toLowerCase().includes(inventorySearch.toLowerCase()) &&
     !currentMaterials.find(cm => cm.materialId === i.id)
   );
 

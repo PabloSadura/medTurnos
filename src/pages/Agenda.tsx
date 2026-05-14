@@ -4,8 +4,8 @@ import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVer
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch } from 'firebase/firestore';
 
 const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
@@ -57,8 +57,12 @@ export function Agenda() {
 
   useEffect(() => {
     if (newApt.patientId && !isCreatingNewPatient) {
-      // Fetch stats for this specific patient
-      const appQ = query(collection(db, 'appointments'), where('patientId', '==', newApt.patientId));
+      // Fetch stats for this specific patient (only current user's)
+      const appQ = query(
+        collection(db, 'appointments'), 
+        where('patientId', '==', newApt.patientId),
+        where('userId', '==', auth.currentUser?.uid)
+      );
       getDocs(appQ).then(snapshot => {
         const apps = snapshot.docs.map(doc => doc.data());
         const finishedCount = apps.filter(a => a.status === 'finished').length;
@@ -76,33 +80,43 @@ export function Agenda() {
   }, [newApt.patientId, isCreatingNewPatient]);
 
   useEffect(() => {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
     // Only subscribe to appointments for the current month and the selected date's surrounding
     const q = query(
       collection(db, 'appointments'),
-      orderBy('date', 'asc')
+      where('userId', '==', userId)
     );
     
     // Using a broader query for the month view but real-time
     const unsubscribeApps = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
-      // Client-side sub-sort by time to avoid composite index requirement
+      // Client-side sort by date and time to avoid composite index requirement
       docs.sort((a, b) => {
-        if (a.date === b.date) {
-          return (a.time || '').localeCompare(b.time || '');
+        const dateA = a.date || '';
+        const dateB = b.date || '';
+        if (dateA !== dateB) {
+          return dateA.localeCompare(dateB);
         }
-        return 0; // Already sorted by date by Firestore
+        return (a.time || '').localeCompare(b.time || '');
       });
       setAppointments(docs);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
-    const treatmentsQ = query(collection(db, 'treatments'), orderBy('name', 'asc'));
+    const treatmentsQ = query(
+      collection(db, 'treatments'), 
+      where('userId', '==', userId)
+    );
     const unsubscribeTreatments = onSnapshot(treatmentsQ, (snapshot) => {
-      setTreatments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTreatments(docs.sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
 
-    const patientsQ = query(collection(db, 'patients'), orderBy('name', 'asc'));
+    const patientsQ = query(collection(db, 'patients'), where('userId', '==', userId));
     const unsubscribePatients = onSnapshot(patientsQ, (snapshot) => {
-      setPatients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setPatients(docs.sort((a: any, b: any) => a.name.localeCompare(b.name)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
     return () => {
@@ -110,7 +124,7 @@ export function Agenda() {
       unsubscribeTreatments();
       unsubscribePatients();
     };
-  }, []);
+  }, [auth.currentUser?.uid]);
 
   // Removed redundant fetchPatients as it's now real-time in the main useEffect
 
@@ -130,6 +144,7 @@ export function Agenda() {
           name: newPatientData.name,
           phone: newPatientData.phone,
           idNumber: newPatientData.idNumber,
+          userId: auth.currentUser?.uid,
           status: 'active',
           lastVisit: '-',
           createdAt: serverTimestamp()
@@ -142,7 +157,11 @@ export function Agenda() {
       if (!patient) return;
 
       // Calculate attendance count
-      const q = query(collection(db, 'appointments'), where('patientId', '==', patientId));
+      const q = query(
+        collection(db, 'appointments'), 
+        where('patientId', '==', patientId),
+        where('userId', '==', auth.currentUser?.uid)
+      );
       const snapshot = await getDocs(q);
       const attendanceCount = snapshot.size + 1;
 
@@ -155,6 +174,7 @@ export function Agenda() {
         ...newApt,
         patientId,
         patientName,
+        userId: auth.currentUser?.uid,
         status: 'pendiente',
         duration: 30, // Default duration
         attendance: attendanceCount,
@@ -176,7 +196,6 @@ export function Agenda() {
   const handleUpdateStatus = async (status: string) => {
     if (!selectedAppointment) return;
     try {
-      const { writeBatch } = await import('firebase/firestore');
       const batch = writeBatch(db);
 
       // Impact logic: If changing to 'finished', deduct materials from stocks
@@ -189,18 +208,29 @@ export function Agenda() {
               stock: increment(-item.qty),
               updatedAt: serverTimestamp()
             });
+
+            // Record movement
+            const movementRef = doc(collection(db, `stocks/${item.materialId}/movements`));
+            batch.set(movementRef, {
+              type: 'out',
+              quantity: item.qty,
+              reason: `Consumido en: ${selectedAppointment.type} para ${selectedAppointment.patientName}`,
+              date: serverTimestamp(),
+              userId: auth.currentUser?.uid
+            });
           }
         }
         
         // Update patient's last visit date
         const patientRef = doc(db, 'patients', selectedAppointment.patientId);
-        batch.update(patientRef, {
+        batch.set(patientRef, {
           lastVisit: selectedAppointment.date,
-          updatedAt: serverTimestamp()
-        });
+          updatedAt: serverTimestamp(),
+          userId: auth.currentUser?.uid // Ensure it has a userId if it's created newly
+        }, { merge: true });
       }
 
-      await batch.update(doc(db, 'appointments', selectedAppointment.id), {
+      batch.update(doc(db, 'appointments', selectedAppointment.id), {
         status,
         updatedAt: serverTimestamp()
       });
@@ -213,8 +243,8 @@ export function Agenda() {
   };
 
   const filteredPatients = patients.filter(p => 
-    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.idNumber.toLowerCase().includes(searchTerm.toLowerCase())
+    p.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.idNumber?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const getCalendarDays = () => {

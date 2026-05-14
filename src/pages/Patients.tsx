@@ -4,8 +4,8 @@ import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Cale
 import { cn } from '../lib/utils';
 import { motion } from 'motion/react';
 import { Modal } from '../components/Modal';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, where } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, where, writeBatch, increment, getDocs } from 'firebase/firestore';
 
 export function Patients() {
   const [searchParams] = useSearchParams();
@@ -42,22 +42,31 @@ export function Patients() {
   });
 
   useEffect(() => {
-    const q = query(collection(db, 'patients'), orderBy('name', 'asc'));
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    const q = query(
+      collection(db, 'patients'), 
+      where('userId', '==', userId),
+      orderBy('name', 'asc')
+    );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setPatients(docs);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
-    const treatmentsQ = query(collection(db, 'treatments'), orderBy('name', 'asc'));
+    const treatmentsQ = query(collection(db, 'treatments'), where('userId', '==', userId));
+
     const unsubscribeTreatments = onSnapshot(treatmentsQ, (snapshot) => {
-      setTreatments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTreatments(docs.sort((a: any, b: any) => a.name.localeCompare(b.name)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
 
     return () => {
       unsubscribe();
       unsubscribeTreatments();
     };
-  }, []);
+  }, [auth.currentUser?.uid]);
 
   // Handle URL param selection
   useEffect(() => {
@@ -72,15 +81,23 @@ export function Patients() {
 
   useEffect(() => {
     if (selectedPatient && activeModal === 'history') {
+      const userId = auth.currentUser?.uid;
       // Fetch evolutions
-      const q = query(collection(db, `patients/${selectedPatient.id}/evolutions`), orderBy('date', 'desc'));
+      const q = query(
+        collection(db, `patients/${selectedPatient.id}/evolutions`), 
+        where('userId', '==', userId)
+      );
       const unsubscribeEvolutions = onSnapshot(q, (snapshot) => {
         const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setEvolutions(docs);
+        setEvolutions(docs.sort((a: any, b: any) => b.date.localeCompare(a.date)));
       }, (error) => handleFirestoreError(error, OperationType.LIST, `patients/${selectedPatient.id}/evolutions`));
 
-      // Fetch appointments to calculate KPIs
-      const appQ = query(collection(db, 'appointments'), where('patientId', '==', selectedPatient.id));
+      // Fetch appointments to calculate KPIs (only current user's)
+      const appQ = query(
+        collection(db, 'appointments'), 
+        where('patientId', '==', selectedPatient.id),
+        where('userId', '==', userId)
+      );
       const unsubscribeApps = onSnapshot(appQ, (snapshot) => {
         const apps = snapshot.docs.map(doc => doc.data());
         const finished = apps.filter(a => a.status === 'finished');
@@ -165,6 +182,7 @@ export function Patients() {
       } else {
         await addDoc(collection(db, 'patients'), {
           ...data,
+          userId: auth.currentUser?.uid,
           createdAt: serverTimestamp(),
           lastVisit: '-'
         });
@@ -188,22 +206,71 @@ export function Patients() {
   const handleAddEvolution = async () => {
     if (!selectedPatient || !evolutionData.note) return;
     try {
-      const path = `patients/${selectedPatient.id}/evolutions`;
-      await addDoc(collection(db, path), {
+      const batch = writeBatch(db);
+      const evolutionPath = `patients/${selectedPatient.id}/evolutions`;
+      
+      const newEvolutionRef = doc(collection(db, evolutionPath));
+      batch.set(newEvolutionRef, {
         ...evolutionData,
         patientId: selectedPatient.id,
+        userId: auth.currentUser?.uid,
         date: new Date().toISOString().split('T')[0],
         status: 'Completed',
         createdAt: serverTimestamp()
       });
-      setIsAddingEntry(false);
-      setEvolutionData({ ...evolutionData, note: '' });
+
+      // Deduct materials if treatment is selected
+      const treatment = treatments.find(t => t.name === evolutionData.treatment);
+      if (treatment && treatment.materials && treatment.materials.length > 0) {
+        for (const item of treatment.materials) {
+          const stockRef = doc(db, 'stocks', item.materialId);
+          batch.update(stockRef, {
+            stock: increment(-item.qty),
+            updatedAt: serverTimestamp()
+          });
+
+          // Record movement
+          const movementRef = doc(collection(db, `stocks/${item.materialId}/movements`));
+          batch.set(movementRef, {
+            type: 'out',
+            quantity: item.qty,
+            reason: `Consumido en evolución: ${evolutionData.treatment} para ${selectedPatient.name}`,
+            date: serverTimestamp(),
+            userId: auth.currentUser?.uid
+          });
+        }
+      }
       
       // Update patient's last visit
-      await updateDoc(doc(db, 'patients', selectedPatient.id), {
+      const patientRef = doc(db, 'patients', selectedPatient.id);
+      batch.set(patientRef, {
         lastVisit: new Date().toISOString().split('T')[0],
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        userId: auth.currentUser?.uid // Ensure it has a userId if it's created newly
+      }, { merge: true });
+
+      // Optional: If there's an appointment today for this patient with this treatment, mark it as finished
+      // This helps avoid double deduction if they also manually mark it in Agenda later (since it won't be a transition from non-finished to finished)
+      const todayStr = new Date().toISOString().split('T')[0];
+      const appQ = query(
+        collection(db, 'appointments'),
+        where('patientId', '==', selectedPatient.id),
+        where('date', '==', todayStr),
+        where('status', '!=', 'finished'),
+        where('userId', '==', auth.currentUser?.uid)
+      );
+      const snapshot = await getDocs(appQ);
+      snapshot.forEach(appDoc => {
+        batch.update(appDoc.ref, {
+          status: 'finished',
+          updatedAt: serverTimestamp()
+        });
       });
+
+      await batch.commit();
+
+      setIsAddingEntry(false);
+      setEvolutionData({ ...evolutionData, note: '' });
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `patients/${selectedPatient.id}/evolutions`);
     }

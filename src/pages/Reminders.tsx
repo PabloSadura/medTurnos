@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { MessageSquare, CalendarClock, History, Settings, Send, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
 import { collection, onSnapshot, query, where, orderBy, getDoc, doc } from 'firebase/firestore';
 
 export function Reminders() {
@@ -10,8 +10,11 @@ export function Reminders() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
     // Sync patients for enrichment
-    const unsubscribePatients = onSnapshot(collection(db, 'patients'), (snapshot) => {
+    const unsubscribePatients = onSnapshot(query(collection(db, 'patients'), where('userId', '==', userId)), (snapshot) => {
       const pMap: Record<string, any> = {};
       snapshot.docs.forEach(doc => {
         pMap[doc.id] = doc.data();
@@ -27,13 +30,20 @@ export function Reminders() {
 
     const q = query(
       collection(db, 'appointments'),
-      where('startTime', '>=', now),
-      where('startTime', '<=', tomorrow),
-      orderBy('startTime', 'asc')
+      where('userId', '==', userId)
     );
 
     const unsubscribeApps = onSnapshot(q, (snapshot) => {
-      setAppointments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const allApps = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const nowTs = now.getTime();
+      const tomorrowTs = tomorrow.getTime();
+      
+      const filtered = allApps.filter((app: any) => {
+        const appTs = app.startTime.seconds * 1000;
+        return appTs >= nowTs && appTs <= tomorrowTs;
+      }).sort((a: any, b: any) => a.startTime.seconds - b.startTime.seconds);
+
+      setAppointments(filtered);
       setLoading(false);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
@@ -41,7 +51,7 @@ export function Reminders() {
       unsubscribePatients();
       unsubscribeApps();
     };
-  }, []);
+  }, [auth.currentUser?.uid]);
 
   const reminders = appointments.map((app: any) => {
     const patientData = app.patientId ? patients[app.patientId] : null;

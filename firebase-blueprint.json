@@ -14,6 +14,7 @@
         "status": { "type": "string", "enum": ["pendiente", "confirmed", "in-session", "finished", "cancelled"] },
         "type": { "type": "string" },
         "attendance": { "type": "number" },
+        "userId": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -32,6 +33,7 @@
         "age": { "type": "number" },
         "status": { "type": "string", "enum": ["active", "inactive"] },
         "lastVisit": { "type": "string", "format": "date" },
+        "userId": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -48,6 +50,7 @@
         "note": { "type": "string" },
         "treatment": { "type": "string" },
         "status": { "type": "string" },
+        "userId": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["patientId", "date", "doctor", "note"]
@@ -70,6 +73,7 @@
             }
           }
         },
+        "userId": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -86,6 +90,7 @@
         "price": { "type": "number" },
         "unit": { "type": "string" },
         "status": { "type": "string", "enum": ["normal", "low", "out"] },
+        "userId": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

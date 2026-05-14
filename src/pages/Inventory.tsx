@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react';
 import { Package, Plus, Search, AlertCircle, TrendingDown, RefreshCw, BarChart3, ChevronRight, Save, History, ArrowUpRight, ArrowDownRight, Edit3 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, writeBatch } from 'firebase/firestore';
 
 export function Inventory() {
   const [inventory, setInventory] = useState<any[]>([]);
+  const [movements, setMovements] = useState<any[]>([]);
   const [activeModal, setActiveModal] = useState<'create' | 'adjust' | 'details' | null>(null);
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [isEditingStock, setIsEditingStock] = useState(false);
@@ -28,7 +29,13 @@ export function Inventory() {
   });
 
   useEffect(() => {
-    const q = query(collection(db, 'stocks'), orderBy('name', 'asc'));
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    const q = query(
+      collection(db, 'stocks'), 
+      where('userId', '==', userId)
+    );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const items = snapshot.docs.map(doc => {
         const data = doc.data();
@@ -36,12 +43,28 @@ export function Inventory() {
         if (data.stock <= 0) status = 'out';
         else if (data.stock <= data.minStock) status = 'low';
         return { id: doc.id, ...data, status };
-      });
+      }).sort((a: any, b: any) => a.name.localeCompare(b.name));
       setInventory(items);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'stocks'));
 
     return () => unsubscribe();
-  }, []);
+  }, [auth.currentUser?.uid]);
+
+  useEffect(() => {
+    if (selectedItem && activeModal === 'details') {
+      const q = query(
+        collection(db, `stocks/${selectedItem.id}/movements`),
+        where('userId', '==', auth.currentUser?.uid),
+        orderBy('date', 'desc')
+      );
+      const unsubscribeM = onSnapshot(q, (snapshot) => {
+        setMovements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      }, (error) => handleFirestoreError(error, OperationType.LIST, `stocks/${selectedItem.id}/movements`));
+      return () => unsubscribeM();
+    } else {
+      setMovements([]);
+    }
+  }, [selectedItem, activeModal]);
 
   const handleOpenModal = (type: 'create' | 'adjust' | 'details', item?: any) => {
     setSelectedItem(item || null);
@@ -70,16 +93,45 @@ export function Inventory() {
     e.preventDefault();
     try {
       if (selectedItem) {
-        await updateDoc(doc(db, 'stocks', selectedItem.id), {
+        const batch = writeBatch(db);
+        const itemRef = doc(db, 'stocks', selectedItem.id);
+        
+        batch.update(itemRef, {
           ...formData,
           updatedAt: serverTimestamp()
         });
+
+        if (formData.stock !== selectedItem.stock) {
+          const diff = formData.stock - selectedItem.stock;
+          const movementRef = doc(collection(db, `stocks/${selectedItem.id}/movements`));
+          batch.set(movementRef, {
+            type: diff > 0 ? 'in' : 'out',
+            quantity: Math.abs(diff),
+            reason: 'Corrección manual de stock',
+            date: serverTimestamp(),
+            userId: auth.currentUser?.uid
+          });
+        }
+
+        await batch.commit();
       } else {
-        await addDoc(collection(db, 'stocks'), {
+        const docRef = await addDoc(collection(db, 'stocks'), {
           ...formData,
+          userId: auth.currentUser?.uid,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
+
+        // Initial movement
+        if (formData.stock > 0) {
+          await addDoc(collection(db, `stocks/${docRef.id}/movements`), {
+            type: 'in',
+            quantity: formData.stock,
+            reason: 'Stock inicial',
+            date: serverTimestamp(),
+            userId: auth.currentUser?.uid
+          });
+        }
       }
       setActiveModal(null);
     } catch (error) {
@@ -91,16 +143,28 @@ export function Inventory() {
     e.preventDefault();
     if (!selectedItem) return;
     try {
+      const batch = writeBatch(db);
       const newStock = adjustmentData.type === 'in' 
         ? selectedItem.stock + adjustmentData.quantity 
         : selectedItem.stock - adjustmentData.quantity;
 
-      await updateDoc(doc(db, 'stocks', selectedItem.id), {
+      const stockRef = doc(db, 'stocks', selectedItem.id);
+      batch.update(stockRef, {
         stock: Math.max(0, newStock),
         updatedAt: serverTimestamp()
       });
 
-      // Optionally log movement here in a subcollection
+      // Log movement in subcollection
+      const movementRef = doc(collection(db, `stocks/${selectedItem.id}/movements`));
+      batch.set(movementRef, {
+        type: adjustmentData.type,
+        quantity: adjustmentData.quantity,
+        reason: adjustmentData.reason || (adjustmentData.type === 'in' ? 'Entrada manual' : 'Salida manual'),
+        date: serverTimestamp(),
+        userId: auth.currentUser?.uid
+      });
+      
+      await batch.commit();
       
       setActiveModal(null);
       setAdjustmentData({ type: 'in', quantity: 0, reason: '' });
@@ -111,7 +175,7 @@ export function Inventory() {
 
   const filteredInventory = inventory.filter(item => {
     const itemName = item.name || '';
-    const matchesSearch = itemName.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = itemName?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'all' || item.status === 'low' || item.status === 'out';
     return matchesSearch && matchesStatus;
   });
@@ -447,24 +511,28 @@ export function Inventory() {
                 </div>
                 
                 <div className="space-y-2">
-                  {[
-                    { date: '10 Mayo, 2024', type: 'Entrada', qty: '+5', note: 'Reposición programada' },
-                    { date: '08 Mayo, 2024', type: 'Salida', qty: '-2', note: 'Uso en Cirugía #104' },
-                    { date: '05 Mayo, 2024', type: 'Salida', qty: '-1', note: 'Uso en Consulta #92' }
-                  ].map((mov, idx) => (
+                  {movements.map((mov, idx) => (
                     <div key={idx} className="flex justify-between items-center p-3 bg-white border border-outline-variant rounded-lg group hover:border-primary/50 transition-colors">
                       <div>
-                        <p className="text-[12px] font-bold text-on-surface">{mov.note}</p>
-                        <p className="text-[10px] text-on-surface-variant">{mov.date}</p>
+                        <p className="text-[12px] font-bold text-on-surface">{mov.reason}</p>
+                        <p className="text-[10px] text-on-surface-variant">
+                          {mov.date?.toDate ? new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(mov.date.toDate()) : 'Reciente...'}
+                        </p>
                       </div>
                       <span className={cn(
                         "text-[12px] font-bold",
-                        mov.qty.startsWith('+') ? 'text-primary' : 'text-error'
+                        mov.type === 'in' ? 'text-primary' : 'text-error'
                       )}>
-                        {mov.qty}
+                        {mov.type === 'in' ? '+' : '-'}{mov.quantity}
                       </span>
                     </div>
                   ))}
+                  {movements.length === 0 && (
+                    <div className="text-center py-8 border-2 border-dashed border-outline-variant rounded-xl opacity-50">
+                      <History size={24} className="mx-auto mb-2 text-on-surface-variant" />
+                      <p className="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">Sin movimientos registrados</p>
+                    </div>
+                  )}
                 </div>
               </div>
 
