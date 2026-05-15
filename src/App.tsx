@@ -2,7 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { useEffect, useState } from 'react';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDocFromServer } from 'firebase/firestore';
+import { doc, getDocFromServer, onSnapshot } from 'firebase/firestore';
 
 import { Login } from './pages/Login';
 import { MainLayout } from './components/MainLayout';
@@ -14,6 +14,7 @@ import { Inventory } from './pages/Inventory';
 import { Reminders } from './pages/Reminders';
 import { Profile } from './pages/Profile';
 import { Administration } from './pages/Administration';
+import { ToastProvider } from './components/Toast';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -39,6 +40,34 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (!user) {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.style.removeProperty('--color-primary');
+      return;
+    }
+
+    const unsubscribe = onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        
+        // Apply Dark Mode
+        if (data.darkMode) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+
+        // Apply Primary Color
+        if (data.primaryColor) {
+          document.documentElement.style.setProperty('--color-primary', data.primaryColor);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface">
@@ -48,21 +77,23 @@ export default function App() {
   }
 
   return (
-    <Router>
-      <Routes>
-        <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
-        
-        <Route element={user ? <MainLayout /> : <Navigate to="/login" />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/agenda" element={<Agenda />} />
-          <Route path="/patients" element={<Patients />} />
-          <Route path="/treatments" element={<Treatments />} />
-          <Route path="/inventory" element={<Inventory />} />
-          <Route path="/reminders" element={<Reminders />} />
-          <Route path="/admin" element={<Administration />} />
-          <Route path="/profile" element={<Profile />} />
-        </Route>
-      </Routes>
-    </Router>
+    <ToastProvider>
+      <Router>
+        <Routes>
+          <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
+          
+          <Route element={user ? <MainLayout /> : <Navigate to="/login" />}>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/agenda" element={<Agenda />} />
+            <Route path="/patients" element={<Patients />} />
+            <Route path="/treatments" element={<Treatments />} />
+            <Route path="/inventory" element={<Inventory />} />
+            <Route path="/reminders" element={<Reminders />} />
+            <Route path="/admin" element={<Administration />} />
+            <Route path="/profile" element={<Profile />} />
+          </Route>
+        </Routes>
+      </Router>
+    </ToastProvider>
   );
 }

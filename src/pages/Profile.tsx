@@ -5,9 +5,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { doc, onSnapshot, updateDoc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { sendEmailVerification } from 'firebase/auth';
+import { useToast } from '../components/Toast';
 
 export function Profile() {
   const user = auth.currentUser;
+  const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -16,22 +18,26 @@ export function Profile() {
     if (!auth.currentUser) return;
     try {
       await sendEmailVerification(auth.currentUser);
-      alert('Email de verificación enviado. Por favor, revise su bandeja de entrada.');
+      showToast('Email de verificación enviado. Por favor, revise su bandeja de entrada.');
     } catch (error: any) {
       console.error('Error sending verification email:', error);
-      alert('Error al enviar el email de verificación. Intente nuevamente más tarde.');
+      showToast('Error al enviar el email de verificación. Intente nuevamente más tarde.', 'error');
     }
   };
 
   const [profile, setProfile] = useState({
     displayName: user?.displayName || '',
     licenseNumber: '',
+    specialty: 'Cirujano Dentista',
     phone: '',
+    photoURL: '',
     workingDays: [1, 2, 3, 4, 5], // 1=Mon, 7=Sun
     morningStart: '08:00',
     morningEnd: '12:00',
+    morningActive: true,
     afternoonStart: '14:00',
-    afternoonEnd: '18:00'
+    afternoonEnd: '18:00',
+    afternoonActive: true
   });
 
   useEffect(() => {
@@ -44,12 +50,16 @@ export function Profile() {
           ...prev,
           displayName: data.name || prev.displayName,
           licenseNumber: data.licenseNumber || '',
+          specialty: data.specialty || prev.specialty,
           phone: data.phone || '',
-          workingDays: data.workingHours?.days || [1, 2, 3, 4, 5],
-          morningStart: data.workingHours?.morningStart || '08:00',
-          morningEnd: data.workingHours?.morningEnd || '12:00',
-          afternoonStart: data.workingHours?.afternoonStart || '14:00',
-          afternoonEnd: data.workingHours?.afternoonEnd || '18:00'
+          photoURL: data.photoURL || '',
+          workingDays: data.schedule?.workingDays || [1, 2, 3, 4, 5],
+          morningStart: data.schedule?.morningStart || '08:00',
+          morningEnd: data.schedule?.morningEnd || '12:00',
+          morningActive: data.schedule?.morningActive !== false,
+          afternoonStart: data.schedule?.afternoonStart || '14:00',
+          afternoonEnd: data.schedule?.afternoonEnd || '18:00',
+          afternoonActive: data.schedule?.afternoonActive !== false
         }));
       }
       setLoading(false);
@@ -63,28 +73,51 @@ export function Profile() {
     setSaving(true);
     setSuccess(false);
     try {
-      await setDoc(doc(db, 'users', user.uid), {
+      const userData = {
         name: profile.displayName,
         email: user.email,
         licenseNumber: profile.licenseNumber,
+        specialty: profile.specialty,
         phone: profile.phone,
-        workingHours: {
-          days: profile.workingDays,
+        photoURL: profile.photoURL,
+        schedule: {
+          workingDays: profile.workingDays,
           morningStart: profile.morningStart,
           morningEnd: profile.morningEnd,
+          morningActive: profile.morningActive,
           afternoonStart: profile.afternoonStart,
-          afternoonEnd: profile.afternoonEnd
+          afternoonEnd: profile.afternoonEnd,
+          afternoonActive: profile.afternoonActive
         },
         updatedAt: serverTimestamp()
-      }, { merge: true });
+      };
+
+      await setDoc(doc(db, 'users', user.uid), userData, { merge: true });
       
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
+      showToast('Perfil actualizado correctamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
     } finally {
       setSaving(false);
     }
+  };
+
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 500 * 1024) {
+      showToast('La imagen es demasiado grande. Por favor, suba una de menos de 500KB.', 'error');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setProfile(prev => ({ ...prev, photoURL: reader.result as string }));
+    };
+    reader.readAsDataURL(file);
   };
 
   const toggleDay = (dayIndex: number) => {
@@ -142,40 +175,23 @@ export function Profile() {
         <div className="md:col-span-1 space-y-6">
           <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm text-center">
             <div className="relative inline-block mb-4 group">
-              <div className="w-24 h-24 rounded-full border-2 border-primary-container overflow-hidden bg-surface mx-auto">
-                {user?.photoURL ? (
-                  <img src={user.photoURL} alt="Profile" className="w-full h-full object-cover" />
+              <div className="w-24 h-24 rounded-full border-2 border-primary-container overflow-hidden bg-surface mx-auto flex items-center justify-center">
+                {profile.photoURL ? (
+                  <img src={profile.photoURL} alt="Profile" className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center font-bold text-2xl text-primary bg-primary-container">
-                    {user?.displayName?.charAt(0) || user?.email?.charAt(0)}
+                    {profile.displayName?.charAt(0) || user?.email?.charAt(0)}
                   </div>
                 )}
               </div>
-              <button className="absolute bottom-0 right-0 p-1.5 bg-primary text-white rounded-full border-2 border-white shadow-lg hover:bg-primary/90 transition-all">
+              <label className="absolute bottom-0 right-0 p-1.5 bg-primary text-white rounded-full border-2 border-white shadow-lg hover:bg-primary/90 transition-all cursor-pointer">
                 <Camera size={12} />
-              </button>
+                <input type="file" className="hidden" accept="image/*" onChange={handlePhotoUpload} />
+              </label>
             </div>
             <h3 className="text-[16px] font-bold text-on-surface">{profile.displayName || 'Profesional Médico'}</h3>
-            <p className="text-[11px] text-on-surface-variant mb-3 uppercase font-bold tracking-wider opacity-60">Cirujano Dentista</p>
+            <p className="text-[11px] text-on-surface-variant mb-3 uppercase font-bold tracking-wider opacity-60">{profile.specialty}</p>
             <span className="text-[9px] font-black px-2 py-0.5 bg-tertiary-container text-on-tertiary-container rounded-full uppercase tracking-tighter">Sesión Activa</span>
-          </div>
-
-          <div className="bg-white p-4 rounded-xl border border-outline-variant shadow-sm">
-            <h4 className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant mb-4 opacity-60">Estadísticas Rápidas</h4>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center text-[11px]">
-                <span className="font-medium text-on-surface-variant">Pacientes Totales</span>
-                <span className="font-bold text-on-surface">1,248</span>
-              </div>
-              <div className="flex justify-between items-center text-[11px]">
-                <span className="font-medium text-on-surface-variant">Tratamientos Activos</span>
-                <span className="font-bold text-on-surface">12</span>
-              </div>
-              <div className="flex justify-between items-center text-[11px]">
-                <span className="font-medium text-on-surface-variant">Score de Perfil</span>
-                <span className="font-bold text-primary">98/100</span>
-              </div>
-            </div>
           </div>
         </div>
 
@@ -186,12 +202,21 @@ export function Profile() {
               Información General
             </h3>
             <div className="grid grid-cols-2 gap-4">
-              <div className="col-span-2 space-y-1.5">
+              <div className="space-y-1.5">
                 <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Nombre de Usuario</label>
                 <input 
                   type="text" 
                   value={profile.displayName}
                   onChange={(e) => setProfile({ ...profile, displayName: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" 
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Especialidad</label>
+                <input 
+                  type="text" 
+                  value={profile.specialty}
+                  onChange={(e) => setProfile({ ...profile, specialty: e.target.value })}
                   className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" 
                 />
               </div>
@@ -248,11 +273,22 @@ export function Profile() {
                 ))}
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-6">
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Mañana</label>
-                    <div className="flex items-center gap-2">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Mañana</label>
+                      <button 
+                        onClick={() => setProfile({ ...profile, morningActive: !profile.morningActive })}
+                        className={cn(
+                          "text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-colors",
+                          profile.morningActive ? "bg-primary/10 text-primary" : "bg-error-container/20 text-error"
+                        )}
+                      >
+                        {profile.morningActive ? 'Activo' : 'Anulado'}
+                      </button>
+                    </div>
+                    <div className={cn("flex items-center gap-2 transition-opacity", !profile.morningActive && "opacity-30 pointer-events-none")}>
                       <input 
                         type="time" 
                         value={profile.morningStart}
@@ -268,9 +304,20 @@ export function Profile() {
                       />
                     </div>
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Tarde</label>
-                    <div className="flex items-center gap-2">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Tarde</label>
+                      <button 
+                        onClick={() => setProfile({ ...profile, afternoonActive: !profile.afternoonActive })}
+                        className={cn(
+                          "text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-colors",
+                          profile.afternoonActive ? "bg-primary/10 text-primary" : "bg-error-container/20 text-error"
+                        )}
+                      >
+                        {profile.afternoonActive ? 'Activo' : 'Anulado'}
+                      </button>
+                    </div>
+                    <div className={cn("flex items-center gap-2 transition-opacity", !profile.afternoonActive && "opacity-30 pointer-events-none")}>
                       <input 
                         type="time" 
                         value={profile.afternoonStart}

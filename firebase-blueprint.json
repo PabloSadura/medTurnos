@@ -106,18 +106,75 @@
         "specialty": { "type": "string" },
         "phone": { "type": "string" },
         "address": { "type": "string" },
+        "primaryColor": { "type": "string" },
+        "darkMode": { "type": "boolean" },
+        "photoURL": { "type": "string" },
         "schedule": {
           "type": "object",
           "properties": {
             "morningStart": { "type": "string" },
             "morningEnd": { "type": "string" },
+            "morningActive": { "type": "boolean" },
             "afternoonStart": { "type": "string" },
             "afternoonEnd": { "type": "string" },
+            "afternoonActive": { "type": "boolean" },
             "workingDays": { "type": "array", "items": { "type": "number" } }
           }
         }
       },
       "required": ["email", "name"]
+    },
+    "ReminderSettings": {
+      "title": "Reminder Settings",
+      "description": "WhatsApp reminder message templates and bot configurations",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "template": { "type": "string" },
+        "botEnabled": { "type": "boolean" },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": { "type": "string" },
+              "active": { "type": "boolean" }
+            }
+          }
+        },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "template"]
+    },
+    "Staff": {
+      "title": "Staff",
+      "description": "Secretary or administrative staff registered by the professional",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["Professional", "Secretary", "Admin"] },
+        "permissions": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["Activo", "Inactivo"] },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "role", "status", "userId"]
+    },
+    "WhatsAppLog": {
+      "title": "WhatsApp Log",
+      "description": "Log of messages sent via WhatsApp",
+      "type": "object",
+      "properties": {
+        "to": { "type": "string" },
+        "patientName": { "type": "string" },
+        "message": { "type": "string" },
+        "status": { "type": "string", "enum": ["success", "error"] },
+        "error": { "type": "string" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["to", "message", "status", "userId", "createdAt"]
     }
   },
   "firestore": {
@@ -141,9 +198,25 @@
       "schema": "InventoryItem",
       "description": "Clinic stocks catalog"
     },
+    "/users": {
+      "schema": "UserProfile",
+      "description": "Main professional user data and account settings"
+    },
     "/profiles": {
       "schema": "UserProfile",
       "description": "User specific settings and profiles"
+    },
+    "/reminder_settings": {
+      "schema": "ReminderSettings",
+      "description": "User settings for WhatsApp reminders"
+    },
+    "/staff": {
+      "schema": "Staff",
+      "description": "Staff members associated with the professional"
+    },
+    "/whatsapp_logs": {
+      "schema": "WhatsAppLog",
+      "description": "History of WhatsApp reminders sent"
     }
   }
 }

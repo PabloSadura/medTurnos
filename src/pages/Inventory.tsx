@@ -4,8 +4,10 @@ import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, writeBatch } from 'firebase/firestore';
+import { useToast } from '../components/Toast';
 
 export function Inventory() {
+  const { showToast } = useToast();
   const [inventory, setInventory] = useState<any[]>([]);
   const [movements, setMovements] = useState<any[]>([]);
   const [activeModal, setActiveModal] = useState<'create' | 'adjust' | 'details' | null>(null);
@@ -134,6 +136,7 @@ export function Inventory() {
         }
       }
       setActiveModal(null);
+      showToast(selectedItem ? 'Ítem actualizado exitosamente' : 'Ítem creado exitosamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'stocks');
     }
@@ -168,6 +171,7 @@ export function Inventory() {
       
       setActiveModal(null);
       setAdjustmentData({ type: 'in', quantity: 0, reason: '' });
+      showToast('Stock ajustado correctamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `stocks/${selectedItem.id}`);
     }

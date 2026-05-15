@@ -45,6 +45,24 @@
   --radius-xl: 1rem;
 }
 
+@variant dark (&:where(.dark, .dark *));
+
+.dark {
+  --color-surface: #0f172a;
+  --color-surface-dim: #1e293b;
+  --color-surface-bright: #1e293b;
+  --color-surface-container-lowest: #020617;
+  --color-surface-container-low: #0f172a;
+  --color-surface-container: #1e293b;
+  --color-surface-container-high: #334155;
+  --color-surface-container-highest: #475569;
+  --color-on-surface: #f8fafc;
+  --color-on-surface-variant: #94a3b8;
+  --color-outline: #334155;
+  --color-outline-variant: #1e293b;
+  --color-background: #020617;
+}
+
 @layer base {
   body {
     @apply bg-surface text-on-surface font-sans antialiased;

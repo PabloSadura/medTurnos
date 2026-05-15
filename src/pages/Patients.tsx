@@ -6,8 +6,10 @@ import { motion } from 'motion/react';
 import { Modal } from '../components/Modal';
 import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, where, writeBatch, increment, getDocs } from 'firebase/firestore';
+import { useToast } from '../components/Toast';
 
 export function Patients() {
+  const { showToast } = useToast();
   const [searchParams] = useSearchParams();
   const [patients, setPatients] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -186,6 +188,7 @@ export function Patients() {
         });
       }
       setActiveModal(null);
+      showToast(selectedPatient ? 'Paciente actualizado exitosamente' : 'Paciente registrado exitosamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'patients');
     }
@@ -196,6 +199,7 @@ export function Patients() {
     try {
       await deleteDoc(doc(db, 'patients', selectedPatient.id));
       setActiveModal(null);
+      showToast('Paciente eliminado exitosamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `patients/${selectedPatient.id}`);
     }
@@ -269,6 +273,7 @@ export function Patients() {
 
       setIsAddingEntry(false);
       setEvolutionData({ ...evolutionData, note: '' });
+      showToast('Entrada de historial añadida correctamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `patients/${selectedPatient.id}/evolutions`);
     }

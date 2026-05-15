@@ -5,8 +5,10 @@ import { Modal } from '../components/Modal';
 import { motion } from 'motion/react';
 import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, orderBy, where } from 'firebase/firestore';
+import { useToast } from '../components/Toast';
 
 export function Treatments() {
+  const { showToast } = useToast();
   const [treatments, setTreatments] = useState<any[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -93,6 +95,7 @@ export function Treatments() {
         });
       }
       setActiveModal(null);
+      showToast(selectedTreatment ? 'Tratamiento actualizado exitosamente' : 'Tratamiento guardado exitosamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'treatments');
     }
@@ -103,6 +106,7 @@ export function Treatments() {
     try {
       await deleteDoc(doc(db, 'treatments', selectedTreatment.id));
       setActiveModal(null);
+      showToast('Tratamiento eliminado exitosamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `treatments/${selectedTreatment.id}`);
     }

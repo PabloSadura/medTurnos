@@ -5,21 +5,33 @@ import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
-import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch } from 'firebase/firestore';
+import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch, getDoc } from 'firebase/firestore';
+import { useToast } from '../components/Toast';
 
 const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
 export function Agenda() {
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(new Date());
   const [appointments, setAppointments] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
   const [treatments, setTreatments] = useState<any[]>([]);
   const [view, setView] = useState<'day' | 'week' | 'month'>('month');
+  const [workingHours, setWorkingHours] = useState<any>(null);
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
 
   useEffect(() => {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    // Fetch Working Hours
+    getDoc(doc(db, 'users', userId)).then(docSnap => {
+      if (docSnap.exists() && docSnap.data().schedule) {
+        setWorkingHours(docSnap.data().schedule);
+      }
+    });
     if (!isNewAppointmentOpen) {
       setIsCreatingNewPatient(false);
       setNewPatientData({ name: '', phone: '', idNumber: '', birthDate: '' });
@@ -167,10 +179,35 @@ export function Agenda() {
       const snapshot = await getDocs(q);
       const attendanceCount = snapshot.size + 1;
 
-      // Standardize date and time for startTime
       const [year, month, day] = newApt.date.split('-').map(Number);
       const [hours, minutes] = newApt.time.split(':').map(Number);
       const appointmentDate = new Date(year, month - 1, day, hours, minutes);
+
+      // Validate working hours
+      if (workingHours) {
+        const standardDay = appointmentDate.getDay(); // 0 is Sun, 1 is Mon...
+        const mappedDay = standardDay === 0 ? 7 : standardDay; // 1-7
+        
+        const workingDays = workingHours.workingDays || workingHours.days || [];
+        if (!workingDays.includes(mappedDay)) {
+          showToast('El profesional no atiende los días ' + days[mappedDay - 1] + '.', 'error');
+          return;
+        }
+
+        const timeString = newApt.time; // "HH:mm"
+        const isMorning = workingHours.morningActive !== false && timeString >= workingHours.morningStart && timeString <= workingHours.morningEnd;
+        const isAfternoon = workingHours.afternoonActive !== false && timeString >= workingHours.afternoonStart && timeString <= workingHours.afternoonEnd;
+
+        if (!isMorning && !isAfternoon) {
+          let errorMsg = `La hora seleccionada (${timeString}) no coincide con los horarios de atención activos:`;
+          if (workingHours.morningActive !== false) errorMsg += `\nMañana: ${workingHours.morningStart} - ${workingHours.morningEnd}`;
+          if (workingHours.afternoonActive !== false) errorMsg += `\nTarde: ${workingHours.afternoonStart} - ${workingHours.afternoonEnd}`;
+          if (workingHours.morningActive === false && workingHours.afternoonActive === false) errorMsg = "El profesional no tiene turnos activos configurados.";
+          
+          showToast(errorMsg, 'error');
+          return;
+        }
+      }
 
       await addDoc(collection(db, 'appointments'), {
         ...newApt,
@@ -190,6 +227,7 @@ export function Agenda() {
       setNewPatientData({ name: '', phone: '', idNumber: '', birthDate: '' });
       setNewApt({ ...newApt, patientId: '', patientName: '', notes: '' });
       setSearchTerm('');
+      showToast('Turno agendado correctamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'appointments');
     }
@@ -239,6 +277,7 @@ export function Agenda() {
 
       await batch.commit();
       setIsDetailModalOpen(false);
+      showToast('Estado actualizado correctamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `appointments/${selectedAppointment.id}`);
     }
@@ -300,7 +339,20 @@ export function Agenda() {
            date.getFullYear() === selectedDate.getFullYear();
   };
 
-  const hours = Array.from({ length: 14 }, (_, i) => i + 8); // 8:00 to 21:00
+  const getHours = () => {
+    if (!workingHours) return Array.from({ length: 14 }, (_, i) => i + 8);
+    
+    const mStart = parseInt(workingHours.morningStart.split(':')[0]);
+    const aEnd = parseInt(workingHours.afternoonEnd.split(':')[0]);
+    
+    const start = Math.max(0, mStart - 1);
+    const end = Math.min(23, aEnd + 1);
+    
+    return Array.from({ length: end - start + 1 }, (_, i) => i + start);
+  };
+
+  const hours = getHours();
+  const startHour = hours[0];
 
   const getWeekDays = () => {
     const current = new Date(selectedDate);
@@ -440,12 +492,13 @@ export function Agenda() {
                         setSelectedDate(item.date);
                         if (item.month !== 'current') setViewDate(item.date);
                       }}
-                      className={cn(
-                        "flex flex-col items-start p-3 border-b border-r border-outline-variant last:border-r-0 transition-all group relative min-h-[100px]",
-                        item.month === 'current' ? "bg-white" : "bg-surface-dim opacity-40",
-                        isSelected(item.date) && "bg-primary-container ring-1 ring-inset ring-primary z-10",
-                        !isSelected(item.date) && "hover:bg-surface"
-                      )}
+                        className={cn(
+                          "flex flex-col items-start p-3 border-b border-r border-outline-variant last:border-r-0 transition-all group relative min-h-[100px]",
+                          item.month === 'current' ? "bg-white" : "bg-surface-dim opacity-40",
+                          workingHours && item.month === 'current' && !(workingHours.workingDays || workingHours.days || []).includes(item.date.getDay() === 0 ? 7 : item.date.getDay()) && "bg-surface-bright opacity-60 grayscale-[0.5]",
+                          isSelected(item.date) && "bg-primary-container ring-1 ring-inset ring-primary z-10",
+                          !isSelected(item.date) && "hover:bg-surface"
+                        )}
                     >
                       <span className={cn(
                         "w-8 h-8 flex items-center justify-center rounded-full text-[13px] font-bold transition-all mb-2",
@@ -518,7 +571,7 @@ export function Agenda() {
                           .filter(a => a.date === formatLocalDate(dayDate))
                           .map((apt) => {
                             const [h, m] = apt.time.split(':').map(Number);
-                            if (h < 8 || h >= 22) return null;
+                            if (h < startHour || h > hours[hours.length - 1]) return null;
                             return (
                               <div
                                 key={apt.id}
@@ -532,7 +585,7 @@ export function Agenda() {
                                   "bg-surface border-outline-variant text-on-surface-variant opacity-80"
                                 )}
                                 style={{
-                                  top: `${((h - 8) * 60 + m)}px`,
+                                  top: `${((h - startHour) * 60 + m)}px`,
                                   height: `${(apt.duration || 30) - 2}px`
                                 }}
                               >
@@ -564,7 +617,7 @@ export function Agenda() {
                   ))}
                   {selectedDateAppointments.map((apt) => {
                     const [h, m] = apt.time.split(':').map(Number);
-                    if (h < 8 || h >= 22) return null;
+                    if (h < startHour || h > hours[hours.length - 1]) return null;
                     return (
                       <motion.div
                         key={apt.id}
@@ -580,7 +633,7 @@ export function Agenda() {
                           "bg-surface border-outline-variant text-on-surface-variant opacity-80"
                         )}
                         style={{
-                          top: `${((h - 8) * 100 + (m / 60) * 100)}px`,
+                          top: `${((h - startHour) * 100 + (m / 60) * 100)}px`,
                           height: `${((apt.duration || 30) / 60) * 100 - 4}px`
                         }}
                       >
@@ -803,20 +856,45 @@ export function Agenda() {
               <input 
                 type="date" 
                 required
-                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]"
+                className={cn(
+                  "w-full px-3 py-2 bg-surface border rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]",
+                  workingHours && newApt.date && !(workingHours.workingDays || workingHours.days || []).includes(new Date(newApt.date + 'T00:00:00').getDay() === 0 ? 7 : new Date(newApt.date + 'T00:00:00').getDay()) 
+                    ? "border-error focus:ring-error/20" 
+                    : "border-outline-variant"
+                )}
                 value={newApt.date}
                 onChange={(e) => setNewApt({ ...newApt, date: e.target.value })}
               />
+              {workingHours && newApt.date && !(workingHours.workingDays || workingHours.days || []).includes(new Date(newApt.date + 'T00:00:00').getDay() === 0 ? 7 : new Date(newApt.date + 'T00:00:00').getDay()) && (
+                <p className="text-[9px] text-error font-bold flex items-center gap-1">
+                  <AlertTriangle size={10} /> No laborable
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Hora</label>
               <input 
                 type="time" 
                 required
-                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]"
+                className={cn(
+                  "w-full px-3 py-2 bg-surface border rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]",
+                  workingHours && newApt.time && !(
+                    (workingHours.morningActive !== false && newApt.time >= workingHours.morningStart && newApt.time <= workingHours.morningEnd) ||
+                    (workingHours.afternoonActive !== false && newApt.time >= workingHours.afternoonStart && newApt.time <= workingHours.afternoonEnd)
+                  )
+                    ? "border-error focus:ring-error/20" 
+                    : "border-outline-variant"
+                )}
                 value={newApt.time}
                 onChange={(e) => setNewApt({ ...newApt, time: e.target.value })}
               />
+              {workingHours && (
+                <div className="text-[8px] text-on-surface-variant flex flex-col gap-0.5 mt-1 opacity-70">
+                  {workingHours.morningActive !== false && <span className="flex items-center gap-1"><Clock size={8} /> Mañana: {workingHours.morningStart} - {workingHours.morningEnd}</span>}
+                  {workingHours.afternoonActive !== false && <span className="flex items-center gap-1"><Clock size={8} /> Tarde: {workingHours.afternoonStart} - {workingHours.afternoonEnd}</span>}
+                  {workingHours.morningActive === false && workingHours.afternoonActive === false && <span className="text-error">Sin turnos activos</span>}
+                </div>
+              )}
             </div>
           </div>
 

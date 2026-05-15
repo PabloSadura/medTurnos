@@ -2,5 +2,5 @@
   "name": "MedTurnos",
   "description": "Healthcare Management System for medical professionals, clinics, and patient records.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
