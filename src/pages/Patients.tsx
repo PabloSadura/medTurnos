@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save, TrendingUp } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, calculateAge } from '../lib/utils';
 import { motion } from 'motion/react';
 import { Modal } from '../components/Modal';
 import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
@@ -31,7 +31,7 @@ export function Patients() {
     phone: '',
     email: '',
     gender: 'Male',
-    age: '',
+    birthDate: '',
     status: 'active'
   });
 
@@ -47,12 +47,11 @@ export function Patients() {
 
     const q = query(
       collection(db, 'patients'), 
-      where('userId', '==', userId),
-      orderBy('name', 'asc')
+      where('userId', '==', userId)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPatients(docs);
+      setPatients(docs.sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
     const treatmentsQ = query(collection(db, 'treatments'), where('userId', '==', userId));
@@ -149,7 +148,7 @@ export function Patients() {
         phone: patient.phone || '',
         email: patient.email || '',
         gender: patient.gender || 'Male',
-        age: patient.age || '',
+        birthDate: patient.birthDate || '',
         status: patient.status || 'active'
       });
     } else {
@@ -159,7 +158,7 @@ export function Patients() {
         phone: '',
         email: '',
         gender: 'Male',
-        age: '',
+        birthDate: '',
         status: 'active'
       });
     }
@@ -173,7 +172,6 @@ export function Patients() {
     try {
       const data = {
         ...formData,
-        age: Number(formData.age),
         updatedAt: serverTimestamp()
       };
 
@@ -234,7 +232,7 @@ export function Patients() {
           batch.set(movementRef, {
             type: 'out',
             quantity: item.qty,
-            reason: `Consumido en evolución: ${evolutionData.treatment} para ${selectedPatient.name}`,
+            reason: `Consumido en evolución: ${evolutionData.treatment} para ${currentPatient.name}`,
             date: serverTimestamp(),
             userId: auth.currentUser?.uid
           });
@@ -282,6 +280,8 @@ export function Patients() {
     const phoneMatch = p.phone?.toLowerCase().includes(searchTerm.toLowerCase()) || false;
     return nameMatch || idMatch || phoneMatch;
   });
+
+  const currentPatient = patients.find(p => p.id === selectedPatient?.id) || selectedPatient;
 
   return (
     <div className="space-y-6">
@@ -351,7 +351,7 @@ export function Patients() {
                       </div>
                       <div className="min-w-0">
                         <p className="text-[13px] font-bold text-on-surface truncate">{patient.name}</p>
-                        <p className="text-[11px] text-on-surface-variant">{patient.gender}, {patient.age} años</p>
+                        <p className="text-[11px] text-on-surface-variant">{patient.gender}, {calculateAge(patient.birthDate)} años</p>
                       </div>
                     </div>
                   </td>
@@ -493,11 +493,11 @@ export function Patients() {
               </select>
             </div>
             <div className="space-y-2">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Edad</label>
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Fecha de Nacimiento</label>
               <input 
-                type="number" 
-                value={formData.age}
-                onChange={(e) => setFormData({ ...formData, age: e.target.value })}
+                type="date" 
+                value={formData.birthDate}
+                onChange={(e) => setFormData({ ...formData, birthDate: e.target.value })}
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
               />
             </div>
@@ -533,7 +533,7 @@ export function Patients() {
           <div className="w-16 h-16 bg-error-container text-error rounded-full flex items-center justify-center mx-auto">
             <AlertTriangle size={32} />
           </div>
-          <p className="text-on-surface">¿Está seguro de que desea eliminar al paciente <b>{selectedPatient?.name}</b>? Esta acción no se puede deshacer.</p>
+          <p className="text-on-surface">¿Está seguro de que desea eliminar al paciente <b>{currentPatient?.name}</b>? Esta acción no se puede deshacer.</p>
           <div className="flex gap-3 pt-2">
             <button onClick={() => setActiveModal(null)} className="flex-1 px-4 py-2 bg-surface border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-outline-variant transition-colors uppercase tracking-widest">Cancelar</button>
             <button onClick={handleDeletePatient} className="flex-1 px-4 py-2 bg-error text-white rounded-lg text-[12px] font-bold hover:bg-error/90 transition-colors uppercase tracking-widest">Eliminar</button>
@@ -544,24 +544,24 @@ export function Patients() {
       <Modal
         isOpen={activeModal === 'history'}
         onClose={() => setActiveModal(null)}
-        title={`Detalles del Paciente: ${selectedPatient?.name}`}
+        title={`Detalles del Paciente: ${currentPatient?.name}`}
         className="max-w-2xl"
       >
         <div className="space-y-6">
           <div className="flex items-center gap-4 p-4 bg-surface-bright rounded-xl border border-outline-variant">
             <div className="w-12 h-12 rounded-full bg-primary-container text-primary flex items-center justify-center text-lg font-bold">
-              {selectedPatient?.name.charAt(0)}
+              {currentPatient?.name.charAt(0)}
             </div>
             <div className="flex-1">
-              <h4 className="text-sm font-bold text-on-surface">{selectedPatient?.name}</h4>
-              <p className="text-[11px] text-on-surface-variant tracking-wide uppercase font-bold">{selectedPatient?.idNumber} • {selectedPatient?.gender} • {selectedPatient?.age} años</p>
+              <h4 className="text-sm font-bold text-on-surface">{currentPatient?.name}</h4>
+              <p className="text-[11px] text-on-surface-variant tracking-wide uppercase font-bold">{currentPatient?.idNumber} • {currentPatient?.gender} • {calculateAge(currentPatient?.birthDate)} años</p>
             </div>
             <div className="text-right">
               <span className={cn(
                 "px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider",
-                selectedPatient?.status === 'active' ? "bg-tertiary-container text-on-tertiary-container" : "bg-surface-dim text-on-surface-variant"
+                currentPatient?.status === 'active' ? "bg-tertiary-container text-on-tertiary-container" : "bg-surface-dim text-on-surface-variant"
               )}>
-                {selectedPatient?.status === 'active' ? 'ACTIVO' : 'INACTIVO'}
+                {currentPatient?.status === 'active' ? 'ACTIVO' : 'INACTIVO'}
               </span>
             </div>
           </div>

@@ -22,7 +22,7 @@ export function Agenda() {
   useEffect(() => {
     if (!isNewAppointmentOpen) {
       setIsCreatingNewPatient(false);
-      setNewPatientData({ name: '', phone: '', idNumber: '' });
+      setNewPatientData({ name: '', phone: '', idNumber: '', birthDate: '' });
       setSearchTerm('');
     }
   }, [isNewAppointmentOpen]);
@@ -36,7 +36,8 @@ export function Agenda() {
   const [newPatientData, setNewPatientData] = useState({
     name: '',
     phone: '',
-    idNumber: ''
+    idNumber: '',
+    birthDate: ''
   });
   
   const formatLocalDate = (date: Date) => {
@@ -144,6 +145,7 @@ export function Agenda() {
           name: newPatientData.name,
           phone: newPatientData.phone,
           idNumber: newPatientData.idNumber,
+          birthDate: newPatientData.birthDate || '',
           userId: auth.currentUser?.uid,
           status: 'active',
           lastVisit: '-',
@@ -185,7 +187,7 @@ export function Agenda() {
 
       setIsNewAppointmentOpen(false);
       setIsCreatingNewPatient(false);
-      setNewPatientData({ name: '', phone: '', idNumber: '' });
+      setNewPatientData({ name: '', phone: '', idNumber: '', birthDate: '' });
       setNewApt({ ...newApt, patientId: '', patientName: '', notes: '' });
       setSearchTerm('');
     } catch (error) {
@@ -707,6 +709,15 @@ export function Agenda() {
                     placeholder="DNI/ID"
                     value={newPatientData.idNumber}
                     onChange={(e) => setNewPatientData({ ...newPatientData, idNumber: e.target.value })}
+                    className="w-full px-3 py-1.5 bg-white border border-outline-variant rounded text-[13px] outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-on-surface-variant uppercase ml-1">Fecha Nacimiento</label>
+                  <input 
+                    type="date" 
+                    value={newPatientData.birthDate}
+                    onChange={(e) => setNewPatientData({ ...newPatientData, birthDate: e.target.value })}
                     className="w-full px-3 py-1.5 bg-white border border-outline-variant rounded text-[13px] outline-none focus:ring-1 focus:ring-primary"
                   />
                 </div>
