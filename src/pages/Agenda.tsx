@@ -252,14 +252,17 @@ export function Agenda() {
   const getCalendarDays = () => {
     const year = viewDate.getFullYear();
     const month = viewDate.getMonth();
-    const firstDay = new Date(year, month, 1).getDay();
+    const firstDay = new Date(year, month, 1).getDay(); // 0 is Sunday
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     
     const days = [];
     const prevMonthDays = new Date(year, month, 0).getDate();
     
+    // Shift firstDay to start from Monday (0: Lun, 1: Mar, ..., 6: Dom)
+    const buffer = firstDay === 0 ? 6 : firstDay - 1;
+    
     // Previous month buffering
-    for (let i = firstDay - 1; i >= 0; i--) {
+    for (let i = buffer - 1; i >= 0; i--) {
       days.push({ day: prevMonthDays - i, month: 'prev', date: new Date(year, month - 1, prevMonthDays - i) });
     }
     
