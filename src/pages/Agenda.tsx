@@ -4,15 +4,17 @@ import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVer
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
-import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch, getDoc } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
 
 const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
 export function Agenda() {
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { ownerId } = useAuth();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(new Date());
   const [appointments, setAppointments] = useState<any[]>([]);
@@ -23,11 +25,10 @@ export function Agenda() {
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
 
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     // Fetch Working Hours
-    getDoc(doc(db, 'users', userId)).then(docSnap => {
+    getDoc(doc(db, 'users', ownerId)).then(docSnap => {
       if (docSnap.exists() && docSnap.data().schedule) {
         setWorkingHours(docSnap.data().schedule);
       }
@@ -69,12 +70,12 @@ export function Agenda() {
   });
 
   useEffect(() => {
-    if (newApt.patientId && !isCreatingNewPatient) {
-      // Fetch stats for this specific patient (only current user's)
+    if (newApt.patientId && !isCreatingNewPatient && ownerId) {
+      // Fetch stats for this specific patient (only owner's)
       const appQ = query(
         collection(db, 'appointments'), 
         where('patientId', '==', newApt.patientId),
-        where('userId', '==', auth.currentUser?.uid)
+        where('userId', '==', ownerId)
       );
       getDocs(appQ).then(snapshot => {
         const apps = snapshot.docs.map(doc => doc.data());
@@ -93,13 +94,12 @@ export function Agenda() {
   }, [newApt.patientId, isCreatingNewPatient]);
 
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     // Only subscribe to appointments for the current month and the selected date's surrounding
     const q = query(
       collection(db, 'appointments'),
-      where('userId', '==', userId)
+      where('userId', '==', ownerId)
     );
     
     // Using a broader query for the month view but real-time
@@ -119,14 +119,14 @@ export function Agenda() {
 
     const treatmentsQ = query(
       collection(db, 'treatments'), 
-      where('userId', '==', userId)
+      where('userId', '==', ownerId)
     );
     const unsubscribeTreatments = onSnapshot(treatmentsQ, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setTreatments(docs.sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
 
-    const patientsQ = query(collection(db, 'patients'), where('userId', '==', userId));
+    const patientsQ = query(collection(db, 'patients'), where('userId', '==', ownerId));
     const unsubscribePatients = onSnapshot(patientsQ, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setPatients(docs.sort((a: any, b: any) => a.name.localeCompare(b.name)));
@@ -137,7 +137,7 @@ export function Agenda() {
       unsubscribeTreatments();
       unsubscribePatients();
     };
-  }, [auth.currentUser?.uid]);
+  }, [ownerId]);
 
   // Removed redundant fetchPatients as it's now real-time in the main useEffect
 
@@ -158,7 +158,7 @@ export function Agenda() {
           phone: newPatientData.phone,
           idNumber: newPatientData.idNumber,
           birthDate: newPatientData.birthDate || '',
-          userId: auth.currentUser?.uid,
+          userId: ownerId,
           status: 'active',
           lastVisit: '-',
           createdAt: serverTimestamp()
@@ -174,7 +174,7 @@ export function Agenda() {
       const q = query(
         collection(db, 'appointments'), 
         where('patientId', '==', patientId),
-        where('userId', '==', auth.currentUser?.uid)
+        where('userId', '==', ownerId)
       );
       const snapshot = await getDocs(q);
       const attendanceCount = snapshot.size + 1;
@@ -213,7 +213,7 @@ export function Agenda() {
         ...newApt,
         patientId,
         patientName,
-        userId: auth.currentUser?.uid,
+        userId: ownerId,
         status: 'pendiente',
         duration: 30, // Default duration
         attendance: attendanceCount,
@@ -256,7 +256,7 @@ export function Agenda() {
               quantity: item.qty,
               reason: `Consumido en: ${selectedAppointment.type} para ${selectedAppointment.patientName}`,
               date: serverTimestamp(),
-              userId: auth.currentUser?.uid
+              userId: ownerId
             });
           }
         }
@@ -266,7 +266,7 @@ export function Agenda() {
         batch.set(patientRef, {
           lastVisit: selectedAppointment.date,
           updatedAt: serverTimestamp(),
-          userId: auth.currentUser?.uid // Ensure it has a userId if it's created newly
+          userId: ownerId // Ensure it has a userId if it's created newly
         }, { merge: true });
       }
 

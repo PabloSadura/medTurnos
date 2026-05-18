@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react';
 import { Package, Plus, Search, AlertCircle, TrendingDown, RefreshCw, BarChart3, ChevronRight, Save, History, ArrowUpRight, ArrowDownRight, Edit3 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
-import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, writeBatch } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Inventory() {
   const { showToast } = useToast();
+  const { ownerId } = useAuth();
   const [inventory, setInventory] = useState<any[]>([]);
   const [movements, setMovements] = useState<any[]>([]);
   const [activeModal, setActiveModal] = useState<'create' | 'adjust' | 'details' | null>(null);
@@ -31,12 +33,11 @@ export function Inventory() {
   });
 
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     const q = query(
       collection(db, 'stocks'), 
-      where('userId', '==', userId)
+      where('userId', '==', ownerId)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const items = snapshot.docs.map(doc => {
@@ -50,13 +51,13 @@ export function Inventory() {
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'stocks'));
 
     return () => unsubscribe();
-  }, [auth.currentUser?.uid]);
+  }, [ownerId]);
 
   useEffect(() => {
-    if (selectedItem && activeModal === 'details') {
+    if (selectedItem && activeModal === 'details' && ownerId) {
       const q = query(
         collection(db, `stocks/${selectedItem.id}/movements`),
-        where('userId', '==', auth.currentUser?.uid),
+        where('userId', '==', ownerId),
         orderBy('date', 'desc')
       );
       const unsubscribeM = onSnapshot(q, (snapshot) => {
@@ -111,7 +112,7 @@ export function Inventory() {
             quantity: Math.abs(diff),
             reason: 'Corrección manual de stock',
             date: serverTimestamp(),
-            userId: auth.currentUser?.uid
+            userId: ownerId
           });
         }
 
@@ -119,7 +120,7 @@ export function Inventory() {
       } else {
         const docRef = await addDoc(collection(db, 'stocks'), {
           ...formData,
-          userId: auth.currentUser?.uid,
+          userId: ownerId,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
@@ -131,7 +132,7 @@ export function Inventory() {
             quantity: formData.stock,
             reason: 'Stock inicial',
             date: serverTimestamp(),
-            userId: auth.currentUser?.uid
+            userId: ownerId
           });
         }
       }
@@ -164,7 +165,7 @@ export function Inventory() {
         quantity: adjustmentData.quantity,
         reason: adjustmentData.reason || (adjustmentData.type === 'in' ? 'Entrada manual' : 'Salida manual'),
         date: serverTimestamp(),
-        userId: auth.currentUser?.uid
+        userId: ownerId
       });
       
       await batch.commit();

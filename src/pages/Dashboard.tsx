@@ -3,10 +3,12 @@ import { TrendingUp, Users, CalendarCheck, CreditCard, ArrowUpRight, ArrowDownRi
 import { motion } from 'motion/react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { cn } from '../lib/utils';
-import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Dashboard() {
+  const { ownerId } = useAuth();
   const [revenueMode, setRevenueMode] = useState<'daily' | 'monthly'>('daily');
   const [activityMode, setActivityMode] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [chartMode, setChartMode] = useState<'weekly' | 'monthly'>('weekly');
@@ -24,14 +26,13 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
-    const unsubscribeTreatments = onSnapshot(query(collection(db, 'treatments'), where('userId', '==', userId)), (snapshot) => {
+    const unsubscribeTreatments = onSnapshot(query(collection(db, 'treatments'), where('userId', '==', ownerId)), (snapshot) => {
       setTreatments(snapshot.docs.map(doc => doc.data()));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
 
-    const unsubscribePatients = onSnapshot(query(collection(db, 'patients'), where('userId', '==', userId)), (snapshot) => {
+    const unsubscribePatients = onSnapshot(query(collection(db, 'patients'), where('userId', '==', ownerId)), (snapshot) => {
       const count = snapshot.size;
       setStats(prev => prev.map(s => s.id === 'patients' ? { ...s, value: count.toString() } : s));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
@@ -43,7 +44,7 @@ export function Dashboard() {
 
     const qRevenue = query(
       collection(db, 'appointments'), 
-      where('userId', '==', userId)
+      where('userId', '==', ownerId)
     );
     
     const unsubscribeRevenue = onSnapshot(qRevenue, (snapshot) => {
@@ -54,7 +55,7 @@ export function Dashboard() {
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
     // Inventory
-    const unsubscribeInventory = onSnapshot(query(collection(db, 'stocks'), where('userId', '==', userId)), (snapshot) => {
+    const unsubscribeInventory = onSnapshot(query(collection(db, 'stocks'), where('userId', '==', ownerId)), (snapshot) => {
       const totalValue = snapshot.docs.reduce((acc, doc) => {
         const data = doc.data();
         return acc + ((data.stock || 0) * (data.price || 0));
@@ -65,7 +66,7 @@ export function Dashboard() {
     // Upcoming
     const qUpcoming = query(
       collection(db, 'appointments'),
-      where('userId', '==', userId)
+      where('userId', '==', ownerId)
     );
     const unsubscribeUpcoming = onSnapshot(qUpcoming, (snapshot) => {
       const nowTs = now.getTime();
@@ -93,7 +94,7 @@ export function Dashboard() {
       unsubscribeTreatments();
       unsubscribePatients();
     };
-  }, [auth.currentUser?.uid]); // Changed dependency to uid
+  }, [ownerId]);
 
   // Reactive updates for revenue and charts
   useEffect(() => {

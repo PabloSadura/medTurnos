@@ -11,22 +11,26 @@ import { Modal } from '../components/Modal';
 import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { 
   collection, query, where, onSnapshot, doc, updateDoc, getDoc, 
-  getDocs, orderBy, serverTimestamp, addDoc, deleteDoc, limit 
+  getDocs, orderBy, serverTimestamp, addDoc, deleteDoc, limit, setDoc 
 } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
 
 type AdminTab = 'overview' | 'users' | 'notifications' | 'backup' | 'theme' | 'billing';
 
 const AVAILABLE_MODULES = [
+  { id: 'dashboard', label: 'Panel Principal (Dashboard)' },
   { id: 'agenda', label: 'Agenda / Turnos' },
   { id: 'patients', label: 'Pacientes' },
+  { id: 'treatments', label: 'Tratamientos / Precios' },
   { id: 'inventory', label: 'Inventario / Stock' },
-  { id: 'billing', label: 'Facturación / Caja' },
   { id: 'reminders', label: 'Recordatorios WhatsApp' },
+  { id: 'admin', label: 'Administración del Sistema' },
 ];
 
 export function Administration() {
   const { showToast } = useToast();
+  const { ownerId } = useAuth();
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [patientsCount, setPatientsCount] = useState(0);
   const [appointmentsCount, setAppointmentsCount] = useState(0);
@@ -53,21 +57,20 @@ export function Administration() {
   const [isDarkMode, setIsDarkMode] = useState(false);
 
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     // Fetch Patients Count
-    const unsubscribePatients = onSnapshot(query(collection(db, 'patients'), where('userId', '==', userId)), (snapshot) => {
+    const unsubscribePatients = onSnapshot(query(collection(db, 'patients'), where('userId', '==', ownerId)), (snapshot) => {
       setPatientsCount(snapshot.size);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
     // Fetch Appointments Count
-    const unsubscribeApps = onSnapshot(query(collection(db, 'appointments'), where('userId', '==', userId)), (snapshot) => {
+    const unsubscribeApps = onSnapshot(query(collection(db, 'appointments'), where('userId', '==', ownerId)), (snapshot) => {
       setAppointmentsCount(snapshot.size);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
     // Fetch Staff
-    const unsubscribeStaff = onSnapshot(query(collection(db, 'staff'), where('userId', '==', userId)), (snapshot) => {
+    const unsubscribeStaff = onSnapshot(query(collection(db, 'staff'), where('userId', '==', ownerId)), (snapshot) => {
       setStaff(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       setLoading(false);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'staff'));
@@ -75,9 +78,14 @@ export function Administration() {
     // Fetch Real Notifications
     // 1. WhatsApp Logs
     const unsubscribeLogs = onSnapshot(
-      query(collection(db, 'whatsapp_logs'), where('userId', '==', userId), orderBy('createdAt', 'desc'), limit(10)),
+      query(collection(db, 'whatsapp_logs'), where('userId', '==', ownerId), limit(10)),
       (snapshot) => {
-        const logs = snapshot.docs.map(doc => ({
+        const sortedDocs = [...snapshot.docs].sort((a, b) => {
+          const timeA = a.data().createdAt?.toMillis() || 0;
+          const timeB = b.data().createdAt?.toMillis() || 0;
+          return timeB - timeA;
+        });
+        const logs = sortedDocs.map(doc => ({
           id: doc.id,
           type: 'whatsapp',
           message: `${doc.data().status === 'success' ? 'Enviado a' : 'Error enviando a'} ${doc.data().patientName || doc.data().to}`,
@@ -87,7 +95,7 @@ export function Administration() {
         }));
         
         // 2. Stock Alerts
-        getDocs(query(collection(db, 'stocks'), where('userId', '==', userId))).then(stockSnap => {
+        getDocs(query(collection(db, 'stocks'), where('userId', '==', ownerId))).then(stockSnap => {
           const alerts = stockSnap.docs
             .map(d => d.data())
             .filter(d => d.stock <= d.minStock)
@@ -112,7 +120,7 @@ export function Administration() {
     );
 
     // Load theme from profile
-    getDoc(doc(db, 'users', userId)).then(docSnap => {
+    getDoc(doc(db, 'users', ownerId)).then(docSnap => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.primaryColor) setSelectedTheme(data.primaryColor);
@@ -126,11 +134,10 @@ export function Administration() {
       unsubscribeStaff();
       unsubscribeLogs();
     };
-  }, []);
+  }, [ownerId]);
 
   const handleSaveUser = async () => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     if (!selectedUser && !userForm.password) {
       showToast('La contraseña es obligatoria para nuevos usuarios', 'error');
@@ -143,7 +150,7 @@ export function Administration() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...userForm,
-          userId,
+          userId: ownerId,
           staffId: selectedUser?.id
         })
       });
@@ -151,6 +158,34 @@ export function Administration() {
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Error managing user');
+      }
+
+      const result = await response.json();
+      const authUid = result.uid;
+
+      // Sync with users collection (Role and basic info)
+      await setDoc(doc(db, 'users', authUid), {
+        name: userForm.name,
+        email: userForm.email,
+        role: userForm.role.toLowerCase(),
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+
+      // Now sync with Firestore staff collection client-side
+      if (selectedUser) {
+        await updateDoc(doc(db, 'staff', selectedUser.id), {
+          ...userForm,
+          authUid,
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        // Use authUid as doc ID for easier lookup in rules
+        await setDoc(doc(db, 'staff', authUid), {
+          ...userForm,
+          authUid,
+          userId: ownerId,
+          createdAt: serverTimestamp()
+        });
       }
 
       setIsUserModalOpen(false);
@@ -168,7 +203,7 @@ export function Administration() {
       name: '',
       email: '',
       password: '',
-      role: 'Secretary',
+      role: 'secretary',
       permissions: ['agenda', 'patients'],
       status: 'Activo'
     });
@@ -191,12 +226,11 @@ export function Administration() {
   };
 
   const handleExportData = async (type: 'json' | 'csv') => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     try {
-      const pSnap = await getDocs(query(collection(db, 'patients'), where('userId', '==', userId)));
-      const aSnap = await getDocs(query(collection(db, 'appointments'), where('userId', '==', userId)));
+      const pSnap = await getDocs(query(collection(db, 'patients'), where('userId', '==', ownerId)));
+      const aSnap = await getDocs(query(collection(db, 'appointments'), where('userId', '==', ownerId)));
 
       const patients = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       const appointments = aSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -233,11 +267,10 @@ export function Administration() {
   };
 
   const handleSaveTheme = async () => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     try {
-      await updateDoc(doc(db, 'users', userId), {
+      await updateDoc(doc(db, 'users', ownerId), {
         primaryColor: selectedTheme,
         darkMode: isDarkMode,
         updatedAt: serverTimestamp()
@@ -719,9 +752,9 @@ export function Administration() {
                 onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}
                 className="w-full px-4 py-2.5 bg-white border border-outline-variant rounded-xl text-sm outline-none focus:border-primary transition-all appearance-none"
               >
-                <option value="Secretary">Secretaria</option>
-                <option value="Admin">Administrador</option>
-                <option value="Professional">Profesional</option>
+                <option value="secretary">Secretaría</option>
+                <option value="admin">Administrador</option>
+                <option value="medico">Médico / Profesional</option>
               </select>
             </div>
             <div className="space-y-2">

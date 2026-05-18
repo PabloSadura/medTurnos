@@ -1,8 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
-import { auth, db } from './lib/firebase';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDocFromServer, onSnapshot } from 'firebase/firestore';
+import { useEffect } from 'react';
+import { db } from './lib/firebase';
+import { doc, getDocFromServer } from 'firebase/firestore';
 
 import { Login } from './pages/Login';
 import { MainLayout } from './components/MainLayout';
@@ -15,10 +14,38 @@ import { Reminders } from './pages/Reminders';
 import { Profile } from './pages/Profile';
 import { Administration } from './pages/Administration';
 import { ToastProvider } from './components/Toast';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { NAV_ITEMS } from './lib/navigation';
 
-export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+function HomeRedirect() {
+  const { permissions } = useAuth();
+  
+  if (permissions.includes('all') || permissions.includes('dashboard')) {
+    return <Dashboard />;
+  }
+
+  // Find first available route
+  const firstRoute = NAV_ITEMS.find(item => permissions.includes(item.id));
+  if (firstRoute) {
+    return <Navigate to={firstRoute.path} replace />;
+  }
+
+  // If no permissions, just show a message or redirect to profile
+  return <Navigate to="/profile" replace />;
+}
+
+function ProtectedRoute({ children, permission }: { children: React.ReactNode, permission?: string }) {
+  const { permissions } = useAuth();
+  
+  if (permission && !permissions.includes('all') && !permissions.includes(permission)) {
+    return <Navigate to="/" replace />;
+  }
+  
+  return <>{children}</>;
+}
+
+function AppContent() {
+  const { user, loading } = useAuth();
 
   useEffect(() => {
     // Validate connection to Firestore
@@ -32,41 +59,7 @@ export default function App() {
       }
     }
     testConnection();
-
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-    });
-    return () => unsubscribe();
   }, []);
-
-  useEffect(() => {
-    if (!user) {
-      document.documentElement.classList.remove('dark');
-      document.documentElement.style.removeProperty('--color-primary');
-      return;
-    }
-
-    const unsubscribe = onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        
-        // Apply Dark Mode
-        if (data.darkMode) {
-          document.documentElement.classList.add('dark');
-        } else {
-          document.documentElement.classList.remove('dark');
-        }
-
-        // Apply Primary Color
-        if (data.primaryColor) {
-          document.documentElement.style.setProperty('--color-primary', data.primaryColor);
-        }
-      }
-    });
-
-    return () => unsubscribe();
-  }, [user]);
 
   if (loading) {
     return (
@@ -77,23 +70,31 @@ export default function App() {
   }
 
   return (
+    <Router>
+      <Routes>
+        <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
+        
+        <Route element={user ? <MainLayout /> : <Navigate to="/login" />}>
+          <Route path="/" element={<HomeRedirect />} />
+          <Route path="/agenda" element={<ProtectedRoute permission="agenda"><Agenda /></ProtectedRoute>} />
+          <Route path="/patients" element={<ProtectedRoute permission="patients"><Patients /></ProtectedRoute>} />
+          <Route path="/treatments" element={<ProtectedRoute permission="treatments"><Treatments /></ProtectedRoute>} />
+          <Route path="/inventory" element={<ProtectedRoute permission="inventory"><Inventory /></ProtectedRoute>} />
+          <Route path="/reminders" element={<ProtectedRoute permission="reminders"><Reminders /></ProtectedRoute>} />
+          <Route path="/admin" element={<ProtectedRoute permission="admin"><Administration /></ProtectedRoute>} />
+          <Route path="/profile" element={<Profile />} />
+        </Route>
+      </Routes>
+    </Router>
+  );
+}
+
+export default function App() {
+  return (
     <ToastProvider>
-      <Router>
-        <Routes>
-          <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
-          
-          <Route element={user ? <MainLayout /> : <Navigate to="/login" />}>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/agenda" element={<Agenda />} />
-            <Route path="/patients" element={<Patients />} />
-            <Route path="/treatments" element={<Treatments />} />
-            <Route path="/inventory" element={<Inventory />} />
-            <Route path="/reminders" element={<Reminders />} />
-            <Route path="/admin" element={<Administration />} />
-            <Route path="/profile" element={<Profile />} />
-          </Route>
-        </Routes>
-      </Router>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
     </ToastProvider>
   );
 }

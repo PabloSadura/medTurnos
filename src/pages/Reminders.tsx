@@ -2,10 +2,12 @@ import { useState, useEffect } from 'react';
 import { MessageSquare, CalendarClock, History, Settings, Send, CheckCircle2, AlertCircle, Clock, Info, Save, ToggleLeft, ToggleRight } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
-import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, where, orderBy, getDoc, doc, setDoc, serverTimestamp, limit, addDoc } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Reminders() {
+  const { ownerId } = useAuth();
   const [appointments, setAppointments] = useState<any[]>([]);
   const [patients, setPatients] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
@@ -24,18 +26,17 @@ export function Reminders() {
   });
 
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     // Fetch settings
-    const unsubscribeSettings = onSnapshot(query(collection(db, 'reminder_settings'), where('userId', '==', userId), limit(1)), (snapshot) => {
+    const unsubscribeSettings = onSnapshot(query(collection(db, 'reminder_settings'), where('userId', '==', ownerId), limit(1)), (snapshot) => {
       if (!snapshot.empty) {
         setSettings(snapshot.docs[0].data());
       }
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'reminder_settings'));
 
     // Sync patients for enrichment
-    const unsubscribePatients = onSnapshot(query(collection(db, 'patients'), where('userId', '==', userId)), (snapshot) => {
+    const unsubscribePatients = onSnapshot(query(collection(db, 'patients'), where('userId', '==', ownerId)), (snapshot) => {
       const pMap: Record<string, any> = {};
       snapshot.docs.forEach(doc => {
         pMap[doc.id] = doc.data();
@@ -51,7 +52,7 @@ export function Reminders() {
 
     const q = query(
       collection(db, 'appointments'),
-      where('userId', '==', userId)
+      where('userId', '==', ownerId)
     );
 
     const unsubscribeApps = onSnapshot(q, (snapshot) => {
@@ -77,7 +78,7 @@ export function Reminders() {
       unsubscribePatients();
       unsubscribeApps();
     };
-  }, [auth.currentUser?.uid]);
+  }, [ownerId]);
 
   const reminders = appointments.map((app: any) => {
     const patientData = app.patientId ? patients[app.patientId] : null;
@@ -148,7 +149,7 @@ export function Reminders() {
           message: reminder.message,
           status: response.ok ? 'success' : 'error',
           error: response.ok ? null : (result.error || 'Unknown error'),
-          userId: auth.currentUser?.uid,
+          userId: ownerId,
           createdAt: serverTimestamp()
         });
 
@@ -172,7 +173,7 @@ export function Reminders() {
         patientName: reminder.patient,
         message: reminder.message,
         status: 'success',
-        userId: auth.currentUser?.uid,
+        userId: ownerId,
         createdAt: serverTimestamp(),
         method: 'manual'
       });
@@ -182,13 +183,12 @@ export function Reminders() {
   };
 
   const handleSaveSettings = async () => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     try {
-      await setDoc(doc(db, 'reminder_settings', userId), {
+      await setDoc(doc(db, 'reminder_settings', ownerId), {
         ...settings,
-        userId,
+        userId: ownerId,
         updatedAt: serverTimestamp()
       });
       setIsSettingsOpen(false);

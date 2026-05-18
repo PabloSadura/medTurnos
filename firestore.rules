@@ -8,6 +8,20 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isStaffOf(userId) {
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/staff/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.userId == userId;
+    }
+
+    function canAccessData(userId) {
+      return isOwner(userId) || isStaffOf(userId);
+    }
+
     // Default Deny
     match /{document=**} {
       allow read, write: if false;
@@ -18,27 +32,59 @@ service cloud.firestore {
     // ------------------------------------------------------------
 
     match /appointments/{id} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isSignedIn() && canAccessData(resource.data.userId);
+      allow create: if isSignedIn() && canAccessData(request.resource.data.userId);
     }
 
     match /patients/{id} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isSignedIn() && canAccessData(resource.data.userId);
+      allow create: if isSignedIn() && canAccessData(request.resource.data.userId);
       
       match /evolutions/{eid} {
-        allow read, write: if isSignedIn();
+        allow read, write: if isSignedIn() && canAccessData(resource.data.userId);
+        allow create: if isSignedIn() && canAccessData(request.resource.data.userId);
       }
     }
 
     match /treatments/{id} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isSignedIn() && canAccessData(resource.data.userId);
+      allow create: if isSignedIn() && canAccessData(request.resource.data.userId);
     }
 
     match /stocks/{id} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isSignedIn() && canAccessData(resource.data.userId);
+      allow create: if isSignedIn() && canAccessData(request.resource.data.userId);
+      
+      match /movements/{mid} {
+        allow read, write: if isSignedIn() && canAccessData(resource.data.userId);
+        allow create: if isSignedIn() && canAccessData(request.resource.data.userId);
+      }
     }
 
     match /users/{id} {
-      allow read, write: if isSignedIn() && request.auth.uid == id;
+      allow read: if isSignedIn() && (id == request.auth.uid || isStaffOf(id));
+      allow write: if isSignedIn() && (
+        id == request.auth.uid || 
+        (exists(/databases/$(database)/documents/staff/$(id)) && get(/databases/$(database)/documents/staff/$(id)).data.userId == request.auth.uid) ||
+        (!exists(/databases/$(database)/documents/users/$(id)) && isSignedIn()) // Allow initial creation by professional
+      );
+    }
+
+    match /staff/{id} {
+      allow read: if isSignedIn() && (id == request.auth.uid || (resource != null && resource.data.userId == request.auth.uid));
+      allow write: if isSignedIn() && (
+        (request.resource != null && request.resource.data.userId == request.auth.uid) ||
+        (resource != null && resource.data.userId == request.auth.uid)
+      );
+    }
+
+    match /whatsapp_logs/{id} {
+      allow read: if isSignedIn() && canAccessData(resource.data.userId);
+      allow create: if isSignedIn() && canAccessData(request.resource.data.userId);
+    }
+
+    match /reminder_settings/{id} {
+      allow read, write: if isSignedIn() && (id == request.auth.uid || isStaffOf(id));
     }
   }
 }

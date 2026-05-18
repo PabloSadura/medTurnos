@@ -3,12 +3,14 @@ import { Stethoscope, Plus, Search, DollarSign, Clock, ChevronRight, Package, Ed
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 import { motion } from 'motion/react';
-import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, orderBy, where } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Treatments() {
   const { showToast } = useToast();
+  const { ownerId } = useAuth();
   const [treatments, setTreatments] = useState<any[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -26,12 +28,11 @@ export function Treatments() {
   });
 
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     const q = query(
       collection(db, 'treatments'), 
-      where('userId', '==', userId)
+      where('userId', '==', ownerId)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -40,7 +41,7 @@ export function Treatments() {
 
     const invQ = query(
       collection(db, 'stocks'), 
-      where('userId', '==', userId)
+      where('userId', '==', ownerId)
     );
     const unsubscribeInv = onSnapshot(invQ, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -51,7 +52,7 @@ export function Treatments() {
       unsubscribe();
       unsubscribeInv();
     };
-  }, [auth.currentUser?.uid]);
+  }, [ownerId]);
 
   const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'materials', treatment?: any) => {
     setSelectedTreatment(treatment || null);
@@ -90,7 +91,7 @@ export function Treatments() {
       } else {
         await addDoc(collection(db, 'treatments'), {
           ...data,
-          userId: auth.currentUser?.uid,
+          userId: ownerId,
           createdAt: serverTimestamp()
         });
       }

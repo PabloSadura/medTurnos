@@ -24,7 +24,12 @@ if (!admin.apps.length) {
     projectId: firebaseConfig.projectId,
   });
 }
+// Try to get a more robust admin DB reference if possible
 const adminDb = admin.firestore();
+if (firebaseConfig.firestoreDatabaseId) {
+  // @ts-ignore - some versions of admin sdk support this
+  try { adminDb.settings({ databaseId: firebaseConfig.firestoreDatabaseId }); } catch(e) {}
+}
 const auth = admin.auth();
 
 async function startServer() {
@@ -110,31 +115,12 @@ async function startServer() {
         }
       }
 
-      // Sync with Firestore staff collection
-      const staffData: any = {
-        name,
-        email,
-        role,
-        permissions,
-        status,
-        userId,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      };
-
-      if (authUser?.uid) {
-        staffData.authUid = authUser.uid;
-      }
-
-      if (staffId) {
-        await adminDb.collection('staff').doc(staffId).update(staffData);
-      } else {
-        await adminDb.collection('staff').add({
-          ...staffData,
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-      }
-
-      res.json({ success: true, uid: authUser?.uid, message: createdInAuth ? "Creado exitosamente" : "Actualizado (si los permisos lo permiten)" });
+      // Return the UID so the frontend can sync with Firestore using the user's own credentials
+      res.json({ 
+        success: true, 
+        uid: authUser?.uid, 
+        message: createdInAuth ? "Creado exitosamente" : "Actualizado (si los permisos lo permiten)" 
+      });
     } catch (error: any) {
       console.error("User Management Error:", error);
       res.status(500).json({ error: error.message });

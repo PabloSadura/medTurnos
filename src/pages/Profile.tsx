@@ -6,8 +6,10 @@ import { cn } from '../lib/utils';
 import { doc, onSnapshot, updateDoc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { sendEmailVerification } from 'firebase/auth';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Profile() {
+  const { isStaff, profile: authProfile } = useAuth();
   const user = auth.currentUser;
   const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -43,16 +45,16 @@ export function Profile() {
   useEffect(() => {
     if (!user) return;
 
-    const unsubscribe = onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
+    const unsubscribe = onSnapshot(doc(db, 'users', user.uid), async (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
         setProfile(prev => ({
           ...prev,
-          displayName: data.name || prev.displayName,
+          displayName: data.name || user.displayName || '',
           licenseNumber: data.licenseNumber || '',
-          specialty: data.specialty || prev.specialty,
+          specialty: data.specialty || '',
           phone: data.phone || '',
-          photoURL: data.photoURL || '',
+          photoURL: data.photoURL || user.photoURL || '',
           workingDays: data.schedule?.workingDays || [1, 2, 3, 4, 5],
           morningStart: data.schedule?.morningStart || '08:00',
           morningEnd: data.schedule?.morningEnd || '12:00',
@@ -61,9 +63,23 @@ export function Profile() {
           afternoonEnd: data.schedule?.afternoonEnd || '18:00',
           afternoonActive: data.schedule?.afternoonActive !== false
         }));
+
+        if (data.role === 'secretary') {
+          const staffSnap = await getDoc(doc(db, 'staff', user.uid));
+          if (staffSnap.exists()) {
+            const staffData = staffSnap.data();
+            setProfile(prev => ({
+              ...prev,
+              specialty: staffData.role || 'Staff'
+            }));
+          }
+        }
+        setLoading(false);
       }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
       setLoading(false);
-    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${user.uid}`));
+    });
 
     return () => unsubscribe();
   }, [user]);
@@ -73,26 +89,45 @@ export function Profile() {
     setSaving(true);
     setSuccess(false);
     try {
-      const userData = {
-        name: profile.displayName,
-        email: user.email,
-        licenseNumber: profile.licenseNumber,
-        specialty: profile.specialty,
-        phone: profile.phone,
-        photoURL: profile.photoURL,
-        schedule: {
-          workingDays: profile.workingDays,
-          morningStart: profile.morningStart,
-          morningEnd: profile.morningEnd,
-          morningActive: profile.morningActive,
-          afternoonStart: profile.afternoonStart,
-          afternoonEnd: profile.afternoonEnd,
-          afternoonActive: profile.afternoonActive
-        },
-        updatedAt: serverTimestamp()
-      };
-
-      await setDoc(doc(db, 'users', user.uid), userData, { merge: true });
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      const role = userDoc.data()?.role;
+      const isStaff = role === 'secretary' || role === 'medico' || role === 'admin';
+      
+      // Wait, if they are medico/admin but in staff collection, they are staff.
+      // But for Profile.tsx, 'isStaff' means they should update 'staff' collection too?
+      // Actually, if they are NOT the owner, they are in 'staff' collection.
+      const staffSnap = await getDoc(doc(db, 'staff', user.uid));
+      const hasStaffRecord = staffSnap.exists();
+      
+      if (!isStaff && !hasStaffRecord) {
+        const userData = {
+          name: profile.displayName,
+          email: user.email,
+          licenseNumber: profile.licenseNumber,
+          specialty: profile.specialty,
+          phone: profile.phone,
+          photoURL: profile.photoURL,
+          schedule: {
+            workingDays: profile.workingDays,
+            morningStart: profile.morningStart,
+            morningEnd: profile.morningEnd,
+            morningActive: profile.morningActive,
+            afternoonStart: profile.afternoonStart,
+            afternoonEnd: profile.afternoonEnd,
+            afternoonActive: profile.afternoonActive
+          },
+          updatedAt: serverTimestamp()
+        };
+        await setDoc(doc(db, 'users', user.uid), userData, { merge: true });
+      } else {
+        // Update staff profile
+        await updateDoc(doc(db, 'staff', user.uid), {
+          name: profile.displayName,
+          photoURL: profile.photoURL,
+          phone: profile.phone,
+          updatedAt: serverTimestamp()
+        });
+      }
       
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
@@ -141,8 +176,12 @@ export function Profile() {
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex justify-between items-end">
         <div>
-          <h1 className="headline-lg text-on-surface">Perfil Profesional</h1>
-          <p className="body-md text-on-surface-variant">Gestione su identidad profesional y configuraciones de seguridad.</p>
+          <h1 className="headline-lg text-on-surface">{isStaff ? 'Perfil Personal' : 'Perfil Profesional'}</h1>
+          <p className="body-md text-on-surface-variant">
+            {isStaff 
+              ? 'Gestione su información personal y configuraciones de seguridad.' 
+              : 'Gestione su identidad profesional y configuraciones de seguridad.'}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <AnimatePresence>
@@ -189,7 +228,7 @@ export function Profile() {
                 <input type="file" className="hidden" accept="image/*" onChange={handlePhotoUpload} />
               </label>
             </div>
-            <h3 className="text-[16px] font-bold text-on-surface">{profile.displayName || 'Profesional Médico'}</h3>
+            <h3 className="text-[16px] font-bold text-on-surface">{profile.displayName || (isStaff ? 'Personal de Staff' : 'Profesional Médico')}</h3>
             <p className="text-[11px] text-on-surface-variant mb-3 uppercase font-bold tracking-wider opacity-60">{profile.specialty}</p>
             <span className="text-[9px] font-black px-2 py-0.5 bg-tertiary-container text-on-tertiary-container rounded-full uppercase tracking-tighter">Sesión Activa</span>
           </div>
@@ -201,147 +240,153 @@ export function Profile() {
               <User size={16} className="text-primary" />
               Información General
             </h3>
-            <div className="grid grid-cols-2 gap-4">
+            <div className={cn("grid gap-4", isStaff ? "grid-cols-1" : "grid-cols-2")}>
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Nombre de Usuario</label>
+                <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Nombre y Apellido</label>
                 <input 
                   type="text" 
                   value={profile.displayName}
                   onChange={(e) => setProfile({ ...profile, displayName: e.target.value })}
-                  className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" 
+                  className="w-full px-4 py-2 bg-surface border border-outline-variant rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none" 
                 />
               </div>
+              {!isStaff && (
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Especialidad</label>
+                  <input 
+                    type="text" 
+                    value={profile.specialty}
+                    onChange={(e) => setProfile({ ...profile, specialty: e.target.value })}
+                    className="w-full px-4 py-2 bg-surface border border-outline-variant rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none" 
+                  />
+                </div>
+              )}
+              {!isStaff && (
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Matrícula Prof.</label>
+                  <input 
+                    type="text" 
+                    value={profile.licenseNumber}
+                    onChange={(e) => setProfile({ ...profile, licenseNumber: e.target.value })}
+                    className="w-full px-4 py-2 bg-surface border border-outline-variant rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none" 
+                  />
+                </div>
+              )}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Especialidad</label>
-                <input 
-                  type="text" 
-                  value={profile.specialty}
-                  onChange={(e) => setProfile({ ...profile, specialty: e.target.value })}
-                  className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" 
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Matrícula Prof.</label>
-                <input 
-                  type="text" 
-                  value={profile.licenseNumber}
-                  onChange={(e) => setProfile({ ...profile, licenseNumber: e.target.value })}
-                  className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" 
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Teléfono Principal</label>
+                <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Teléfono de Contacto</label>
                 <input 
                   type="text" 
                   value={profile.phone}
                   onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
-                  className="w-full px-3 py-1.5 bg-surface border border-outline-variant rounded text-[13px] focus:ring-1 focus:ring-primary outline-none" 
+                  className="w-full px-4 py-2 bg-surface border border-outline-variant rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none" 
                 />
               </div>
             </div>
           </div>
 
-          <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
-            <h3 className="text-sm font-bold text-on-surface mb-5 flex items-center gap-2">
-              <Clock size={16} className="text-primary" />
-              Horarios de Atención
-            </h3>
-            <div className="space-y-6">
-              <div className="grid grid-cols-7 gap-2">
-                {[
-                  { label: 'L', index: 1 },
-                  { label: 'M', index: 2 },
-                  { label: 'X', index: 3 },
-                  { label: 'J', index: 4 },
-                  { label: 'V', index: 5 },
-                  { label: 'S', index: 6 },
-                  { label: 'D', index: 7 }
-                ].map((day) => (
-                  <button 
-                    key={day.index}
-                    type="button"
-                    onClick={() => toggleDay(day.index)}
-                    className={cn(
-                      "aspect-square rounded-lg border text-[11px] font-bold transition-all",
-                      profile.workingDays.includes(day.index)
-                        ? "bg-primary border-primary text-white shadow-sm" 
-                        : "bg-surface border-outline-variant text-on-surface-variant hover:bg-outline-variant/10"
-                    )}
-                  >
-                    {day.label}
-                  </button>
-                ))}
-              </div>
-
+          {!isStaff && (
+            <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
+              <h3 className="text-sm font-bold text-on-surface mb-5 flex items-center gap-2">
+                <Clock size={16} className="text-primary" />
+                Horarios de Atención
+              </h3>
               <div className="space-y-6">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Mañana</label>
-                      <button 
-                        onClick={() => setProfile({ ...profile, morningActive: !profile.morningActive })}
-                        className={cn(
-                          "text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-colors",
-                          profile.morningActive ? "bg-primary/10 text-primary" : "bg-error-container/20 text-error"
-                        )}
-                      >
-                        {profile.morningActive ? 'Activo' : 'Anulado'}
-                      </button>
-                    </div>
-                    <div className={cn("flex items-center gap-2 transition-opacity", !profile.morningActive && "opacity-30 pointer-events-none")}>
-                      <input 
-                        type="time" 
-                        value={profile.morningStart}
-                        onChange={(e) => setProfile({ ...profile, morningStart: e.target.value })}
-                        className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
-                      />
-                      <span className="text-[10px] font-bold text-on-surface-variant">a</span>
-                      <input 
-                        type="time" 
-                        value={profile.morningEnd}
-                        onChange={(e) => setProfile({ ...profile, morningEnd: e.target.value })}
-                        className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Tarde</label>
-                      <button 
-                        onClick={() => setProfile({ ...profile, afternoonActive: !profile.afternoonActive })}
-                        className={cn(
-                          "text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-colors",
-                          profile.afternoonActive ? "bg-primary/10 text-primary" : "bg-error-container/20 text-error"
-                        )}
-                      >
-                        {profile.afternoonActive ? 'Activo' : 'Anulado'}
-                      </button>
-                    </div>
-                    <div className={cn("flex items-center gap-2 transition-opacity", !profile.afternoonActive && "opacity-30 pointer-events-none")}>
-                      <input 
-                        type="time" 
-                        value={profile.afternoonStart}
-                        onChange={(e) => setProfile({ ...profile, afternoonStart: e.target.value })}
-                        className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
-                      />
-                      <span className="text-[10px] font-bold text-on-surface-variant">a</span>
-                      <input 
-                        type="time" 
-                        value={profile.afternoonEnd}
-                        onChange={(e) => setProfile({ ...profile, afternoonEnd: e.target.value })}
-                        className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
-                      />
-                    </div>
-                  </div>
+                <div className="grid grid-cols-7 gap-2">
+                  {[
+                    { label: 'L', index: 1 },
+                    { label: 'M', index: 2 },
+                    { label: 'X', index: 3 },
+                    { label: 'J', index: 4 },
+                    { label: 'V', index: 5 },
+                    { label: 'S', index: 6 },
+                    { label: 'D', index: 7 }
+                  ].map((day) => (
+                    <button 
+                      key={day.index}
+                      type="button"
+                      onClick={() => toggleDay(day.index)}
+                      className={cn(
+                        "aspect-square rounded-lg border text-[11px] font-bold transition-all",
+                        profile.workingDays.includes(day.index)
+                          ? "bg-primary border-primary text-white shadow-sm" 
+                          : "bg-surface border-outline-variant text-on-surface-variant hover:bg-outline-variant/10"
+                      )}
+                    >
+                      {day.label}
+                    </button>
+                  ))}
                 </div>
 
-                <div className="p-3 bg-surface rounded-lg border border-outline-variant flex items-start gap-3">
-                  <Shield size={14} className="text-secondary shrink-0 mt-0.5" />
-                  <p className="text-[11px] text-on-surface-variant">Estos horarios se utilizarán para generar los huecos automáticos en su agenda y sistema de turnos online.</p>
+                <div className="space-y-6">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Mañana</label>
+                        <button 
+                          onClick={() => setProfile({ ...profile, morningActive: !profile.morningActive })}
+                          className={cn(
+                            "text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-colors",
+                            profile.morningActive ? "bg-primary/10 text-primary" : "bg-error-container/20 text-error"
+                          )}
+                        >
+                          {profile.morningActive ? 'Activo' : 'Anulado'}
+                        </button>
+                      </div>
+                      <div className={cn("flex items-center gap-2 transition-opacity", !profile.morningActive && "opacity-30 pointer-events-none")}>
+                        <input 
+                          type="time" 
+                          value={profile.morningStart}
+                          onChange={(e) => setProfile({ ...profile, morningStart: e.target.value })}
+                          className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
+                        />
+                        <span className="text-[10px] font-bold text-on-surface-variant">a</span>
+                        <input 
+                          type="time" 
+                          value={profile.morningEnd}
+                          onChange={(e) => setProfile({ ...profile, morningEnd: e.target.value })}
+                          className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turno Tarde</label>
+                        <button 
+                          onClick={() => setProfile({ ...profile, afternoonActive: !profile.afternoonActive })}
+                          className={cn(
+                            "text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-colors",
+                            profile.afternoonActive ? "bg-primary/10 text-primary" : "bg-error-container/20 text-error"
+                          )}
+                        >
+                          {profile.afternoonActive ? 'Activo' : 'Anulado'}
+                        </button>
+                      </div>
+                      <div className={cn("flex items-center gap-2 transition-opacity", !profile.afternoonActive && "opacity-30 pointer-events-none")}>
+                        <input 
+                          type="time" 
+                          value={profile.afternoonStart}
+                          onChange={(e) => setProfile({ ...profile, afternoonStart: e.target.value })}
+                          className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
+                        />
+                        <span className="text-[10px] font-bold text-on-surface-variant">a</span>
+                        <input 
+                          type="time" 
+                          value={profile.afternoonEnd}
+                          onChange={(e) => setProfile({ ...profile, afternoonEnd: e.target.value })}
+                          className="flex-1 px-3 py-1 bg-surface border border-outline-variant rounded text-[12px] outline-none" 
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-surface rounded-lg border border-outline-variant flex items-start gap-3">
+                    <Shield size={14} className="text-secondary shrink-0 mt-0.5" />
+                    <p className="text-[11px] text-on-surface-variant">Estos horarios se utilizarán para generar los huecos automáticos en su agenda y sistema de turnos online.</p>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
           <div className="bg-white p-6 rounded-xl border border-error-container/30 shadow-sm">
             <h3 className="text-sm font-bold text-error mb-5 flex items-center gap-2">

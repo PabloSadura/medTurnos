@@ -4,12 +4,14 @@ import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Cale
 import { cn, calculateAge } from '../lib/utils';
 import { motion } from 'motion/react';
 import { Modal } from '../components/Modal';
-import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, where, writeBatch, increment, getDocs } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Patients() {
   const { showToast } = useToast();
+  const { ownerId } = useAuth();
   const [searchParams] = useSearchParams();
   const [patients, setPatients] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -44,19 +46,18 @@ export function Patients() {
   });
 
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!ownerId) return;
 
     const q = query(
       collection(db, 'patients'), 
-      where('userId', '==', userId)
+      where('userId', '==', ownerId)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setPatients(docs.sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
-    const treatmentsQ = query(collection(db, 'treatments'), where('userId', '==', userId));
+    const treatmentsQ = query(collection(db, 'treatments'), where('userId', '==', ownerId));
 
     const unsubscribeTreatments = onSnapshot(treatmentsQ, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -67,7 +68,7 @@ export function Patients() {
       unsubscribe();
       unsubscribeTreatments();
     };
-  }, [auth.currentUser?.uid]);
+  }, [ownerId]);
 
   // Handle URL param selection
   useEffect(() => {
@@ -81,12 +82,11 @@ export function Patients() {
   }, [searchParams, patients]);
 
   useEffect(() => {
-    if (selectedPatient && activeModal === 'history') {
-      const userId = auth.currentUser?.uid;
+    if (selectedPatient && activeModal === 'history' && ownerId) {
       // Fetch evolutions
       const q = query(
         collection(db, `patients/${selectedPatient.id}/evolutions`), 
-        where('userId', '==', userId)
+        where('userId', '==', ownerId)
       );
       const unsubscribeEvolutions = onSnapshot(q, (snapshot) => {
         const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -97,7 +97,7 @@ export function Patients() {
       const appQ = query(
         collection(db, 'appointments'), 
         where('patientId', '==', selectedPatient.id),
-        where('userId', '==', userId)
+        where('userId', '==', ownerId)
       );
       const unsubscribeApps = onSnapshot(appQ, (snapshot) => {
         const apps = snapshot.docs.map(doc => doc.data());
@@ -182,7 +182,7 @@ export function Patients() {
       } else {
         await addDoc(collection(db, 'patients'), {
           ...data,
-          userId: auth.currentUser?.uid,
+          userId: ownerId,
           createdAt: serverTimestamp(),
           lastVisit: '-'
         });
@@ -215,7 +215,7 @@ export function Patients() {
       batch.set(newEvolutionRef, {
         ...evolutionData,
         patientId: selectedPatient.id,
-        userId: auth.currentUser?.uid,
+        userId: ownerId,
         date: new Date().toISOString().split('T')[0],
         status: 'Completed',
         createdAt: serverTimestamp()
@@ -238,7 +238,7 @@ export function Patients() {
             quantity: item.qty,
             reason: `Consumido en evolución: ${evolutionData.treatment} para ${currentPatient.name}`,
             date: serverTimestamp(),
-            userId: auth.currentUser?.uid
+            userId: ownerId
           });
         }
       }
@@ -248,7 +248,7 @@ export function Patients() {
       batch.set(patientRef, {
         lastVisit: new Date().toISOString().split('T')[0],
         updatedAt: serverTimestamp(),
-        userId: auth.currentUser?.uid // Ensure it has a userId if it's created newly
+        userId: ownerId // Ensure it has a userId if it's created newly
       }, { merge: true });
 
       // Optional: If there's an appointment today for this patient with this treatment, mark it as finished
@@ -259,7 +259,7 @@ export function Patients() {
         where('patientId', '==', selectedPatient.id),
         where('date', '==', todayStr),
         where('status', '!=', 'finished'),
-        where('userId', '==', auth.currentUser?.uid)
+        where('userId', '==', ownerId)
       );
       const snapshot = await getDocs(appQ);
       snapshot.forEach(appDoc => {

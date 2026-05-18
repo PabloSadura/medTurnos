@@ -1,32 +1,18 @@
 import { NavLink } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  CalendarDays, 
-  Users, 
-  Stethoscope, 
-  Package, 
-  MessageSquare, 
-  Settings, 
-  UserCircle, 
-  LogOut,
-  Activity
-} from 'lucide-react';
+import { LogOut, UserCircle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
-
-const navItems = [
-  { icon: LayoutDashboard, label: 'Panel Principal', path: '/' },
-  { icon: CalendarDays, label: 'Agenda Diaria', path: '/agenda' },
-  { icon: Users, label: 'Pacientes', path: '/patients' },
-  { icon: Stethoscope, label: 'Tratamientos', path: '/treatments' },
-  { icon: Package, label: 'Inventario', path: '/inventory' },
-  { icon: MessageSquare, label: 'Recordatorios', path: '/reminders' },
-  { icon: Settings, label: 'Administración', path: '/admin' },
-];
+import { useAuth } from '../contexts/AuthContext';
+import { NAV_ITEMS } from '../lib/navigation';
 
 export function SideNavBar() {
+  const { permissions } = useAuth();
   const handleLogout = () => signOut(auth);
+
+  const filteredItems = NAV_ITEMS.filter(item => 
+    permissions.includes('all') || permissions.includes(item.id)
+  );
 
   return (
     <aside className="w-56 bg-white border-r border-outline-variant h-screen fixed left-0 top-0 flex flex-col z-50 shadow-[4px_0_12px_rgba(0,0,0,0.02)]">
@@ -37,7 +23,7 @@ export function SideNavBar() {
 
       <nav className="flex-1 py-4 overflow-y-auto bg-white/50 backdrop-blur-sm">
         <div className="px-6 mb-3 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-40">Menú Principal</div>
-        {navItems.map((item) => (
+        {filteredItems.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
