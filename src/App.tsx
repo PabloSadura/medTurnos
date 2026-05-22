@@ -1,7 +1,8 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect } from 'react';
-import { db } from './lib/firebase';
+import { db, auth } from './lib/firebase';
 import { doc, getDocFromServer } from 'firebase/firestore';
+import { Lock } from 'lucide-react';
 
 import { Login } from './pages/Login';
 import { MainLayout } from './components/MainLayout';
@@ -13,12 +14,17 @@ import { Inventory } from './pages/Inventory';
 import { Reminders } from './pages/Reminders';
 import { Profile } from './pages/Profile';
 import { Administration } from './pages/Administration';
+import { SystemAdmin } from './pages/SystemAdmin';
 import { ToastProvider } from './components/Toast';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { NAV_ITEMS } from './lib/navigation';
 
 function HomeRedirect() {
-  const { permissions } = useAuth();
+  const { permissions, profile } = useAuth();
+  
+  if (profile?.role === 'admin') {
+    return <Navigate to="/system/dashboard" replace />;
+  }
   
   if (permissions.includes('all') || permissions.includes('dashboard')) {
     return <Dashboard />;
@@ -45,7 +51,7 @@ function ProtectedRoute({ children, permission }: { children: React.ReactNode, p
 }
 
 function AppContent() {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
 
   useEffect(() => {
     // Validate connection to Firestore
@@ -69,6 +75,30 @@ function AppContent() {
     );
   }
 
+  if (user && profile?.status === 'Inactivo') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface p-4 font-sans">
+        <div className="bg-white p-8 rounded-2xl border border-outline-variant shadow-lg max-w-md w-full text-center space-y-6">
+          <div className="w-16 h-16 bg-error-container/20 text-error rounded-full flex items-center justify-center mx-auto">
+            <Lock size={32} />
+          </div>
+          <div>
+            <h3 className="text-lg font-black text-on-surface mb-2">Acceso Inactivo</h3>
+            <p className="text-on-surface-variant text-sm leading-relaxed">
+              Su cuenta de acceso está inactiva temporalmente. Por favor, póngase en contacto con el administrador del sistema para habilitar su ingreso.
+            </p>
+          </div>
+          <button 
+            onClick={() => auth.signOut()}
+            className="w-full py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-primary/90 transition-all cursor-pointer"
+          >
+            Cerrar Sesión
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Router>
       <Routes>
@@ -82,6 +112,7 @@ function AppContent() {
           <Route path="/inventory" element={<ProtectedRoute permission="inventory"><Inventory /></ProtectedRoute>} />
           <Route path="/reminders" element={<ProtectedRoute permission="reminders"><Reminders /></ProtectedRoute>} />
           <Route path="/admin" element={<ProtectedRoute permission="admin"><Administration /></ProtectedRoute>} />
+          <Route path="/system/dashboard" element={<ProtectedRoute permission="sys_dashboard"><SystemAdmin /></ProtectedRoute>} />
           <Route path="/profile" element={<Profile />} />
         </Route>
       </Routes>

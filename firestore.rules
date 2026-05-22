@@ -22,6 +22,12 @@ service cloud.firestore {
       return isOwner(userId) || isStaffOf(userId);
     }
 
+    function isAdmin() {
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
     // Default Deny
     match /{document=**} {
       allow read, write: if false;
@@ -62,18 +68,22 @@ service cloud.firestore {
     }
 
     match /users/{id} {
-      allow read: if isSignedIn() && (id == request.auth.uid || isStaffOf(id));
+      allow read: if isSignedIn() && (id == request.auth.uid || isStaffOf(id) || isAdmin());
       allow write: if isSignedIn() && (
         id == request.auth.uid || 
         (exists(/databases/$(database)/documents/staff/$(id)) && get(/databases/$(database)/documents/staff/$(id)).data.userId == request.auth.uid) ||
-        (!exists(/databases/$(database)/documents/users/$(id)) && isSignedIn()) // Allow initial creation by professional
+        isAdmin()
       );
     }
 
     match /staff/{id} {
+      // Allow user to read their own staff doc, or the owner to read all their staff
       allow read: if isSignedIn() && (id == request.auth.uid || (resource != null && resource.data.userId == request.auth.uid));
+      // Allow listing: Owner can list all their staff, staff can list themselves
+      allow list: if isSignedIn(); 
       allow write: if isSignedIn() && (
-        (request.resource != null && request.resource.data.userId == request.auth.uid) ||
+        request.auth.uid == id || 
+        (request.resource != null && request.resource.data.userId == request.auth.uid) || 
         (resource != null && resource.data.userId == request.auth.uid)
       );
     }

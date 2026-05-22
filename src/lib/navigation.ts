@@ -5,7 +5,9 @@ import {
   Stethoscope, 
   Package, 
   MessageSquare, 
-  Settings 
+  Settings,
+  ShieldAlert,
+  Terminal
 } from 'lucide-react';
 
 export const NAV_ITEMS = [
@@ -16,4 +18,6 @@ export const NAV_ITEMS = [
   { icon: Package, label: 'Inventario', path: '/inventory', id: 'inventory' },
   { icon: MessageSquare, label: 'Recordatorios', path: '/reminders', id: 'reminders' },
   { icon: Settings, label: 'Administración', path: '/admin', id: 'admin' },
+  // System Admin Items
+  { icon: Terminal, label: 'Dashboard', path: '/system/dashboard', id: 'sys_dashboard' },
 ];

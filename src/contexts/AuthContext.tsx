@@ -89,17 +89,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setLoading(false);
 
             // Inherit theme from professional
-            onSnapshot(doc(db, 'users', staffData.userId), (pSnap) => {
-              if (pSnap.exists()) {
-                const pData = pSnap.data();
-                if (pData.darkMode) document.documentElement.classList.add('dark');
-                else document.documentElement.classList.remove('dark');
-                if (pData.primaryColor) document.documentElement.style.setProperty('--color-primary', pData.primaryColor);
-              }
-            }, (err) => {
-              // Silently fail professional theme lookup if permissions not yet ready
-              console.warn("Theme lookup pending...", err.message);
-            });
+            if (staffData.userId) {
+              const professionalRef = doc(db, 'users', staffData.userId);
+              onSnapshot(professionalRef, (pSnap) => {
+                if (pSnap.exists()) {
+                  const pData = pSnap.data();
+                  if (pData.darkMode) document.documentElement.classList.add('dark');
+                  else document.documentElement.classList.remove('dark');
+                  if (pData.primaryColor) document.documentElement.style.setProperty('--color-primary', pData.primaryColor);
+                }
+              }, (err) => {
+                console.warn("Professional theme lookup restricted:", err.message);
+              });
+            }
+            setLoading(false);
           } else {
             // Fallback for legacy staff
             const q = query(collection(db, 'staff'), where('authUid', '==', u.uid), limit(1));
@@ -126,14 +129,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                  setProfile(userBaseData);
                  setIsStaff(true);
                  setPermissions([]);
+               } else if (userBaseData.role === 'admin') {
+                 setProfile(userBaseData);
+                 setIsStaff(false);
+                 setOwnerId(u.uid);
+                 setPermissions(['sys_dashboard']);
+                 if (userBaseData.darkMode) document.documentElement.classList.add('dark');
+                 else document.documentElement.classList.remove('dark');
+                 if (userBaseData.primaryColor) document.documentElement.style.setProperty('--color-primary', userBaseData.primaryColor);
                } else {
-                 // Admin or Medico not in staff => they are the Owner
                  setProfile(userBaseData);
                  setIsStaff(false);
                  setOwnerId(u.uid);
                  setPermissions(['all']);
-
-                 // Apply theme settings
                  if (userBaseData.darkMode) document.documentElement.classList.add('dark');
                  else document.documentElement.classList.remove('dark');
                  if (userBaseData.primaryColor) document.documentElement.style.setProperty('--color-primary', userBaseData.primaryColor);

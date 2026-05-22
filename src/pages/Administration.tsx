@@ -36,6 +36,11 @@ export function Administration() {
   const [appointmentsCount, setAppointmentsCount] = useState(0);
   const [staff, setStaff] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Plans Management
+  const [dbPlans, setDbPlans] = useState<any[]>([]);
+  const [activePlan, setActivePlan] = useState<any>({ name: 'Cargando Plan...', price: 0, whatsappCredit: 0 });
+  const [isPlanSelectorOpen, setIsPlanSelectorOpen] = useState(false);
   
   // Modals
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
@@ -119,13 +124,39 @@ export function Administration() {
       }
     );
 
-    // Load theme from profile
-    getDoc(doc(db, 'users', ownerId)).then(docSnap => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.primaryColor) setSelectedTheme(data.primaryColor);
-        if (data.darkMode !== undefined) setIsDarkMode(data.darkMode);
-      }
+    // Fetch Platform Plans and user choice
+    getDocs(collection(db, 'plans')).then(qSnap => {
+      let list: any[] = [];
+      qSnap.forEach(docSnap => {
+        list.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      // Sort
+      const orderMap: Record<string, number> = { 'basico': 1, 'plus': 2, 'premium': 3 };
+      list.sort((a, b) => (orderMap[a.id] || 99) - (orderMap[b.id] || 99));
+      setDbPlans(list);
+
+      // Load theme and plan details from profile
+      getDoc(doc(db, 'users', ownerId)).then(docSnap => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.primaryColor) setSelectedTheme(data.primaryColor);
+          if (data.darkMode !== undefined) setIsDarkMode(data.darkMode);
+          
+          const activePlanKey = data.activePlanId || data.planId;
+          if (activePlanKey) {
+            const userPlan = list.find(p => p.id === activePlanKey);
+            if (userPlan) {
+              setActivePlan(userPlan);
+              return;
+            }
+          }
+          // Default fallbacks back to database-driven Plus/Básico
+          const fallbackPlan = list.find(l => l.id === 'plus') || list[0] || { name: 'Plus', price: 39, whatsappCredit: 500, usersLimit: 3, secretariesLimit: 2 };
+          setActivePlan(fallbackPlan);
+        }
+      });
+    }).catch(err => {
+      console.warn("Failed fetching plans, using local placeholder plan:", err);
     });
 
     return () => {
@@ -138,6 +169,18 @@ export function Administration() {
 
   const handleSaveUser = async () => {
     if (!ownerId) return;
+
+    const isBecomingSecretary = userForm.role?.toLowerCase() === 'secretary';
+    const wasSecretary = selectedUser?.role?.toLowerCase() === 'secretary';
+
+    if (isBecomingSecretary && !wasSecretary) {
+      const currentSecretariesCount = staff.filter(s => s.role?.toLowerCase() === 'secretary').length;
+      const maxSecretaries = activePlan?.secretariesLimit || 0;
+      if (currentSecretariesCount >= maxSecretaries) {
+        showToast(`Tu plan actual (${activePlan?.name || 'Básico'}) permite un máximo de ${maxSecretaries} ${maxSecretaries === 1 ? 'Secretaria' : 'Secretarias'}. Por favor actualiza tu plan en la pestaña Facturación.`, 'error');
+        return;
+      }
+    }
 
     if (!selectedUser && !userForm.password) {
       showToast('La contraseña es obligatoria para nuevos usuarios', 'error');
@@ -163,15 +206,11 @@ export function Administration() {
       const result = await response.json();
       const authUid = result.uid;
 
-      // Sync with users collection (Role and basic info)
-      await setDoc(doc(db, 'users', authUid), {
-        name: userForm.name,
-        email: userForm.email,
-        role: userForm.role.toLowerCase(),
-        updatedAt: serverTimestamp()
-      }, { merge: true });
+      if (result.warning) {
+        showToast(result.warning, 'info');
+      }
 
-      // Now sync with Firestore staff collection client-side
+      // Now sync with Firestore staff collection client-side first so relational checking succeeds
       if (selectedUser) {
         await updateDoc(doc(db, 'staff', selectedUser.id), {
           ...userForm,
@@ -187,6 +226,15 @@ export function Administration() {
           createdAt: serverTimestamp()
         });
       }
+
+      // Sync with users collection (Role, basic info, and status)
+      await setDoc(doc(db, 'users', authUid), {
+        name: userForm.name,
+        email: userForm.email,
+        role: userForm.role.toLowerCase(),
+        status: userForm.status,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
 
       setIsUserModalOpen(false);
       setSelectedUser(null);
@@ -286,6 +334,21 @@ export function Administration() {
     }
   };
 
+  const handleSelectPlan = async (plan: any) => {
+    if (!ownerId) return;
+    try {
+      await updateDoc(doc(db, 'users', ownerId), {
+        activePlanId: plan.id,
+        planId: plan.id
+      });
+      setActivePlan(plan);
+      showToast(`Plan cambiado a ${plan.name} exitosamente`, 'success');
+      setIsPlanSelectorOpen(false);
+    } catch (e: any) {
+      showToast('Error al cambiar plan: ' + e.message, 'error');
+    }
+  };
+
   const themes = [
     { name: 'Azul Médico (Default)', color: '#00478D' },
     { name: 'Bosque Sanador', color: '#1B5E20' },
@@ -334,41 +397,99 @@ export function Administration() {
           transition={{ duration: 0.2 }}
         >
           {activeTab === 'overview' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {[
-                { label: 'Usuarios y Permisos', desc: `${staff.length} miembros registrados.`, icon: Users, tab: 'users' as const },
-                { label: 'Notificaciones Recientes', desc: `${notifications.length} eventos registrados hoy.`, icon: Bell, tab: 'notifications' as const },
-                { label: 'Copias de Seguridad', desc: `${patientsCount} pacientes y ${appointmentsCount} turnos listos.`, icon: Database, tab: 'backup' as const },
-                { label: 'Personalización', desc: 'Identidad visual y temas.', icon: Layout, tab: 'theme' as const },
-                { label: 'Facturación', desc: 'Plan Profesional Activo.', icon: CreditCard, tab: 'billing' as const },
-                { label: 'Seguridad', desc: 'Control de acceso biométrico inactivo.', icon: Shield, tab: 'overview' as const },
-              ].map((item) => (
-                <div 
-                  key={item.label}
-                  onClick={() => setActiveTab(item.tab)}
-                  className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm hover:shadow-md transition-all cursor-pointer group"
-                >
-                  <div className="p-3 bg-surface rounded-xl mb-4 group-hover:bg-primary/5 transition-colors w-fit">
-                    <item.icon size={24} className="text-primary" />
+            <div className="space-y-6">
+              {/* Plan Convenido Card */}
+              <div className="bg-gradient-to-r from-primary/5 to-tertiary/5 border border-outline-variant rounded-xl p-6 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-primary bg-primary/10 px-2.5 py-0.5 rounded-full font-sans">
+                        Suscripción Convenida
+                      </span>
+                      <span className="text-[9px] font-black uppercase tracking-widest bg-tertiary-container text-on-tertiary-container px-2.5 py-0.5 rounded-full font-sans">
+                        Plan Activo
+                      </span>
+                    </div>
+                    <h3 className="text-lg font-black text-on-surface">Plan {activePlan?.name || 'Profesional'}</h3>
+                    <p className="text-xs text-on-surface-variant font-sans">
+                      Este plan define la disponibilidad de recursos y accesos para tu equipo de la clínica.
+                    </p>
                   </div>
-                  <h3 className="text-[14px] font-black text-on-surface mb-1">{item.label}</h3>
-                  <p className="text-[11px] text-on-surface-variant">{item.desc}</p>
+                  <button 
+                    onClick={() => setActiveTab('billing')}
+                    className="self-start sm:self-center px-4 py-2 bg-primary text-white font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all flex items-center gap-2 cursor-pointer font-sans"
+                  >
+                    <CreditCard size={12} />
+                    Cambiar Plan / Facturación
+                  </button>
                 </div>
-              ))}
+                
+                <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-6 border-t border-outline-variant bg-white/40 p-4 rounded-xl font-sans">
+                  <div className="space-y-1">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant">Valor del Plan Convenido</p>
+                    <p className="text-[16px] font-extrabold text-on-surface">${activePlan?.price || 0} / mes</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant">Secretarias Permitidas</p>
+                    <div className="flex items-baseline gap-1.5">
+                      <p className="text-[16px] font-extrabold text-on-surface">
+                        {staff.filter(s => s.role?.toLowerCase() === 'secretary').length} de {activePlan?.secretariesLimit || 0}
+                      </p>
+                      <span className="text-[10px] text-on-surface-variant/80">creadas</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant">Usuarios Máximos (Médicos)</p>
+                    <p className="text-[16px] font-extrabold text-on-surface">{activePlan?.usersLimit || 1}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant font-sans">Crédito WhatsApp / Mes</p>
+                    <p className="text-[16px] font-extrabold text-on-surface">{activePlan?.whatsappCredit || 0} créditos</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {[
+                  { label: 'Usuarios y Permisos', desc: `${staff.length} miembros registrados.`, icon: Users, tab: 'users' as const },
+                  { label: 'Notificaciones Recientes', desc: `${notifications.length} eventos registrados hoy.`, icon: Bell, tab: 'notifications' as const },
+                  { label: 'Copias de Seguridad', desc: `${patientsCount} pacientes y ${appointmentsCount} turnos listos.`, icon: Database, tab: 'backup' as const },
+                  { label: 'Personalización', desc: 'Identidad visual y temas.', icon: Layout, tab: 'theme' as const },
+                  { label: 'Facturación', desc: 'Plan Profesional Activo.', icon: CreditCard, tab: 'billing' as const },
+                  { label: 'Seguridad', desc: 'Control de acceso biométrico inactivo.', icon: Shield, tab: 'overview' as const },
+                ].map((item) => (
+                  <div 
+                    key={item.label}
+                    onClick={() => setActiveTab(item.tab)}
+                    className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm hover:shadow-md transition-all cursor-pointer group"
+                  >
+                    <div className="p-3 bg-surface rounded-xl mb-4 group-hover:bg-primary/5 transition-colors w-fit">
+                      <item.icon size={24} className="text-primary" />
+                    </div>
+                    <h3 className="text-[14px] font-black text-on-surface mb-1">{item.label}</h3>
+                    <p className="text-[11px] text-on-surface-variant">{item.desc}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
           {activeTab === 'users' && (
             <div className="bg-white rounded-xl border border-outline-variant shadow-sm overflow-hidden">
-              <div className="px-6 py-4 border-b border-outline-variant flex justify-between items-center">
-                <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Gestión de Personal</h3>
+              <div className="px-6 py-4 border-b border-outline-variant flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="space-y-0.5">
+                  <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Gestión de Personal</h3>
+                  <p className="text-[11px] text-on-surface-variant font-sans flex items-center gap-1.5">
+                    Límite del Plan: <strong className="text-on-surface font-extrabold">{staff.filter(s => s.role?.toLowerCase() === 'secretary').length} de {activePlan?.secretariesLimit || 0}</strong> Secretarias registradas.
+                  </p>
+                </div>
                 <button 
                   onClick={() => {
                     resetUserForm();
                     setSelectedUser(null);
                     setIsUserModalOpen(true);
                   }}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-primary text-white text-[10px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans"
+                  className="flex items-center gap-2 px-3 py-1.5 bg-primary text-white text-[10px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans cursor-pointer"
                 >
                   <Plus size={14} />
                   Invitar Secretario
@@ -653,33 +774,38 @@ export function Administration() {
                 </div>
                 <div className="flex-1 text-center md:text-left">
                   <div className="flex flex-col md:flex-row md:items-baseline gap-2 mb-1">
-                    <h3 className="text-xl font-black text-on-surface">Plan Professional</h3>
+                    <h3 className="text-xl font-black text-on-surface">Plan {activePlan?.name || 'Profesional'}</h3>
                     <span className="text-[11px] font-bold bg-primary text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">Activo</span>
                   </div>
-                  <p className="text-sm text-on-surface-variant font-sans">Suscripción anual - Próxima renovación: 15 de Junio, 2026</p>
+                  <p className="text-sm text-on-surface-variant font-sans">Suscripción activa - Próxima renovación: 15 de Junio, 2026</p>
                   <div className="mt-4 flex items-center justify-center md:justify-start gap-6 font-sans">
                     <div>
-                      <p className="text-[20px] font-bold text-on-surface">$49</p>
+                      <p className="text-[20px] font-bold text-on-surface">${activePlan?.price || 0}</p>
                       <p className="text-[10px] text-on-surface-variant uppercase font-black">Al Mes</p>
                     </div>
                     <div className="h-8 w-[1px] bg-outline-variant"></div>
                     <div>
-                      <p className="text-[20px] font-bold text-on-surface">1,000</p>
+                      <p className="text-[20px] font-bold text-on-surface">{activePlan?.whatsappCredit || 0}</p>
                       <p className="text-[10px] text-on-surface-variant uppercase font-black">WhatsApps Incl.</p>
                     </div>
                   </div>
                 </div>
                 <div className="flex flex-col gap-2 w-full md:w-auto font-sans">
-                  <button className="px-6 py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-primary/90 transition-all">Cambiar Plan</button>
-                  <button className="px-6 py-2.5 bg-white border border-outline-variant rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-surface transition-all">Ver Facturas</button>
+                  <button 
+                    onClick={() => setIsPlanSelectorOpen(true)}
+                    className="px-6 py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-primary/90 transition-all cursor-pointer"
+                  >
+                    Cambiar Plan
+                  </button>
+                  <button className="px-6 py-2.5 bg-white border border-outline-variant rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-surface transition-all cursor-pointer">Ver Facturas</button>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 font-sans">
                 {[
-                  { label: 'Método de Pago', value: 'Visa ending in 4242', icon: CreditCard },
+                  { label: 'Método de Pago', value: 'Visa terminada en 4242', icon: CreditCard },
                   { label: 'Cuotas Adicionales', value: '$0.05 / msj extra', icon: Bell },
-                  { label: 'Soporte VIP', value: 'Disponible 24/7', icon: Smartphone },
+                  { label: 'Soporte de Plataforma', value: 'Disponible 24/7', icon: Smartphone },
                 ].map((stat) => (
                   <div key={stat.label} className="bg-white p-5 rounded-xl border border-outline-variant shadow-sm">
                     <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant mb-1">{stat.label}</p>
@@ -810,6 +936,90 @@ export function Administration() {
             >
               <Save size={14} />
               {selectedUser ? "Actualizar" : "Crear Acceso"}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Plan Selection Modal */}
+      <Modal
+        isOpen={isPlanSelectorOpen}
+        onClose={() => setIsPlanSelectorOpen(false)}
+        title="Cambiar Plan de Suscripción"
+        className="max-w-4xl font-sans"
+      >
+        <div className="space-y-6">
+          <p className="text-sm text-on-surface-variant">Selecciona el plan que mejor se adapte al volumen de tu clínica y equipo. El límite de usuarios y secretarias se aplicará de inmediato.</p>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {dbPlans.map((plan) => {
+              const isCurrent = plan.id === activePlan?.id;
+              return (
+                <div 
+                  key={plan.id} 
+                  className={cn(
+                    "border rounded-2xl p-6 flex flex-col justify-between transition-all",
+                    isCurrent 
+                      ? "border-primary bg-primary/5 ring-1 ring-primary shadow-md" 
+                      : "border-outline-variant hover:border-primary/50 shadow-sm bg-white"
+                  )}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="font-extrabold text-on-surface text-lg">{plan.name}</h4>
+                      {isCurrent && (
+                        <span className="text-[9px] font-bold bg-primary text-white px-2 py-0.5 rounded-full uppercase">Activo</span>
+                      )}
+                    </div>
+                    
+                    <div className="mb-4">
+                      <span className="text-3xl font-black text-on-surface">${plan.price}</span>
+                      <span className="text-xs text-on-surface-variant font-medium"> / mes</span>
+                    </div>
+
+                    <ul className="space-y-3 mb-6 text-xs text-on-surface-variant font-medium">
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 size={14} className="text-primary flex-shrink-0" />
+                        <span>{plan.usersLimit} {plan.usersLimit === 1 ? 'Usuario Profesional' : 'Usuarios Profesionales'}</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 size={14} className="text-primary flex-shrink-0" />
+                        <span>{plan.secretariesLimit} {plan.secretariesLimit === 1 ? 'Secretaria' : 'Secretarias'} por usuario</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 size={14} className="text-primary flex-shrink-0" />
+                        <span>{plan.whatsappCredit} Créditos WhatsApp / mes</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 size={14} className="text-primary flex-shrink-0" />
+                        <span>Soporte estándar</span>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <button
+                    disabled={isCurrent}
+                    onClick={() => handleSelectPlan(plan)}
+                    className={cn(
+                      "w-full py-2.5 rounded-xl text-[10px] uppercase font-black tracking-widest transition-all cursor-pointer",
+                      isCurrent
+                        ? "bg-outline-variant text-on-surface-variant/50 cursor-not-allowed"
+                        : "bg-primary text-white hover:bg-primary/95 shadow-sm hover:shadow-md"
+                    )}
+                  >
+                    {isCurrent ? 'Plan Actual' : 'Seleccionar Plan'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4 border-t border-outline-variant">
+            <button 
+              onClick={() => setIsPlanSelectorOpen(false)}
+              className="px-6 py-2 bg-surface hover:bg-outline-variant border border-outline-variant rounded-xl text-[11px] font-bold uppercase tracking-widest transition-all cursor-pointer"
+            >
+              Cancelar
             </button>
           </div>
         </div>

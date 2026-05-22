@@ -10,9 +10,13 @@ export function SideNavBar() {
   const { permissions } = useAuth();
   const handleLogout = () => signOut(auth);
 
-  const filteredItems = NAV_ITEMS.filter(item => 
-    permissions.includes('all') || permissions.includes(item.id)
-  );
+  const filteredItems = NAV_ITEMS.filter(item => {
+    if (permissions.includes(item.id)) return true;
+    if (permissions.includes('all')) {
+      return !item.id.startsWith('sys_');
+    }
+    return false;
+  });
 
   return (
     <aside className="w-56 bg-white border-r border-outline-variant h-screen fixed left-0 top-0 flex flex-col z-50 shadow-[4px_0_12px_rgba(0,0,0,0.02)]">
