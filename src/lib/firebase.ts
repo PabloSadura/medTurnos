@@ -51,5 +51,6 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  // Do not crash the entire react rendering cycle on background snapshot listeners
+  return errInfo;
 }

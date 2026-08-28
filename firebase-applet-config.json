@@ -1,10 +1,11 @@
 {
-  "projectId": "tusturnosweb-19c03",
-  "appId": "1:878872239347:web:02803cccca6a9588c6eb86",
-  "apiKey": "AIzaSyDP454aL2EOU0mg9GdT5TURMUxcac_yRWY",
-  "authDomain": "tusturnosweb-19c03.firebaseapp.com",
-  "firestoreDatabaseId": "(default)",
-  "storageBucket": "tusturnosweb-19c03.firebasestorage.app",
-  "messagingSenderId": "878872239347",
+  "projectId": "gen-lang-client-0464775009",
+  "appId": "1:400563388302:web:7cbe744bbfa8becbf7aedf",
+  "apiKey": "AIzaSyAJ7do3-ncfbXYZWaCnNdWTlpG7r0DhGuQ",
+  "authDomain": "gen-lang-client-0464775009.firebaseapp.com",
+  "databaseURL": "https://gen-lang-client-0464775009-default-rtdb.firebaseio.com",
+  "firestoreDatabaseId": "turneroweb",
+  "storageBucket": "gen-lang-client-0464775009.firebasestorage.app",
+  "messagingSenderId": "400563388302",
   "measurementId": ""
 }

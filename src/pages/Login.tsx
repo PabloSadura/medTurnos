@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { auth } from '../lib/firebase';
-import { signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { Activity, Mail, Lock, Eye, EyeOff, ShieldCheck, LockIcon, AlertCircle } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -29,11 +29,24 @@ export function Login() {
     e.preventDefault();
     setError(null);
     setLoading(true);
+    const cleanEmail = email.trim();
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      await signInWithEmailAndPassword(auth, cleanEmail, password);
     } catch (err: any) {
       console.error('Login error:', err);
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+      // If logging in as admin@mail.com and user doesn't exist yet in newly connected Firebase project, initialize it
+      if (cleanEmail.toLowerCase() === 'admin@mail.com' && (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials')) {
+        try {
+          await createUserWithEmailAndPassword(auth, cleanEmail, password);
+          return;
+        } catch (createErr: any) {
+          if (createErr.code !== 'auth/email-already-in-use') {
+            console.error('Admin create error:', createErr);
+          }
+        }
+      }
+
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials') {
         setError('Credenciales incorrectas. Por favor, verifique su email y contraseña.');
       } else if (err.code === 'auth/invalid-email') {
         setError('El formato del email no es válido.');

@@ -37,6 +37,84 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  // Database Initialization Endpoint based on firebase-blueprint.json
+  app.post("/api/database/init", async (req, res) => {
+    try {
+      const results: Record<string, any> = {};
+
+      // 1. Initialize Plans collection
+      const defaultPlans = [
+        { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, whatsappCredit: 100, price: 19 },
+        { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, whatsappCredit: 500, price: 39 },
+        { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, whatsappCredit: 2000, price: 79 }
+      ];
+
+      for (const p of defaultPlans) {
+        await adminDb.collection("plans").doc(p.id).set({
+          name: p.name,
+          usersLimit: p.usersLimit,
+          secretariesLimit: p.secretariesLimit,
+          whatsappCredit: p.whatsappCredit,
+          price: p.price,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      }
+      results.plans = defaultPlans.map(p => p.id);
+
+      // 2. Ensure admin user in 'users' collection
+      const adminUsersSnap = await adminDb.collection("users").where("email", "==", "admin@mail.com").get();
+      if (adminUsersSnap.empty) {
+        await adminDb.collection("users").doc("admin_root").set({
+          email: "admin@mail.com",
+          name: "Administrador del Sistema",
+          role: "admin",
+          status: "Activo",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        results.adminUser = "created (admin_root)";
+      } else {
+        results.adminUser = "exists";
+      }
+
+      // 3. Ensure system metadata / initial documents for blueprint collections
+      const collectionsToCheck = [
+        "appointments",
+        "patients",
+        "treatments",
+        "stocks",
+        "profiles",
+        "reminder_settings",
+        "staff",
+        "whatsapp_logs"
+      ];
+
+      for (const colName of collectionsToCheck) {
+        const metaDoc = adminDb.collection(colName).doc("_meta");
+        const docSnap = await metaDoc.get();
+        if (!docSnap.exists) {
+          await metaDoc.set({
+            initialized: true,
+            createdAt: new Date().toISOString(),
+            description: `Collection for ${colName}`
+          });
+          results[colName] = "initialized";
+        } else {
+          results[colName] = "ready";
+        }
+      }
+
+      res.json({
+        success: true,
+        message: "Base de datos y colecciones inicializadas de acuerdo a firebase-blueprint.json",
+        results
+      });
+    } catch (error: any) {
+      console.error("Database initialization error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // User Management API
   app.post("/api/staff/manage", async (req, res) => {
     const { email, password, name, role, permissions, status, userId, staffId } = req.body;

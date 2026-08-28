@@ -3,7 +3,7 @@ import {
   Users, Shield, LayoutDashboard, Settings, Mail, Plus, 
   Trash2, Save, UserCheck, UserMinus, Clock, Activity,
   ChevronRight, Search, Filter, MoreVertical, CreditCard,
-  Smartphone, Check
+  Smartphone, Check, Database, RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -13,11 +13,13 @@ import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../lib/firebase';
 import { doc, deleteDoc, serverTimestamp, collection, getDocs, setDoc } from 'firebase/firestore';
+import { seedAllCollections } from '../lib/dbSeeder';
 
 export function SystemAdmin() {
   const { showToast } = useToast();
   const [professionals, setProfessionals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeAdminTab, setActiveAdminTab] = useState<'users' | 'plans'>('users');
   
@@ -110,6 +112,21 @@ export function SystemAdmin() {
       showToast('Error al cargar planes: ' + error.message, 'error');
     } finally {
       setPlansLoading(false);
+    }
+  };
+
+  const handleSeedDatabase = async () => {
+    try {
+      setSeeding(true);
+      await seedAllCollections();
+      showToast('¡Todas las colecciones han sido cargadas exitosamente en Firestore!', 'success');
+      fetchProfessionals();
+      fetchPlans();
+    } catch (error: any) {
+      console.error("Seed error:", error);
+      showToast('Error al inicializar colecciones: ' + (error.message || 'Error de conexión'), 'error');
+    } finally {
+      setSeeding(false);
     }
   };
 
@@ -241,6 +258,23 @@ export function SystemAdmin() {
           <h1 className="headline-lg text-on-surface">Administración del Sistema</h1>
           <p className="body-md text-on-surface-variant">Vista global de usuarios, planes y configuración central de la plataforma.</p>
         </div>
+        <button
+          onClick={handleSeedDatabase}
+          disabled={seeding}
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-[12px] font-bold tracking-wide hover:bg-primary/90 transition-all shadow-sm cursor-pointer disabled:opacity-50"
+        >
+          {seeding ? (
+            <>
+              <RefreshCw size={16} className="animate-spin" />
+              <span>Cargando colecciones...</span>
+            </>
+          ) : (
+            <>
+              <Database size={16} />
+              <span>Cargar Todas las Colecciones en Firestore</span>
+            </>
+          )}
+        </button>
       </div>
 
       {/* Tab Selector */}

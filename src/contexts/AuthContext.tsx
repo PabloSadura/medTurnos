@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, onSnapshot, collection, query, where, getDocs, limit } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where, getDocs, limit, setDoc, serverTimestamp } from 'firebase/firestore';
 
 interface AuthContextType {
   user: User | null;
@@ -44,20 +44,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      const emailLower = u.email?.toLowerCase().trim() || '';
+      const isAdminEmail = emailLower === 'admin@mail.com' || emailLower === 'pablosadura@gmail.com';
+
       // 1. Try to find in users
       const userRef = doc(db, 'users', u.uid);
       const unsubscribeUser = onSnapshot(userRef, async (docSnap) => {
+        if (isAdminEmail) {
+          if (!docSnap.exists() || docSnap.data().role !== 'admin' || docSnap.data().status !== 'Activo') {
+            try {
+              await setDoc(userRef, {
+                email: u.email,
+                name: docSnap.exists() && docSnap.data().name ? docSnap.data().name : (u.displayName || 'Administrador del Sistema'),
+                role: 'admin',
+                status: 'Activo',
+                updatedAt: serverTimestamp()
+              }, { merge: true });
+            } catch (syncErr) {
+              console.warn("Could not sync admin profile to Firestore:", syncErr);
+            }
+          }
+          const baseData = docSnap.exists() ? docSnap.data() : {};
+          setProfile({
+            id: u.uid,
+            email: u.email,
+            name: baseData.name || u.displayName || 'Administrador del Sistema',
+            role: 'admin',
+            status: 'Activo',
+            ...baseData
+          });
+          setIsStaff(false);
+          setOwnerId(u.uid);
+          setPermissions(['sys_dashboard', 'admin', 'all', 'dashboard', 'agenda', 'patients', 'treatments', 'inventory', 'reminders']);
+          if (baseData.darkMode) document.documentElement.classList.add('dark');
+          else document.documentElement.classList.remove('dark');
+          if (baseData.primaryColor) document.documentElement.style.setProperty('--color-primary', baseData.primaryColor);
+          setLoading(false);
+          return;
+        }
+
         if (docSnap.exists()) {
           const data = docSnap.data();
           
+          if (data.role === 'admin') {
+            setProfile({ id: u.uid, ...data });
+            setIsStaff(false);
+            setOwnerId(u.uid);
+            setPermissions(['sys_dashboard', 'admin', 'all', 'dashboard', 'agenda', 'patients', 'treatments', 'inventory', 'reminders']);
+            if (data.darkMode) document.documentElement.classList.add('dark');
+            else document.documentElement.classList.remove('dark');
+            if (data.primaryColor) document.documentElement.style.setProperty('--color-primary', data.primaryColor);
+            setLoading(false);
+            return;
+          }
+
           if (data.role === 'secretary') {
             // It's a secretary, fetch her staff record for ownerId and permissions
             checkStaffStatus(u, data);
           } else {
-            // It's a professional (medico or admin)
-            // But we still check if they are "Staff" of someone else first?
-            // Actually, the current logic assumes if you have a user doc and no staff link, you are the owner.
-            // Let's refine checkStaffStatus to be called for everyone who MIGHT be staff.
+            // It's a professional (medico)
             checkStaffStatus(u, data);
           }
         } else {
@@ -65,6 +110,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           checkStaffStatus(u);
         }
       }, (error) => {
+        if (isAdminEmail) {
+          setProfile({
+            id: u.uid,
+            email: u.email,
+            name: u.displayName || 'Administrador del Sistema',
+            role: 'admin',
+            status: 'Activo',
+          });
+          setIsStaff(false);
+          setOwnerId(u.uid);
+          setPermissions(['sys_dashboard', 'admin', 'all', 'dashboard', 'agenda', 'patients', 'treatments', 'inventory', 'reminders']);
+          setLoading(false);
+          return;
+        }
         // If it's a permission error, they might be a secretary who doesn't have a users doc
         // or the rules are still being applied. Try staff check.
         if (error.message.includes('permission')) {
@@ -146,11 +205,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                  else document.documentElement.classList.remove('dark');
                  if (userBaseData.primaryColor) document.documentElement.style.setProperty('--color-primary', userBaseData.primaryColor);
                }
+            } else {
+              // User has no staff doc and no userBaseData doc yet
+              setProfile({
+                id: u.uid,
+                email: u.email,
+                name: u.displayName || u.email?.split('@')[0] || 'Usuario',
+                role: 'medico',
+                status: 'Activo'
+              });
+              setIsStaff(false);
+              setOwnerId(u.uid);
+              setPermissions(['all', 'dashboard', 'agenda', 'patients', 'treatments', 'inventory', 'reminders']);
             }
             setLoading(false);
           }
         }, (error) => {
-          console.error("Staff lookup error:", error);
+          console.warn("Staff lookup error:", error);
+          if (userBaseData) {
+            setProfile(userBaseData);
+            setOwnerId(userBaseData.userId || u.uid);
+            setPermissions(userBaseData.role === 'admin' ? ['sys_dashboard', 'admin', 'all'] : ['all', 'dashboard', 'agenda', 'patients', 'treatments', 'inventory', 'reminders']);
+          } else {
+            setProfile({
+              id: u.uid,
+              email: u.email,
+              name: u.displayName || u.email?.split('@')[0] || 'Usuario',
+              role: 'medico',
+              status: 'Activo'
+            });
+            setOwnerId(u.uid);
+            setPermissions(['all', 'dashboard', 'agenda', 'patients', 'treatments', 'inventory', 'reminders']);
+          }
           setLoading(false);
         });
       };
