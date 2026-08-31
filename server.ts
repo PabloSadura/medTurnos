@@ -8,23 +8,43 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Load Firebase config
-const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+// Load Firebase config safely
+let firebaseConfig: any = {
+  projectId: "gen-lang-client-0464775009",
+  firestoreDatabaseId: "turneroweb"
+};
 
-// Initialize Firebase Admin
-if (!admin.apps.length) {
-  admin.initializeApp({
-    projectId: firebaseConfig.projectId,
-  });
+try {
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  }
+} catch (err) {
+  console.warn("Could not read firebase-applet-config.json, using defaults:", err);
 }
-// Try to get a more robust admin DB reference if possible
-const adminDb = admin.firestore();
-if (firebaseConfig.firestoreDatabaseId) {
-  // @ts-ignore - some versions of admin sdk support this
-  try { (adminDb as any).settings({ databaseId: firebaseConfig.firestoreDatabaseId }); } catch(e) {}
+
+// Initialize Firebase Admin safely
+let adminDb: any;
+let auth: any;
+
+try {
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      projectId: firebaseConfig.projectId || process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0464775009",
+    });
+  }
+  adminDb = admin.firestore();
+  if (firebaseConfig.firestoreDatabaseId) {
+    try {
+      (adminDb as any).settings({ databaseId: firebaseConfig.firestoreDatabaseId });
+    } catch (e) {
+      // Ignored if settings already locked
+    }
+  }
+  auth = admin.auth();
+} catch (err) {
+  console.warn("Firebase Admin SDK initialization warning:", err);
 }
-const auth = admin.auth();
 
 async function startServer() {
   const app = express();
