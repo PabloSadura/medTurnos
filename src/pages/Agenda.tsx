@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
@@ -42,6 +42,26 @@ export function Agenda() {
 
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editAptData, setEditAptData] = useState<{
+    id: string;
+    patientId: string;
+    patientName: string;
+    date: string;
+    time: string;
+    type: string;
+    notes: string;
+    duration?: number;
+    status?: string;
+  }>({
+    id: '',
+    patientId: '',
+    patientName: '',
+    date: '',
+    time: '09:00',
+    type: 'Check-up General',
+    notes: ''
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreatingNewPatient, setIsCreatingNewPatient] = useState(false);
   const [selectedPatientStats, setSelectedPatientStats] = useState<{ attendance: number, absences: number } | null>(null);
@@ -280,6 +300,68 @@ export function Agenda() {
       showToast('Estado actualizado correctamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `appointments/${selectedAppointment.id}`);
+    }
+  };
+
+  const handleOpenEditAppointment = (apt: any, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setEditAptData({
+      id: apt.id,
+      patientId: apt.patientId || '',
+      patientName: apt.patientName || '',
+      date: apt.date || formatLocalDate(new Date()),
+      time: apt.time || '09:00',
+      type: apt.type || 'Check-up General',
+      notes: apt.notes || '',
+      duration: apt.duration || 30,
+      status: apt.status || 'pendiente'
+    });
+    setIsDetailModalOpen(false);
+    setIsEditModalOpen(true);
+  };
+
+  const handleSaveEditedAppointment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editAptData.id) return;
+    try {
+      const [year, month, day] = editAptData.date.split('-').map(Number);
+      const [hours, minutes] = editAptData.time.split(':').map(Number);
+      const appointmentDate = new Date(year, month - 1, day, hours, minutes);
+
+      // Validate working hours if configured
+      if (workingHours) {
+        const standardDay = appointmentDate.getDay();
+        const mappedDay = standardDay === 0 ? 7 : standardDay;
+        const workingDays = workingHours.workingDays || workingHours.days || [];
+        
+        if (workingDays.length > 0 && !workingDays.includes(mappedDay)) {
+          showToast(`El profesional no atiende los días ${days[mappedDay - 1]}.`, 'error');
+          return;
+        }
+
+        const timeString = editAptData.time;
+        const isMorning = workingHours.morningActive !== false && timeString >= workingHours.morningStart && timeString <= workingHours.morningEnd;
+        const isAfternoon = workingHours.afternoonActive !== false && timeString >= workingHours.afternoonStart && timeString <= workingHours.afternoonEnd;
+
+        if (!isMorning && !isAfternoon) {
+          showToast(`La hora seleccionada (${timeString}) está fuera de los horarios de atención activos.`, 'error');
+          return;
+        }
+      }
+
+      await updateDoc(doc(db, 'appointments', editAptData.id), {
+        date: editAptData.date,
+        time: editAptData.time,
+        type: editAptData.type,
+        notes: editAptData.notes || '',
+        startTime: appointmentDate,
+        updatedAt: serverTimestamp()
+      });
+
+      setIsEditModalOpen(false);
+      showToast('Fecha y hora del turno actualizadas correctamente');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `appointments/${editAptData.id}`);
     }
   };
 
@@ -677,9 +759,19 @@ export function Agenda() {
                   )}
                 >
                   <div className="flex justify-between items-start mb-2">
-                    <span className="text-[13px] font-black text-primary bg-primary/5 px-2 py-0.5 rounded border border-primary/10">
-                      {apt.time}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[13px] font-black text-primary bg-primary/5 px-2 py-0.5 rounded border border-primary/10">
+                        {apt.time}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => handleOpenEditAppointment(apt, e)}
+                        title="Editar fecha y hora"
+                        className="p-1 rounded-md text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors"
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                    </div>
                     <div className={cn(
                       "w-2 h-2 rounded-full",
                       apt.status === 'pendiente' ? "bg-amber-500" :
@@ -953,12 +1045,35 @@ export function Agenda() {
               <div className="w-12 h-12 rounded-full bg-primary-container text-primary flex items-center justify-center text-lg font-bold">
                 {selectedAppointment.patientName.charAt(0)}
               </div>
-              <div>
+              <div className="flex-1">
                 <h4 className="text-sm font-bold text-on-surface">{selectedAppointment.patientName}</h4>
                 <p className="text-[11px] text-on-surface-variant tracking-wide uppercase font-bold">
-                  {selectedAppointment.time} • {selectedAppointment.duration} min
+                  {selectedAppointment.time} • {selectedAppointment.duration || 30} min
                 </p>
               </div>
+            </div>
+
+            {/* Fecha y Hora con botón de edición */}
+            <div className="p-4 bg-surface-bright rounded-xl border border-outline-variant flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center font-bold shrink-0">
+                  <CalendarClock size={18} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Fecha y Hora</p>
+                  <p className="text-[13px] font-bold text-on-surface">
+                    {selectedAppointment.date} a las {selectedAppointment.time} hs
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleOpenEditAppointment(selectedAppointment)}
+                className="px-3 py-2 bg-primary text-white hover:bg-primary/90 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm"
+              >
+                <Edit2 size={13} />
+                Editar Fecha / Hora
+              </button>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -973,6 +1088,13 @@ export function Agenda() {
                 </p>
               </div>
             </div>
+
+            {selectedAppointment.notes && (
+              <div className="p-3 bg-surface rounded-xl border border-outline-variant">
+                <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Notas</p>
+                <p className="text-[12px] text-on-surface">{selectedAppointment.notes}</p>
+              </div>
+            )}
 
             <div className="space-y-3">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Cambiar Estado</label>
@@ -1018,13 +1140,120 @@ export function Agenda() {
                   }
                   setIsDetailModalOpen(false);
                 }}
-                className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest"
+                className="flex-1 px-4 py-2 bg-surface-variant text-on-surface text-[12px] font-bold rounded-lg hover:bg-surface-variant/80 border border-outline-variant transition-colors uppercase tracking-widest"
               >
                 Ver Ficha
               </button>
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Modal Editar Fecha y Hora del Turno */}
+      <Modal
+        isOpen={isEditModalOpen}
+        onClose={() => setIsEditModalOpen(false)}
+        title="Editar Fecha y Hora del Turno"
+      >
+        <form onSubmit={handleSaveEditedAppointment} className="space-y-4">
+          <div className="p-4 bg-surface-bright rounded-xl border border-outline-variant flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Paciente</p>
+              <h4 className="text-sm font-bold text-on-surface">{editAptData.patientName}</h4>
+            </div>
+            <span className="text-[10px] font-black uppercase px-2 py-1 bg-surface rounded-md border border-outline-variant text-on-surface-variant">
+              {editAptData.status}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
+                Nueva Fecha
+              </label>
+              <input
+                type="date"
+                required
+                value={editAptData.date}
+                onChange={(e) => setEditAptData({ ...editAptData, date: e.target.value })}
+                className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
+                Nueva Hora
+              </label>
+              <input
+                type="time"
+                required
+                value={editAptData.time}
+                onChange={(e) => setEditAptData({ ...editAptData, time: e.target.value })}
+                className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
+              />
+            </div>
+          </div>
+
+          {workingHours && (
+            <div className="p-3 bg-surface-dim rounded-lg text-[11px] text-on-surface-variant space-y-1">
+              <p className="font-bold flex items-center gap-1.5">
+                <Clock size={12} /> Horarios de atención:
+              </p>
+              <p className="text-[10px]">
+                {workingHours.morningActive !== false && `Mañana: ${workingHours.morningStart || '08:00'} - ${workingHours.morningEnd || '12:00'} `}
+                {workingHours.afternoonActive !== false && `| Tarde: ${workingHours.afternoonStart || '14:00'} - ${workingHours.afternoonEnd || '18:00'}`}
+              </p>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
+              Tratamiento
+            </label>
+            <select
+              value={editAptData.type}
+              onChange={(e) => setEditAptData({ ...editAptData, type: e.target.value })}
+              className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
+            >
+              {treatments.length > 0 ? (
+                treatments.map((t) => (
+                  <option key={t.id} value={t.name}>{t.name} ({t.duration}m)</option>
+                ))
+              ) : (
+                <option value="Check-up General">Check-up General (30m)</option>
+              )}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
+              Notas / Observaciones
+            </label>
+            <textarea
+              rows={2}
+              value={editAptData.notes}
+              onChange={(e) => setEditAptData({ ...editAptData, notes: e.target.value })}
+              placeholder="Motivo de la reprogramación o notas..."
+              className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm text-on-surface focus:outline-none focus:border-primary resize-none"
+            />
+          </div>
+
+          <div className="pt-3 flex gap-3">
+            <button
+              type="button"
+              onClick={() => setIsEditModalOpen(false)}
+              className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest flex items-center justify-center gap-2"
+            >
+              <CheckCircle2 size={16} />
+              Guardar Cambios
+            </button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

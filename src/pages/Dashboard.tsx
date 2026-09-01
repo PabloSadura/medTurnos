@@ -1,17 +1,23 @@
 import { useState, useEffect } from 'react';
-import { TrendingUp, Users, CalendarCheck, CreditCard, ArrowUpRight, ArrowDownRight, Clock, PieChart as PieChartIcon } from 'lucide-react';
+import { TrendingUp, Users, CalendarCheck, CreditCard, ArrowUpRight, ArrowDownRight, Clock, PieChart as PieChartIcon, Edit2, CalendarClock, CheckCircle2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { cn } from '../lib/utils';
+import { Modal } from '../components/Modal';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, orderBy, limit, getDocs, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../components/Toast';
 
 export function Dashboard() {
   const { ownerId } = useAuth();
+  const { showToast } = useToast();
   const [revenueMode, setRevenueMode] = useState<'daily' | 'monthly'>('daily');
   const [activityMode, setActivityMode] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [chartMode, setChartMode] = useState<'weekly' | 'monthly'>('weekly');
+  const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editData, setEditData] = useState({ id: '', patientName: '', date: '', time: '', type: '', notes: '' });
   const [stats, setStats] = useState([
     { id: 'patients', label: 'Pacientes Totales', value: '0', trend: '', icon: Users, color: 'bg-secondary-container text-secondary' },
     { id: 'appointments', label: 'Turnos Hoy', value: '0', trend: '', icon: CalendarCheck, color: 'bg-tertiary-container text-tertiary' },
@@ -204,6 +210,44 @@ export function Dashboard() {
     }));
   }, [appointments, treatments, revenueMode, activityMode, chartMode]);
 
+  const handleOpenEdit = (apt: any, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSelectedAppointment(apt);
+    setEditData({
+      id: apt.id,
+      patientName: apt.patientName || '',
+      date: apt.date || new Date().toISOString().split('T')[0],
+      time: apt.time || '09:00',
+      type: apt.type || 'Check-up General',
+      notes: apt.notes || ''
+    });
+    setIsEditModalOpen(true);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editData.id) return;
+    try {
+      const [year, month, day] = editData.date.split('-').map(Number);
+      const [hours, minutes] = editData.time.split(':').map(Number);
+      const appointmentDate = new Date(year, month - 1, day, hours, minutes);
+
+      await updateDoc(doc(db, 'appointments', editData.id), {
+        date: editData.date,
+        time: editData.time,
+        type: editData.type,
+        notes: editData.notes || '',
+        startTime: appointmentDate,
+        updatedAt: serverTimestamp()
+      });
+
+      setIsEditModalOpen(false);
+      showToast('Turno reprogramado exitosamente');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `appointments/${editData.id}`);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -354,17 +398,32 @@ export function Dashboard() {
         <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider mb-4">Próximos Turnos</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {upcomingAppointments.map((apt) => (
-            <div key={apt.id} className="flex gap-3 items-center p-3 bg-surface-bright rounded-lg border border-outline-variant/30 hover:border-primary/30 transition-all cursor-pointer">
+            <div 
+              key={apt.id} 
+              onClick={() => handleOpenEdit(apt)}
+              className="flex gap-3 items-center p-3 bg-surface-bright rounded-lg border border-outline-variant/30 hover:border-primary/40 hover:shadow-sm transition-all cursor-pointer group relative"
+            >
               <div className="w-10 h-10 rounded-full bg-primary-container flex items-center justify-center text-primary text-[14px] font-bold shrink-0">
                 {apt.patientName?.charAt(0)}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex justify-between items-center mb-0.5">
-                  <h4 className="text-[12px] font-bold text-on-surface truncate">{apt.patientName}</h4>
-                  <span className="text-[9px] font-black px-1.5 py-0.5 bg-primary-container text-primary rounded-md">{apt.time}</span>
+                  <h4 className="text-[12px] font-bold text-on-surface truncate group-hover:text-primary transition-colors">{apt.patientName}</h4>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] font-black px-1.5 py-0.5 bg-primary-container text-primary rounded-md">{apt.time}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => handleOpenEdit(apt, e)}
+                      title="Editar fecha y hora"
+                      className="p-1 text-on-surface-variant hover:text-primary hover:bg-primary/10 rounded transition-colors"
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                  </div>
                 </div>
                 <div className="flex items-center justify-between">
                   <p className="text-[10px] text-on-surface-variant/70 uppercase font-black tracking-tight truncate">{apt.type}</p>
+                  <span className="text-[9px] text-on-surface-variant/60 font-semibold">{apt.date}</span>
                 </div>
               </div>
             </div>
@@ -377,6 +436,100 @@ export function Dashboard() {
           )}
         </div>
       </div>
+
+      <Modal
+        isOpen={isEditModalOpen}
+        onClose={() => setIsEditModalOpen(false)}
+        title="Editar Fecha y Hora del Turno"
+      >
+        <form onSubmit={handleSaveEdit} className="space-y-4">
+          <div className="p-4 bg-surface-bright rounded-xl border border-outline-variant flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Paciente</p>
+              <h4 className="text-sm font-bold text-on-surface">{editData.patientName}</h4>
+            </div>
+            <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">
+              <CalendarClock size={16} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
+                Nueva Fecha
+              </label>
+              <input
+                type="date"
+                required
+                value={editData.date}
+                onChange={(e) => setEditData({ ...editData, date: e.target.value })}
+                className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
+                Nueva Hora
+              </label>
+              <input
+                type="time"
+                required
+                value={editData.time}
+                onChange={(e) => setEditData({ ...editData, time: e.target.value })}
+                className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
+              Tratamiento
+            </label>
+            <select
+              value={editData.type}
+              onChange={(e) => setEditData({ ...editData, type: e.target.value })}
+              className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
+            >
+              {treatments.length > 0 ? (
+                treatments.map((t) => (
+                  <option key={t.id} value={t.name}>{t.name}</option>
+                ))
+              ) : (
+                <option value="Check-up General">Check-up General</option>
+              )}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
+              Notas / Observaciones
+            </label>
+            <textarea
+              rows={2}
+              value={editData.notes}
+              onChange={(e) => setEditData({ ...editData, notes: e.target.value })}
+              placeholder="Motivo de la reprogramación..."
+              className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm text-on-surface focus:outline-none focus:border-primary resize-none"
+            />
+          </div>
+
+          <div className="pt-3 flex gap-3">
+            <button
+              type="button"
+              onClick={() => setIsEditModalOpen(false)}
+              className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest flex items-center justify-center gap-2"
+            >
+              <CheckCircle2 size={16} />
+              Guardar Cambios
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
