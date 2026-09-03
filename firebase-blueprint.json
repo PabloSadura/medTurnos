@@ -13,6 +13,9 @@
         "duration": { "type": "number" },
         "status": { "type": "string", "enum": ["pendiente", "confirmed", "in-session", "finished", "cancelled"] },
         "type": { "type": "string" },
+        "treatmentId": { "type": "string" },
+        "cost": { "type": "number" },
+        "price": { "type": "number" },
         "attendance": { "type": "number" },
         "userId": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -41,19 +44,28 @@
     },
     "Evolution": {
       "title": "Evolution",
-      "description": "A clinical evolution entry for a patient",
+      "description": "A clinical evolution entry for a patient recorded by the authenticated doctor",
       "type": "object",
       "properties": {
         "patientId": { "type": "string" },
+        "patientName": { "type": "string" },
+        "patientIdNumber": { "type": "string" },
         "date": { "type": "string", "format": "date" },
+        "doctorId": { "type": "string" },
         "doctor": { "type": "string" },
-        "note": { "type": "string" },
+        "doctorEmail": { "type": "string", "format": "email" },
         "treatment": { "type": "string" },
+        "treatmentId": { "type": "string" },
+        "appointmentId": { "type": "string" },
+        "cost": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "note": { "type": "string" },
         "status": { "type": "string" },
         "userId": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["patientId", "date", "doctor", "note"]
+      "required": ["patientId", "date", "doctor", "treatment", "note", "userId"]
     },
     "Treatment": {
       "title": "Treatment",
@@ -175,9 +187,77 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["to", "message", "status", "userId", "createdAt"]
+    },
+    "Package": {
+      "title": "Package",
+      "description": "A package or bundle containing multiple treatments with a set price and quantities",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "treatmentId": { "type": "string" },
+              "treatmentName": { "type": "string" },
+              "quantity": { "type": "number" }
+            }
+          }
+        },
+        "totalSessions": { "type": "number" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "price", "items", "userId"]
+    },
+    "PatientPackage": {
+      "title": "Patient Package",
+      "description": "A package purchased by a patient with session tracking",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string" },
+        "patientName": { "type": "string" },
+        "packageId": { "type": "string" },
+        "packageName": { "type": "string" },
+        "pricePaid": { "type": "number" },
+        "purchaseDate": { "type": "string", "format": "date" },
+        "status": { "type": "string", "enum": ["active", "completed"] },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "treatmentId": { "type": "string" },
+              "treatmentName": { "type": "string" },
+              "totalQuantity": { "type": "number" },
+              "usedQuantity": { "type": "number" },
+              "remainingQuantity": { "type": "number" }
+            }
+          }
+        },
+        "totalSessions": { "type": "number" },
+        "usedSessions": { "type": "number" },
+        "remainingSessions": { "type": "number" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["patientId", "packageId", "packageName", "pricePaid", "items", "userId"]
     }
   },
   "firestore": {
+    "/packages": {
+      "schema": "Package",
+      "description": "Collection of treatment packages offered by the clinic"
+    },
+    "/patient_packages": {
+      "schema": "PatientPackage",
+      "description": "Collection of treatment packages purchased by patients"
+    },
     "/appointments": {
       "schema": "Appointment",
       "description": "Collection of all dental appointments"
@@ -189,6 +269,10 @@
     "/patients/{patientId}/evolutions": {
       "schema": "Evolution",
       "description": "History of evolutions for a patient"
+    },
+    "/evolutions": {
+      "schema": "Evolution",
+      "description": "Global collection of clinical evolutions across all patients"
     },
     "/treatments": {
       "schema": "Treatment",

@@ -101,14 +101,25 @@ export async function seedAllCollections() {
     }, { merge: true });
 
     // Evolution 1
-    await setDoc(doc(db, 'patients', 'pat_demo_01', 'evolutions', 'evo_demo_01'), {
+    const evoData1 = {
+      id: 'evo_demo_01',
+      patientId: 'pat_demo_01',
+      patientName: 'Lucía Fernández',
       userId: currentUserId,
+      doctorId: currentUserId,
       date: todayStr,
       doctor: 'Dr. Alejandro Morales',
       treatment: 'Consulta General / Diagnóstico',
+      treatmentId: 'treat_demo_01',
+      cost: 4500,
       note: 'Evaluación periódica y profilaxis completa. Favorable.',
-      createdAt: serverTimestamp()
-    }, { merge: true });
+      status: 'Completed',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    };
+    await setDoc(doc(db, 'patients', 'pat_demo_01', 'evolutions', 'evo_demo_01'), evoData1, { merge: true });
+    await setDoc(doc(db, 'evolutions', 'evo_demo_01'), evoData1, { merge: true });
+    results['evolutions'] = 1;
 
     // Patient 2
     const patientDocRef2 = doc(db, 'patients', 'pat_demo_02');

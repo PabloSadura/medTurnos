@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock, Stethoscope, Package, Sparkles } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
@@ -8,6 +8,8 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch, getDoc } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { consumePackageSession } from '../lib/packageUtils';
+import { PatientPackage } from '../types';
 
 const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
@@ -80,38 +82,61 @@ export function Agenda() {
     return `${y}-${m}-${d}`;
   };
 
-  const [newApt, setNewApt] = useState({
+  const [patientPackages, setPatientPackages] = useState<PatientPackage[]>([]);
+
+  const [newApt, setNewApt] = useState<{
+    patientId: string;
+    patientName: string;
+    date: string;
+    time: string;
+    type: string;
+    notes: string;
+    isPackageSession?: boolean;
+    patientPackageId?: string;
+    packageName?: string;
+  }>({
     patientId: '',
     patientName: '',
     date: formatLocalDate(new Date()),
     time: '09:00',
     type: 'Check-up General',
-    notes: ''
+    notes: '',
+    isPackageSession: false,
+    patientPackageId: '',
+    packageName: ''
   });
 
   useEffect(() => {
-    if (newApt.patientId && !isCreatingNewPatient && ownerId) {
-      // Fetch stats for this specific patient (only owner's)
-      const appQ = query(
-        collection(db, 'appointments'), 
+    if (newApt.patientId && !isCreatingNewPatient) {
+      // Fetch stats for this specific patient from loaded appointments
+      const apps = appointments.filter(a => a.patientId === newApt.patientId);
+      const finishedCount = apps.filter(a => a.status === 'finished').length;
+      const absencesCount = apps.filter(a => a.status === 'cancelado' || a.status === 'ausente').length;
+      const total = finishedCount + absencesCount;
+      
+      setSelectedPatientStats({
+        attendance: total > 0 ? Math.round((finishedCount / total) * 100) : 100,
+        absences: absencesCount
+      });
+
+      // Fetch active packages with available treatments for this patient
+      const pkgQ = query(
+        collection(db, 'patient_packages'),
         where('patientId', '==', newApt.patientId),
-        where('userId', '==', ownerId)
+        where('status', '==', 'active')
       );
-      getDocs(appQ).then(snapshot => {
-        const apps = snapshot.docs.map(doc => doc.data());
-        const finishedCount = apps.filter(a => a.status === 'finished').length;
-        const absencesCount = apps.filter(a => a.status === 'cancelado' || a.status === 'ausente').length;
-        const total = finishedCount + absencesCount;
-        
-        setSelectedPatientStats({
-          attendance: total > 0 ? Math.round((finishedCount / total) * 100) : 100,
-          absences: absencesCount
-        });
+      getDocs(pkgQ).then((snap) => {
+        const pkgs = snap.docs.map(d => ({ id: d.id, ...d.data() } as PatientPackage));
+        setPatientPackages(pkgs);
+      }).catch((err) => {
+        console.error('Error fetching patient packages in agenda:', err);
+        setPatientPackages([]);
       });
     } else {
       setSelectedPatientStats(null);
+      setPatientPackages([]);
     }
-  }, [newApt.patientId, isCreatingNewPatient]);
+  }, [newApt.patientId, isCreatingNewPatient, appointments]);
 
   useEffect(() => {
     if (!ownerId) return;
@@ -191,13 +216,7 @@ export function Agenda() {
       if (!patient) return;
 
       // Calculate attendance count
-      const q = query(
-        collection(db, 'appointments'), 
-        where('patientId', '==', patientId),
-        where('userId', '==', ownerId)
-      );
-      const snapshot = await getDocs(q);
-      const attendanceCount = snapshot.size + 1;
+      const attendanceCount = appointments.filter(a => a.patientId === patientId).length + 1;
 
       const [year, month, day] = newApt.date.split('-').map(Number);
       const [hours, minutes] = newApt.time.split(':').map(Number);
@@ -229,13 +248,25 @@ export function Agenda() {
         }
       }
 
+      const isPkg = Boolean(newApt.isPackageSession && newApt.patientPackageId);
+      const matchedTreatment = treatments.find(t => t.name === newApt.type);
+      const treatmentPrice = isPkg ? 0 : (matchedTreatment?.cost ? Number(matchedTreatment.cost) : 0);
+
       await addDoc(collection(db, 'appointments'), {
         ...newApt,
         patientId,
         patientName,
+        treatment: newApt.type,
+        treatmentId: matchedTreatment?.id || '',
+        cost: treatmentPrice,
+        price: treatmentPrice,
+        paidAmount: treatmentPrice,
+        isPackageSession: isPkg,
+        patientPackageId: isPkg ? newApt.patientPackageId : null,
+        packageName: isPkg ? (newApt.packageName || null) : null,
         userId: ownerId,
         status: 'pendiente',
-        duration: 30, // Default duration
+        duration: matchedTreatment?.duration ? Number(matchedTreatment.duration) : 30, // Default duration
         attendance: attendanceCount,
         startTime: appointmentDate, // Save as JS Date, Firestore converts to Timestamp
         createdAt: serverTimestamp(),
@@ -245,7 +276,7 @@ export function Agenda() {
       setIsNewAppointmentOpen(false);
       setIsCreatingNewPatient(false);
       setNewPatientData({ name: '', phone: '', idNumber: '', birthDate: '' });
-      setNewApt({ ...newApt, patientId: '', patientName: '', notes: '' });
+      setNewApt({ ...newApt, patientId: '', patientName: '', notes: '', isPackageSession: false, patientPackageId: '', packageName: '' });
       setSearchTerm('');
       showToast('Turno agendado correctamente');
     } catch (error) {
@@ -256,6 +287,15 @@ export function Agenda() {
   const handleUpdateStatus = async (status: string) => {
     if (!selectedAppointment) return;
     try {
+      const isPkg = Boolean(selectedAppointment.isPackageSession);
+
+      // If changing to 'finished' and appointment is marked as package session, consume from package
+      if (status === 'finished' && selectedAppointment.status !== 'finished') {
+        if (isPkg && selectedAppointment.patientPackageId && !selectedAppointment.packageDiscounted) {
+          await consumePackageSession(db, selectedAppointment.patientPackageId, selectedAppointment.type || selectedAppointment.treatment);
+        }
+      }
+
       const batch = writeBatch(db);
 
       // Impact logic: If changing to 'finished', deduct materials from stocks
@@ -290,10 +330,33 @@ export function Agenda() {
         }, { merge: true });
       }
 
-      batch.update(doc(db, 'appointments', selectedAppointment.id), {
+      const treatment = treatments.find(t => t.name === selectedAppointment.type);
+      const historicalAmount = isPkg ? 0 : (
+        (typeof selectedAppointment.paidAmount === 'number' && !isNaN(selectedAppointment.paidAmount))
+          ? selectedAppointment.paidAmount
+          : (typeof selectedAppointment.cost === 'number' && !isNaN(selectedAppointment.cost))
+            ? selectedAppointment.cost
+            : (typeof selectedAppointment.price === 'number' && !isNaN(selectedAppointment.price))
+              ? selectedAppointment.price
+              : (treatment?.cost ? Number(treatment.cost) : 0)
+      );
+
+      const updatePayload: any = {
         status,
         updatedAt: serverTimestamp()
-      });
+      };
+
+      if (status === 'finished') {
+        updatePayload.cost = historicalAmount;
+        updatePayload.price = historicalAmount;
+        updatePayload.paidAmount = historicalAmount;
+        if (isPkg) {
+          updatePayload.packageDiscounted = true;
+          updatePayload.isPackageSession = true;
+        }
+      }
+
+      batch.update(doc(db, 'appointments', selectedAppointment.id), updatePayload);
 
       await batch.commit();
       setIsDetailModalOpen(false);
@@ -606,7 +669,8 @@ export function Agenda() {
                               )}
                             >
                               <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-current" />
-                              {apt.patientName}
+                              {apt.isPackageSession && <Package size={9} className="shrink-0 text-emerald-600" />}
+                              <span className="truncate">{apt.patientName}</span>
                             </div>
                           ))
                         }
@@ -784,7 +848,12 @@ export function Agenda() {
                   <div className="flex items-center gap-2 text-[11px] font-bold text-on-surface-variant uppercase tracking-tighter">
                     <span className="truncate">{apt.type}</span>
                     <span className="shrink-0">•</span>
-                    <span className="shrink-0">30m</span>
+                    <span className="shrink-0">{apt.duration || 30}m</span>
+                    {apt.isPackageSession && (
+                      <span className="text-[9px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300 flex items-center gap-0.5 ml-auto">
+                        <Package size={9} /> Paquete ($0)
+                      </span>
+                    )}
                   </div>
                 </motion.div>
               ))
@@ -990,6 +1059,64 @@ export function Agenda() {
             </div>
           </div>
 
+          {/* Selector de Sesión de Paquete si el paciente cuenta con paquetes activos */}
+          {!isCreatingNewPatient && patientPackages.some(p => p.status === 'active' && (p.remainingSessions || 0) > 0) && (
+            <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black text-amber-900 flex items-center gap-1.5 uppercase tracking-wider">
+                  <Sparkles size={13} className="text-amber-600" />
+                  Cubrir con Paquete Adquirido
+                </span>
+                {newApt.isPackageSession && (
+                  <span className="text-[9px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
+                    $0 Abonado previamente
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-amber-800">
+                El paciente tiene paquetes comprados. Puedes cubrir este turno sin costo adicional:
+              </p>
+              <select
+                className="w-full px-3 py-2 bg-white border border-amber-300 rounded-lg text-[12px] font-bold text-on-surface outline-none focus:ring-1 focus:ring-amber-500"
+                value={newApt.isPackageSession ? `${newApt.patientPackageId}:::${newApt.type}` : 'none'}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === 'none') {
+                    setNewApt({
+                      ...newApt,
+                      isPackageSession: false,
+                      patientPackageId: '',
+                      packageName: ''
+                    });
+                  } else {
+                    const [pkgId, treatName] = val.split(':::');
+                    const foundPkg = patientPackages.find(p => p.id === pkgId);
+                    setNewApt({
+                      ...newApt,
+                      isPackageSession: true,
+                      patientPackageId: pkgId,
+                      packageName: foundPkg?.packageName || 'Paquete',
+                      type: treatName
+                    });
+                  }
+                }}
+              >
+                <option value="none">No usar paquete (tarifa estándar del tratamiento)</option>
+                {patientPackages
+                  .filter(p => p.status === 'active' && (p.remainingSessions || 0) > 0)
+                  .flatMap(pkg =>
+                    (pkg.items || [])
+                      .filter(item => (item.remainingQuantity || 0) > 0)
+                      .map((item, idx) => (
+                        <option key={`${pkg.id}-${idx}`} value={`${pkg.id}:::${item.treatmentName}`}>
+                          🎁 [{pkg.packageName}] {item.treatmentName} ({item.remainingQuantity} restantes) — $0
+                        </option>
+                      ))
+                  )}
+              </select>
+            </div>
+          )}
+
           <div className="space-y-2">
             <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Tratamiento</label>
             <select 
@@ -1076,6 +1203,23 @@ export function Agenda() {
               </button>
             </div>
 
+            {selectedAppointment.isPackageSession && (
+              <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
+                    <Package size={16} className="text-emerald-700" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-emerald-800">Sesión Cubierta por Paquete</p>
+                    <p className="text-[12px] font-bold text-emerald-900">{selectedAppointment.packageName || 'Paquete de tratamientos'}</p>
+                  </div>
+                </div>
+                <span className="text-[11px] font-bold text-emerald-800 bg-white px-2.5 py-1 rounded-md border border-emerald-300 shadow-xs">
+                  $0 (Ya abonado)
+                </span>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <div className="p-3 bg-surface rounded-xl border border-outline-variant">
                 <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Tratamiento</p>
@@ -1124,11 +1268,11 @@ export function Agenda() {
               </div>
             </div>
 
-            <div className="pt-4 flex gap-3">
+            <div className="pt-4 flex flex-col sm:flex-row gap-2.5">
               <button 
                 type="button"
                 onClick={() => setIsDetailModalOpen(false)}
-                className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest"
+                className="px-4 py-2 border border-outline-variant text-[11px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest text-on-surface-variant"
               >
                 Cerrar
               </button>
@@ -1140,9 +1284,22 @@ export function Agenda() {
                   }
                   setIsDetailModalOpen(false);
                 }}
-                className="flex-1 px-4 py-2 bg-surface-variant text-on-surface text-[12px] font-bold rounded-lg hover:bg-surface-variant/80 border border-outline-variant transition-colors uppercase tracking-widest"
+                className="px-4 py-2 bg-surface-variant text-on-surface text-[11px] font-bold rounded-lg hover:bg-surface-variant/80 border border-outline-variant transition-colors uppercase tracking-widest"
               >
                 Ver Ficha
+              </button>
+              <button 
+                type="button"
+                onClick={() => {
+                  if (selectedAppointment?.patientId) {
+                    navigate(`/patients?id=${selectedAppointment.patientId}&appointmentId=${selectedAppointment.id}`);
+                  }
+                  setIsDetailModalOpen(false);
+                }}
+                className="flex-1 px-4 py-2 bg-primary text-white text-[11px] font-bold rounded-lg hover:bg-primary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm"
+              >
+                <Stethoscope size={13} />
+                Atender / Evolución
               </button>
             </div>
           </div>

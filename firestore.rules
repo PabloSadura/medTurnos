@@ -56,12 +56,40 @@ service cloud.firestore {
       allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
       
       match /evolutions/{eid} {
-        allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-        allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+        allow read, write: if isSignedIn() && (
+          canAccessData(resource.data.userId) || 
+          canAccessData(get(/databases/$(database)/documents/patients/$(id)).data.userId) || 
+          isAdmin()
+        );
+        allow create: if isSignedIn() && (
+          canAccessData(request.resource.data.userId) || 
+          canAccessData(get(/databases/$(database)/documents/patients/$(id)).data.userId) || 
+          isAdmin()
+        );
       }
     }
 
+    match /evolutions/{id} {
+      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+    }
+
+    match /{path=**}/evolutions/{eid} {
+      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+    }
+
     match /treatments/{id} {
+      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+    }
+
+    match /packages/{id} {
+      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+    }
+
+    match /patient_packages/{id} {
       allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
       allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
     }

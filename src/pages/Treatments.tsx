@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Stethoscope, Plus, Search, DollarSign, Clock, ChevronRight, Package, Edit3, Trash2, Save, AlertTriangle, X, Info } from 'lucide-react';
+import { Stethoscope, Plus, Search, DollarSign, Clock, ChevronRight, Package, Edit3, Trash2, Save, AlertTriangle, X, Info, Layers } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 import { motion } from 'motion/react';
@@ -7,10 +7,12 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, orderBy, where } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { PackagesManager } from '../components/PackagesManager';
 
 export function Treatments() {
   const { showToast } = useToast();
   const { ownerId } = useAuth();
+  const [activeTab, setActiveTab] = useState<'treatments' | 'packages'>('treatments');
   const [treatments, setTreatments] = useState<any[]>([]);
   const [inventory, setInventory] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -144,69 +146,119 @@ export function Treatments() {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h1 className="headline-lg text-on-surface">Tratamientos y Servicios</h1>
-          <p className="body-md text-on-surface-variant">Gestione procedimientos clínicos, precios y materiales asociados del inventario.</p>
+          <h1 className="headline-lg text-on-surface">Servicios, Tratamientos y Paquetes</h1>
+          <p className="body-md text-on-surface-variant">Gestione procedimientos clínicos, tarifas, paquetes con múltiples sesiones e inventario asociado.</p>
         </div>
-        <button 
-          onClick={() => handleOpenModal('create')}
-          className="px-4 py-2 bg-primary text-white rounded-md text-[12px] font-bold flex items-center gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-sm uppercase tracking-wider"
+        {activeTab === 'treatments' && (
+          <button 
+            onClick={() => handleOpenModal('create')}
+            className="px-4 py-2 bg-primary text-white rounded-md text-[12px] font-bold flex items-center gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-sm uppercase tracking-wider"
+          >
+            <Plus size={16} />
+            Nuevo Tratamiento
+          </button>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div className="flex items-center gap-2 border-b border-outline-variant">
+        <button
+          onClick={() => setActiveTab('treatments')}
+          className={cn(
+            "flex items-center gap-2 px-5 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px",
+            activeTab === 'treatments'
+              ? "border-primary text-primary"
+              : "border-transparent text-on-surface-variant hover:text-on-surface"
+          )}
         >
-          <Plus size={16} />
-          Nuevo Tratamiento
+          <Stethoscope size={16} />
+          Tratamientos Individuales ({treatments.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab('packages')}
+          className={cn(
+            "flex items-center gap-2 px-5 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px",
+            activeTab === 'packages'
+              ? "border-primary text-primary"
+              : "border-transparent text-on-surface-variant hover:text-on-surface"
+          )}
+        >
+          <Layers size={16} />
+          Paquetes de Tratamientos
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {filteredTreatments.map((treatment) => (
-          <div key={treatment.id} className="bg-white border border-outline-variant rounded-xl shadow-sm hover:shadow-md transition-all overflow-hidden group flex flex-col">
-            <div className="p-4 flex-1">
-              <div className="flex justify-between items-start mb-3">
-                <div className="p-2 bg-primary-container text-primary rounded-lg">
-                  <Stethoscope size={18} />
-                </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button 
-                    onClick={() => handleOpenModal('edit', treatment)}
-                    className="p-1 hover:bg-surface rounded text-on-surface-variant"
-                  >
-                    <Edit3 size={14} />
-                  </button>
-                  <button 
-                    onClick={() => handleOpenModal('delete', treatment)}
-                    className="p-1 hover:bg-error-container text-error rounded"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-              
-              <h3 className="text-[14px] font-bold text-on-surface mb-1">{treatment.name}</h3>
-              
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex items-center gap-2 text-on-surface">
-                  <DollarSign size={14} className="text-tertiary" />
-                  <span className="text-[13px] font-bold">${treatment.cost}</span>
-                </div>
-                <div className="flex items-center gap-2 text-on-surface-variant">
-                  <Clock size={14} className="text-secondary" />
-                  <span className="text-[12px] font-medium">{treatment.duration} min</span>
-                </div>
-              </div>
+      {activeTab === 'packages' ? (
+        <PackagesManager ownerId={ownerId} treatments={treatments} />
+      ) : (
+        <>
+          <div className="flex items-center gap-4 bg-white p-3 rounded-xl border border-outline-variant shadow-sm">
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" size={16} />
+              <input 
+                type="text" 
+                placeholder="Buscar tratamiento por nombre..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary"
+              />
             </div>
-
-            <button 
-              onClick={() => handleOpenModal('materials', treatment)}
-              className="w-full border-t border-outline-variant bg-surface-bright px-4 py-2.5 flex justify-between items-center mt-auto hover:bg-surface transition-colors group/link"
-            >
-              <div className="flex items-center gap-1.5 text-on-surface-variant group-hover/link:text-primary transition-colors">
-                <Package size={12} />
-                <span className="text-[10px] font-bold uppercase tracking-tight">{treatment.materials?.length || 0} Materiales Vinculados</span>
-              </div>
-              <ChevronRight size={14} className="text-on-surface-variant group-hover/link:text-primary group-hover/link:translate-x-1 transition-all" />
-            </button>
           </div>
-        ))}
-      </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {filteredTreatments.map((treatment) => (
+              <div key={treatment.id} className="bg-white border border-outline-variant rounded-xl shadow-sm hover:shadow-md transition-all overflow-hidden group flex flex-col">
+                <div className="p-4 flex-1">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="p-2 bg-primary-container text-primary rounded-lg">
+                      <Stethoscope size={18} />
+                    </div>
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button 
+                        onClick={() => handleOpenModal('edit', treatment)}
+                        className="p-1 hover:bg-surface rounded text-on-surface-variant"
+                      >
+                        <Edit3 size={14} />
+                      </button>
+                      <button 
+                        onClick={() => handleOpenModal('delete', treatment)}
+                        className="p-1 hover:bg-error-container text-error rounded"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <h3 className="text-[14px] font-bold text-on-surface mb-1">{treatment.name}</h3>
+                  
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex items-center gap-2 text-on-surface">
+                      <DollarSign size={14} className="text-tertiary" />
+                      <span className="text-[13px] font-bold">${treatment.cost}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-on-surface-variant">
+                      <Clock size={14} className="text-secondary" />
+                      <span className="text-[12px] font-medium">{treatment.duration} min</span>
+                    </div>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => handleOpenModal('materials', treatment)}
+                  className="w-full border-t border-outline-variant bg-surface-bright px-4 py-2.5 flex justify-between items-center mt-auto hover:bg-surface transition-colors group/link"
+                >
+                  <div className="flex items-center gap-1.5 text-on-surface-variant group-hover/link:text-primary transition-colors">
+                    <Package size={12} />
+                    <span className="text-[10px] font-bold uppercase tracking-tight">{treatment.materials?.length || 0} Materiales Vinculados</span>
+                  </div>
+                  <ChevronRight size={14} className="text-on-surface-variant group-hover/link:text-primary group-hover/link:translate-x-1 transition-all" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       {/* Modals */}
       <Modal
