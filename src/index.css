@@ -64,6 +64,12 @@
 }
 
 @layer base {
+  html, body {
+    overflow-x: hidden;
+    max-width: 100vw;
+    width: 100%;
+    -webkit-text-size-adjust: 100%;
+  }
   body {
     @apply bg-surface text-on-surface font-sans antialiased;
   }
@@ -74,25 +80,25 @@
 
 @layer components {
   .headline-lg {
-    @apply text-[28px] leading-[36px] font-bold font-display;
+    @apply text-[22px] sm:text-[28px] leading-[28px] sm:leading-[36px] font-bold font-display;
   }
   .headline-md {
-    @apply text-[20px] leading-[28px] font-semibold font-display;
+    @apply text-[18px] sm:text-[20px] leading-[24px] sm:leading-[28px] font-semibold font-display;
   }
   .headline-sm {
-    @apply text-[16px] leading-[24px] font-semibold font-display;
+    @apply text-[15px] sm:text-[16px] leading-[22px] sm:leading-[24px] font-semibold font-display;
   }
   .body-lg {
-    @apply text-[16px] leading-[24px] font-normal;
+    @apply text-[15px] sm:text-[16px] leading-[22px] sm:leading-[24px] font-normal;
   }
   .body-md {
-    @apply text-[14px] leading-[20px] font-normal;
+    @apply text-[13px] sm:text-[14px] leading-[18px] sm:leading-[20px] font-normal;
   }
   .body-sm {
-    @apply text-[13px] leading-[18px] font-normal;
+    @apply text-[12px] sm:text-[13px] leading-[16px] sm:leading-[18px] font-normal;
   }
   .label-md {
-    @apply text-[11px] leading-[14px] font-bold tracking-widest uppercase text-on-surface-variant;
+    @apply text-[10px] sm:text-[11px] leading-[14px] font-bold tracking-widest uppercase text-on-surface-variant;
   }
   
   .data-grid-container {

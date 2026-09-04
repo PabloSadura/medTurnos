@@ -476,7 +476,7 @@ export function Administration() {
 
           {activeTab === 'users' && (
             <div className="bg-white rounded-xl border border-outline-variant shadow-sm overflow-hidden">
-              <div className="px-6 py-4 border-b border-outline-variant flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="px-4 sm:px-6 py-4 border-b border-outline-variant flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                 <div className="space-y-0.5">
                   <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Gestión de Personal</h3>
                   <p className="text-[11px] text-on-surface-variant font-sans flex items-center gap-1.5">
@@ -489,13 +489,89 @@ export function Administration() {
                     setSelectedUser(null);
                     setIsUserModalOpen(true);
                   }}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-primary text-white text-[10px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans cursor-pointer"
+                  className="flex items-center justify-center gap-2 px-3 py-1.5 bg-primary text-white text-[10px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans cursor-pointer w-full sm:w-auto"
                 >
                   <Plus size={14} />
                   Invitar Secretario
                 </button>
               </div>
-              <div className="overflow-x-auto">
+
+              {/* Mobile Cards View */}
+              <div className="block md:hidden divide-y divide-outline-variant/40">
+                {staff.map((p) => (
+                  <div key={p.id} className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-full bg-primary-container text-primary flex items-center justify-center font-bold text-xs shrink-0">
+                          {p.name.charAt(0)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-on-surface truncate">{p.name}</p>
+                          <p className="text-xs text-on-surface-variant truncate">{p.email}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button 
+                          onClick={() => {
+                            setSelectedUser(p);
+                            setUserForm({
+                              name: p.name,
+                              email: p.email,
+                              password: '',
+                              role: p.role,
+                              permissions: p.permissions || [],
+                              status: p.status
+                            });
+                            setIsUserModalOpen(true);
+                          }}
+                          className="p-2 hover:bg-surface rounded-lg text-on-surface-variant transition-colors"
+                          title="Editar"
+                        >
+                          <Settings size={16} />
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteStaff(p.id)}
+                          className="p-2 hover:bg-error-container/20 rounded-lg text-error transition-colors"
+                          title="Eliminar"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-outline-variant/30 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-medium px-2 py-0.5 bg-surface rounded-full text-on-surface-variant">
+                          {p.role}
+                        </span>
+                        <span className={cn(
+                          "text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-tighter",
+                          p.status === 'Activo' ? 'bg-tertiary-container text-on-tertiary-container' : 'bg-surface-dim text-on-surface-variant'
+                        )}>
+                          {p.status}
+                        </span>
+                      </div>
+                      <div className="flex gap-1 flex-wrap">
+                        {p.permissions?.slice(0, 2).map((perm: string) => (
+                          <span key={perm} className="text-[8px] bg-primary/5 text-primary px-1 rounded border border-primary/10">
+                            {AVAILABLE_MODULES.find(m => m.id === perm)?.label || perm}
+                          </span>
+                        ))}
+                        {p.permissions?.length > 2 && <span className="text-[8px] text-on-surface-variant">+{p.permissions.length - 2}</span>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {staff.length === 0 && !loading && (
+                  <div className="p-8 text-center text-on-surface-variant">
+                    <UserPlus size={40} className="mx-auto mb-3 opacity-20" />
+                    <p className="text-sm font-bold uppercase tracking-widest opacity-40">No hay personal registrado</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Desktop Table View */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left">
                   <thead className="bg-surface-bright border-b border-outline-variant">
                     <tr>
@@ -870,7 +946,7 @@ export function Administration() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-2">
               <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Rol</label>
               <select 

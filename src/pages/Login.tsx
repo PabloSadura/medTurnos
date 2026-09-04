@@ -67,7 +67,7 @@ export function Login() {
         animate={{ opacity: 1, y: 0 }}
         className="w-full max-w-[400px] z-10"
       >
-        <div className="bg-white rounded-xl shadow-sm border border-outline-variant p-8 shadow-2xl">
+        <div className="bg-white rounded-2xl shadow-sm border border-outline-variant p-5 sm:p-8 shadow-2xl">
           <div className="flex flex-col items-center mb-8">
             <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center mb-4 shadow-lg text-white">
               <Activity size={24} />

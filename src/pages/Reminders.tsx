@@ -251,13 +251,13 @@ export function Reminders() {
                       {msg.status}
                     </div>
                   </div>
-                  <div className="flex justify-between items-center group/btn">
-                    <p className="text-[12px] text-on-surface-variant italic bg-surface-bright px-3 py-2 rounded-lg border border-surface flex-1">"{msg.message}"</p>
+                  <div className="flex items-center gap-2 group/btn">
+                    <p className="text-[12px] text-on-surface-variant italic bg-surface-bright px-3 py-2 rounded-lg border border-surface flex-1 break-words min-w-0">"{msg.message}"</p>
                     <button 
                       onClick={() => handleSendWhatsApp(msg)}
                       disabled={sendingId === msg.id}
                       className={cn(
-                        "ml-3 p-2 text-white rounded-lg transition-all hover:scale-105 active:scale-95 shadow-sm",
+                        "p-2 text-white rounded-lg transition-all hover:scale-105 active:scale-95 shadow-sm shrink-0",
                         sendingId === msg.id ? "bg-primary-container text-primary opacity-50" : "bg-[#25D366] opacity-100 md:opacity-0 group-hover:opacity-100 group-hover/btn:opacity-100"
                       )}
                       title={settings.botEnabled ? "Enviar vía Meta API" : "Enviar WhatsApp Manual"}

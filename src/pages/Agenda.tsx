@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock, Stethoscope, Package, Sparkles } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock, Stethoscope, Package, Sparkles, MessageCircle, Phone } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
@@ -120,23 +120,29 @@ export function Agenda() {
       });
 
       // Fetch active packages with available treatments for this patient
-      const pkgQ = query(
-        collection(db, 'patient_packages'),
-        where('patientId', '==', newApt.patientId),
-        where('status', '==', 'active')
-      );
-      getDocs(pkgQ).then((snap) => {
-        const pkgs = snap.docs.map(d => ({ id: d.id, ...d.data() } as PatientPackage));
-        setPatientPackages(pkgs);
-      }).catch((err) => {
-        console.error('Error fetching patient packages in agenda:', err);
+      if (ownerId) {
+        const pkgQ = query(
+          collection(db, 'patient_packages'),
+          where('userId', '==', ownerId),
+          where('patientId', '==', newApt.patientId)
+        );
+        getDocs(pkgQ).then((snap) => {
+          const pkgs = snap.docs
+            .map(d => ({ id: d.id, ...d.data() } as PatientPackage))
+            .filter(p => p.status === 'active');
+          setPatientPackages(pkgs);
+        }).catch((err) => {
+          console.error('Error fetching patient packages in agenda:', err);
+          setPatientPackages([]);
+        });
+      } else {
         setPatientPackages([]);
-      });
+      }
     } else {
       setSelectedPatientStats(null);
       setPatientPackages([]);
     }
-  }, [newApt.patientId, isCreatingNewPatient, appointments]);
+  }, [newApt.patientId, isCreatingNewPatient, appointments, ownerId]);
 
   useEffect(() => {
     if (!ownerId) return;
@@ -252,10 +258,13 @@ export function Agenda() {
       const matchedTreatment = treatments.find(t => t.name === newApt.type);
       const treatmentPrice = isPkg ? 0 : (matchedTreatment?.cost ? Number(matchedTreatment.cost) : 0);
 
+      const patientPhone = isCreatingNewPatient ? newPatientData.phone : (patient?.phone || '');
+
       await addDoc(collection(db, 'appointments'), {
         ...newApt,
         patientId,
         patientName,
+        patientPhone,
         treatment: newApt.type,
         treatmentId: matchedTreatment?.id || '',
         cost: treatmentPrice,
@@ -466,6 +475,66 @@ export function Agenda() {
 
   const selectedDateAppointments = appointments.filter(a => a.date === formatLocalDate(selectedDate));
 
+  const getPatientPhone = (apt: any) => {
+    if (apt?.patientPhone) return apt.patientPhone;
+    const patient = patients.find(p => p.id === apt?.patientId);
+    return patient?.phone || '';
+  };
+
+  const handleSendWhatsAppReminder = async (apt: any, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    
+    const phone = getPatientPhone(apt);
+    const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+
+    if (!cleanPhone) {
+      showToast(`El paciente ${apt?.patientName || ''} no tiene un número de teléfono registrado.`, 'error');
+      return;
+    }
+
+    // Format readable date
+    let dateFormatted = apt?.date || '';
+    if (apt?.date) {
+      const parts = apt.date.split('-').map(Number);
+      if (parts.length === 3) {
+        const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+        const formatted = new Intl.DateTimeFormat('es-AR', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long'
+        }).format(dt);
+        dateFormatted = formatted.charAt(0).toUpperCase() + formatted.slice(1);
+      }
+    }
+
+    const patientName = apt?.patientName || 'Paciente';
+    const time = apt?.time || '09:00';
+    const treatment = apt?.type || apt?.treatment || 'su consulta';
+
+    const message = `Hola ${patientName}, te recordamos tu turno para el ${dateFormatted} a las ${time} hs (${treatment}). ¡Te esperamos! Por favor confirmar asistencia respondiendo a este mensaje.`;
+
+    if (ownerId) {
+      try {
+        await addDoc(collection(db, 'whatsapp_logs'), {
+          to: phone,
+          patientName,
+          appointmentId: apt.id,
+          message,
+          status: 'success',
+          userId: ownerId,
+          createdAt: serverTimestamp(),
+          method: 'manual'
+        });
+      } catch (err) {
+        console.warn('Could not log WhatsApp reminder:', err);
+      }
+    }
+
+    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+    showToast(`Abriendo WhatsApp para enviar recordatorio a ${patientName}`, 'info');
+  };
+
   const changeMonth = (offset: number) => {
     const next = new Date(viewDate.getFullYear(), viewDate.getMonth() + offset, 1);
     setViewDate(next);
@@ -513,21 +582,21 @@ export function Agenda() {
   };
 
   return (
-    <div className="h-[calc(100vh-140px)] flex flex-col space-y-4">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shrink-0 px-1">
+    <div className={cn("flex flex-col space-y-4 w-full min-w-0", view === 'month' ? "min-h-full pb-16" : "min-h-[550px] lg:h-[calc(100vh-140px)]")}>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 shrink-0 px-1">
         <div>
           <h1 className="headline-lg text-on-surface">Agenda & Calendario</h1>
           <p className="body-md text-on-surface-variant">Gestione sus horarios y reservas de pacientes.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-2 bg-white/50 p-1 rounded-lg border border-outline-variant shadow-sm">
+        <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-between sm:justify-end">
+          <div className="flex items-center gap-1 bg-white/80 p-1 rounded-xl border border-outline-variant shadow-xs">
             {(['day', 'week', 'month'] as const).map((v) => (
               <button
                 key={v}
                 onClick={() => setView(v)}
                 className={cn(
-                  "px-3 py-1.5 rounded text-[10px] font-black uppercase tracking-widest transition-all",
-                  view === v ? "bg-primary text-white shadow-sm" : "text-on-surface-variant hover:bg-surface"
+                  "px-2.5 sm:px-3 py-1.5 rounded-lg text-[10px] sm:text-[11px] font-black uppercase tracking-wider transition-all",
+                  view === v ? "bg-primary text-white shadow-xs" : "text-on-surface-variant hover:bg-surface"
                 )}
               >
                 {v === 'day' ? 'Día' : v === 'week' ? 'Semana' : 'Mes'}
@@ -536,17 +605,25 @@ export function Agenda() {
           </div>
           <button 
             onClick={() => setIsNewAppointmentOpen(true)}
-            className="px-4 py-2 bg-primary text-white rounded-lg text-[12px] font-bold flex items-center gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-sm uppercase tracking-wider"
+            className="px-3 sm:px-4 py-2 bg-primary text-white rounded-xl text-xs font-bold flex items-center gap-1.5 sm:gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-xs uppercase tracking-wider shrink-0"
           >
-            <Plus size={16} />
-            Nuevo Turno
+            <Plus size={15} />
+            <span className="hidden xs:inline">Nuevo Turno</span>
+            <span className="xs:hidden">Turno</span>
           </button>
         </div>
       </div>
 
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-4 min-h-0">
+      <div className={cn(
+        view === 'month' 
+          ? "flex flex-col space-y-6" 
+          : "flex-1 grid grid-cols-1 lg:grid-cols-4 gap-4 min-h-0"
+      )}>
         {/* Main Calendar View */}
-        <div className="lg:col-span-3 bg-white rounded-2xl border border-outline-variant shadow-sm flex flex-col overflow-hidden">
+        <div className={cn(
+          "bg-white rounded-2xl border border-outline-variant shadow-sm flex flex-col overflow-hidden",
+          view === 'month' ? "w-full" : "lg:col-span-3"
+        )}>
           <div className="p-4 md:p-6 border-b border-outline-variant flex flex-col md:flex-row items-center justify-between gap-4 bg-surface-bright">
             <div className="flex items-center gap-4">
               <h2 className="text-xl font-bold text-on-surface capitalize">
@@ -623,13 +700,15 @@ export function Agenda() {
 
           <div className="flex-1 overflow-auto bg-surface-dim">
             {view === 'month' && (
-              <div className="grid grid-cols-7 grid-rows-[40px_1fr] h-full min-w-[700px]">
-                {['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'].map((d) => (
-                  <div key={d} className="flex items-center justify-center text-[11px] font-black uppercase tracking-widest text-on-surface-variant border-b border-r border-outline-variant last:border-r-0 bg-surface">
-                    {d}
+              <div className="grid grid-cols-7 grid-rows-[auto_repeat(6,1fr)] w-full min-w-0">
+                {['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'].map((d, i) => (
+                  <div key={d} className="flex items-center justify-center text-[10px] sm:text-[11px] font-black uppercase tracking-wider text-on-surface-variant border-b border-r border-outline-variant last:border-r-0 bg-surface py-2 sm:py-2.5">
+                    <span className="sm:hidden">{['L', 'M', 'M', 'J', 'V', 'S', 'D'][i]}</span>
+                    <span className="hidden sm:inline">{d}</span>
                   </div>
                 ))}
                 {getCalendarDays().map((item, idx) => {
+                  const dayAppointments = appointments.filter(a => a.date === formatLocalDate(item.date));
                   return (
                     <button
                       key={idx}
@@ -637,24 +716,48 @@ export function Agenda() {
                         setSelectedDate(item.date);
                         if (item.month !== 'current') setViewDate(item.date);
                       }}
-                        className={cn(
-                          "flex flex-col items-start p-3 border-b border-r border-outline-variant last:border-r-0 transition-all group relative min-h-[100px]",
-                          item.month === 'current' ? "bg-white" : "bg-surface-dim opacity-40",
-                          workingHours && item.month === 'current' && !(workingHours.workingDays || workingHours.days || []).includes(item.date.getDay() === 0 ? 7 : item.date.getDay()) && "bg-surface-bright opacity-60 grayscale-[0.5]",
-                          isSelected(item.date) && "bg-primary-container ring-1 ring-inset ring-primary z-10",
-                          !isSelected(item.date) && "hover:bg-surface"
-                        )}
+                      className={cn(
+                        "flex flex-col items-center sm:items-start p-1 sm:p-2 border-b border-r border-outline-variant last:border-r-0 transition-all group relative min-h-[52px] sm:min-h-[96px] w-full min-w-0 overflow-hidden",
+                        item.month === 'current' ? "bg-white" : "bg-surface-dim/70 opacity-40",
+                        workingHours && item.month === 'current' && !(workingHours.workingDays || workingHours.days || []).includes(item.date.getDay() === 0 ? 7 : item.date.getDay()) && "bg-surface-bright opacity-60 grayscale-[0.5]",
+                        isSelected(item.date) && "bg-primary-container/40 ring-2 ring-inset ring-primary z-10",
+                        !isSelected(item.date) && "hover:bg-surface"
+                      )}
                     >
                       <span className={cn(
-                        "w-8 h-8 flex items-center justify-center rounded-full text-[13px] font-bold transition-all mb-2",
+                        "w-6 h-6 sm:w-8 sm:h-8 flex items-center justify-center rounded-full text-[11px] sm:text-[13px] font-bold transition-all shrink-0",
                         isToday(item.date) && !isSelected(item.date) ? "bg-primary text-white" : 
-                        isSelected(item.date) ? "text-primary scale-110" : "text-on-surface"
+                        isSelected(item.date) ? "bg-primary text-white font-black scale-105" : "text-on-surface"
                       )}>
                         {item.day}
                       </span>
-                      <div className="w-full space-y-1">
-                        {appointments
-                          .filter(a => a.date === formatLocalDate(item.date))
+
+                      {/* Mobile Indicator Dots */}
+                      <div className="w-full mt-1 flex sm:hidden items-center justify-center gap-0.5 flex-wrap">
+                        {dayAppointments.slice(0, 3).map((apt) => (
+                          <span 
+                            key={apt.id} 
+                            className={cn(
+                              "w-1.5 h-1.5 rounded-full shrink-0",
+                              apt.status === 'pendiente' ? "bg-amber-500" :
+                              apt.status === 'confirmed' ? "bg-primary" :
+                              apt.status === 'in-session' ? "bg-purple-600" :
+                              apt.status === 'finished' ? "bg-emerald-600" :
+                              apt.status === 'cancelado' ? "bg-red-500" :
+                              "bg-on-surface-variant"
+                            )} 
+                          />
+                        ))}
+                        {dayAppointments.length > 3 && (
+                          <span className="text-[8px] font-black text-on-surface-variant leading-none">
+                            +{dayAppointments.length - 3}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Desktop Appointment Cards */}
+                      <div className="w-full space-y-1 hidden sm:block mt-1">
+                        {dayAppointments
                           .slice(0, 3)
                           .map((apt) => (
                             <div 
@@ -674,9 +777,9 @@ export function Agenda() {
                             </div>
                           ))
                         }
-                        {appointments.filter(a => a.date === formatLocalDate(item.date)).length > 3 && (
+                        {dayAppointments.length > 3 && (
                           <div className="text-[10px] font-black text-on-surface-variant/50 px-1">
-                            + {appointments.filter(a => a.date === formatLocalDate(item.date)).length - 3} más
+                            + {dayAppointments.length - 3} más
                           </div>
                         )}
                       </div>
@@ -749,11 +852,11 @@ export function Agenda() {
             )}
 
             {view === 'day' && (
-              <div className="grid grid-cols-[80px_1fr] h-full min-w-[600px] bg-white">
+              <div className="grid grid-cols-[55px_1fr] sm:grid-cols-[80px_1fr] h-full w-full min-w-0 bg-white">
                 <div className="bg-surface border-r border-outline-variant">
                   {hours.map(hour => (
                     <div key={hour} className="h-[100px] flex items-start justify-center pt-4 border-b border-outline-variant border-dashed">
-                      <span className="text-[12px] font-black text-on-surface-variant tracking-wider">{hour}:00</span>
+                      <span className="text-[10px] sm:text-[12px] font-black text-on-surface-variant tracking-wider">{hour}:00</span>
                     </div>
                   ))}
                 </div>
@@ -771,7 +874,7 @@ export function Agenda() {
                         animate={{ opacity: 1, x: 0 }}
                         onClick={() => handleAppointmentClick(apt)}
                         className={cn(
-                          "absolute left-4 right-8 p-4 rounded-xl border-l-[6px] shadow-md cursor-pointer z-10 flex flex-col justify-center gap-1 transition-all hover:translate-x-1",
+                          "absolute left-2 right-2 sm:left-4 sm:right-8 p-2.5 sm:p-4 rounded-xl border-l-[4px] sm:border-l-[6px] shadow-md cursor-pointer z-10 flex flex-col justify-center gap-1 transition-all hover:translate-x-1",
                           apt.status === 'pendiente' ? "bg-amber-50 border-amber-400 text-amber-700 shadow-amber-950/5" :
                           apt.status === 'confirmed' ? "bg-primary-container/30 border-primary text-primary" : 
                           apt.status === 'in-session' ? "bg-tertiary-container/30 border-tertiary text-tertiary shadow-tertiary/10" : 
@@ -783,11 +886,11 @@ export function Agenda() {
                           height: `${((apt.duration || 30) / 60) * 100 - 4}px`
                         }}
                       >
-                        <div className="flex justify-between items-center">
-                          <span className="text-[12px] font-black uppercase tracking-widest opacity-60">{apt.time} - {apt.type}</span>
-                          <span className="text-[10px] font-black bg-white/50 px-2 py-0.5 rounded capitalize">{apt.status}</span>
+                        <div className="flex justify-between items-center gap-1">
+                          <span className="text-[10px] sm:text-[12px] font-black uppercase tracking-wider opacity-70 truncate">{apt.time} - {apt.type}</span>
+                          <span className="text-[9px] sm:text-[10px] font-black bg-white/70 px-1.5 py-0.5 rounded capitalize shrink-0">{apt.status}</span>
                         </div>
-                        <h4 className="text-[16px] font-black tracking-tight">{apt.patientName}</h4>
+                        <h4 className="text-[13px] sm:text-[16px] font-black tracking-tight truncate">{apt.patientName}</h4>
                       </motion.div>
                     );
                   })}
@@ -797,92 +900,298 @@ export function Agenda() {
           </div>
         </div>
 
-        {/* Sidebar: Day View */}
-        <div className="hidden lg:flex bg-white rounded-2xl border border-outline-variant shadow-sm flex-col overflow-hidden max-h-full">
-          <div className="p-6 border-b border-outline-variant bg-surface-bright shrink-0">
-            <p className="text-[10px] font-black text-on-surface-variant uppercase tracking-[0.2em] mb-1">Agenda del día</p>
-            <h3 className="text-sm font-bold text-on-surface capitalize">
-              {new Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'numeric', month: 'long' }).format(selectedDate)}
-            </h3>
-          </div>
-          
-          <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar min-h-0">
-            {selectedDateAppointments.length > 0 ? (
-              selectedDateAppointments.map((apt) => (
-                <motion.div
-                  key={apt.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  onClick={() => handleAppointmentClick(apt)}
-                  className={cn(
-                    "p-4 rounded-xl border border-outline-variant shadow-none hover:shadow-md transition-all cursor-pointer group relative overflow-hidden",
-                    apt.status === 'pendiente' ? "hover:border-amber-400 bg-amber-50/30" :
-                    apt.status === 'confirmed' ? "hover:border-primary/40" :
-                    apt.status === 'in-session' ? "hover:border-tertiary/40 bg-tertiary-container/10" :
-                    apt.status === 'finished' ? "hover:border-secondary/40 opacity-70" : "opacity-50"
-                  )}
-                >
-                  <div className="flex justify-between items-start mb-2">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[13px] font-black text-primary bg-primary/5 px-2 py-0.5 rounded border border-primary/10">
-                        {apt.time}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={(e) => handleOpenEditAppointment(apt, e)}
-                        title="Editar fecha y hora"
-                        className="p-1 rounded-md text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors"
-                      >
-                        <Edit2 size={13} />
-                      </button>
-                    </div>
-                    <div className={cn(
-                      "w-2 h-2 rounded-full",
-                      apt.status === 'pendiente' ? "bg-amber-500" :
-                      apt.status === 'confirmed' ? "bg-primary" :
-                      apt.status === 'in-session' ? "bg-tertiary" :
-                      apt.status === 'finished' ? "bg-secondary" : "bg-on-surface-variant"
-                    )} />
-                  </div>
-                  <h4 className="text-[14px] font-bold text-on-surface mb-1 group-hover:text-primary transition-colors">{apt.patientName}</h4>
-                  <div className="flex items-center gap-2 text-[11px] font-bold text-on-surface-variant uppercase tracking-tighter">
-                    <span className="truncate">{apt.type}</span>
-                    <span className="shrink-0">•</span>
-                    <span className="shrink-0">{apt.duration || 30}m</span>
-                    {apt.isPackageSession && (
-                      <span className="text-[9px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300 flex items-center gap-0.5 ml-auto">
-                        <Package size={9} /> Paquete ($0)
+        {/* En vista Mes: Lista con todos los turnos dados del día seleccionado */}
+        {view === 'month' && (
+          <div id="turnos-del-dia" className="bg-white rounded-2xl border border-outline-variant shadow-sm p-5 sm:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-outline-variant">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-black shrink-0">
+                  <CalendarClock size={22} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
+                      Turnos del Día
+                    </p>
+                    {isToday(selectedDate) && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-primary/10 text-primary border border-primary/20">
+                        Hoy
                       </span>
                     )}
                   </div>
-                </motion.div>
-              ))
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center opacity-30 py-20 text-center">
-                <Calendar size={48} className="mb-4 text-on-surface-variant" />
-                <p className="text-[11px] font-black uppercase tracking-widest leading-loose">
-                  No hay turnos agendados<br />para este día
-                </p>
-                <button 
-                  onClick={() => setIsNewAppointmentOpen(true)}
-                  className="mt-6 text-[10px] font-black text-primary uppercase underline tracking-widest"
+                  <h3 className="text-base sm:text-lg font-black text-on-surface capitalize">
+                    {new Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(selectedDate)}
+                  </h3>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5 self-start sm:self-auto flex-wrap">
+                <span className="text-xs font-bold px-3 py-1.5 bg-surface-bright text-on-surface rounded-xl border border-outline-variant">
+                  {selectedDateAppointments.length} {selectedDateAppointments.length === 1 ? 'turno agendado' : 'turnos agendados'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewApt(prev => ({
+                      ...prev,
+                      date: formatLocalDate(selectedDate)
+                    }));
+                    setIsNewAppointmentOpen(true);
+                  }}
+                  className="px-3.5 py-2 bg-primary text-white rounded-xl text-xs font-bold flex items-center gap-1.5 hover:bg-primary/90 active:scale-95 transition-all shadow-sm uppercase tracking-wider"
                 >
-                  Agendar Primero
+                  <Plus size={14} />
+                  Agendar Turno
                 </button>
+              </div>
+            </div>
+
+            {selectedDateAppointments.length === 0 ? (
+              <div className="py-12 px-4 text-center bg-surface-bright/50 rounded-xl border border-outline-variant/60">
+                <Calendar size={40} className="mx-auto text-on-surface-variant/40 mb-3" />
+                <h4 className="text-sm font-black text-on-surface">No hay turnos agendados para este día</h4>
+                <p className="text-xs text-on-surface-variant mt-1 max-w-sm mx-auto">
+                  No se encontraron citas para el {new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'long' }).format(selectedDate)}. Seleccione otro día del calendario o presione el botón para agendar un turno.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewApt(prev => ({
+                      ...prev,
+                      date: formatLocalDate(selectedDate)
+                    }));
+                    setIsNewAppointmentOpen(true);
+                  }}
+                  className="mt-4 px-4 py-2 bg-white text-primary border border-primary/30 hover:bg-primary/5 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-xs"
+                >
+                  <Plus size={14} />
+                  Agendar Turno para esta fecha
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {selectedDateAppointments.map((apt) => {
+                  const phone = getPatientPhone(apt);
+                  return (
+                    <motion.div
+                      key={apt.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className={cn(
+                        "p-4 rounded-xl border transition-all flex flex-col justify-between gap-3 relative group bg-white shadow-xs hover:shadow-md",
+                        apt.status === 'pendiente' ? "border-amber-300 hover:border-amber-400 bg-amber-50/15" :
+                        apt.status === 'confirmed' ? "border-primary/30 hover:border-primary" :
+                        apt.status === 'in-session' ? "border-tertiary/40 bg-tertiary-container/10" :
+                        apt.status === 'finished' ? "border-secondary/40 bg-secondary-container/10" :
+                        "border-outline-variant bg-surface/30"
+                      )}
+                    >
+                      <div>
+                        {/* Header: Hora & Estado */}
+                        <div className="flex items-center justify-between gap-2 mb-2.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-black text-primary bg-primary/10 px-2.5 py-1 rounded-lg border border-primary/20 flex items-center gap-1">
+                              <Clock size={12} />
+                              {apt.time} hs
+                            </span>
+                            <span className="text-[11px] font-semibold text-on-surface-variant">
+                              ({apt.duration || 30} min)
+                            </span>
+                          </div>
+
+                          <span className={cn(
+                            "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border",
+                            apt.status === 'pendiente' ? "bg-amber-100 text-amber-800 border-amber-300" :
+                            apt.status === 'confirmed' ? "bg-blue-100 text-blue-800 border-blue-300" :
+                            apt.status === 'in-session' ? "bg-purple-100 text-purple-800 border-purple-300" :
+                            apt.status === 'finished' ? "bg-emerald-100 text-emerald-800 border-emerald-300" :
+                            apt.status === 'cancelado' ? "bg-red-100 text-red-800 border-red-300" :
+                            "bg-orange-100 text-orange-800 border-orange-300"
+                          )}>
+                            {apt.status}
+                          </span>
+                        </div>
+
+                        {/* Paciente */}
+                        <div className="space-y-1">
+                          <h4 
+                            onClick={() => handleAppointmentClick(apt)}
+                            className="text-base font-black text-on-surface hover:text-primary transition-colors cursor-pointer"
+                          >
+                            {apt.patientName}
+                          </h4>
+                          
+                          <div className="flex items-center gap-1.5 text-xs text-on-surface-variant">
+                            <Phone size={12} className={phone ? "text-emerald-600" : "text-on-surface-variant/50"} />
+                            {phone ? (
+                              <span className="font-semibold text-on-surface">{phone}</span>
+                            ) : (
+                              <span className="text-on-surface-variant/60 italic text-[11px]">Sin teléfono registrado</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Tratamiento y Bono */}
+                        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-surface-bright border border-outline-variant text-on-surface">
+                            {apt.type || apt.treatment || 'Consulta'}
+                          </span>
+                          {apt.isPackageSession && (
+                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-300 flex items-center gap-1">
+                              <Package size={11} /> {apt.packageName || 'Paquete'}
+                            </span>
+                          )}
+                        </div>
+
+                        {apt.notes && (
+                          <p className="mt-2 text-xs text-on-surface-variant/90 bg-surface p-2 rounded-lg border border-outline-variant/60 line-clamp-2">
+                            {apt.notes}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Barra de Acciones con Botón de WhatsApp */}
+                      <div className="pt-3 border-t border-outline-variant/60 flex items-center justify-between gap-2 mt-2">
+                        {/* Botón WhatsApp */}
+                        <button
+                          type="button"
+                          onClick={(e) => handleSendWhatsAppReminder(apt, e)}
+                          title={phone ? `Enviar recordatorio por WhatsApp a ${apt.patientName}` : 'Paciente sin teléfono registrado'}
+                          className={cn(
+                            "px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs active:scale-95 cursor-pointer",
+                            phone 
+                              ? "bg-emerald-600 hover:bg-emerald-700 text-white" 
+                              : "bg-emerald-50 text-emerald-700/60 border border-emerald-200 hover:bg-emerald-100"
+                          )}
+                        >
+                          <MessageCircle size={14} className="shrink-0" />
+                          <span>Recordatorio WhatsApp</span>
+                        </button>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={(e) => handleOpenEditAppointment(apt, e)}
+                            title="Reprogramar / Editar fecha y hora"
+                            className="p-1.5 rounded-lg text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors cursor-pointer"
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleAppointmentClick(apt)}
+                            title="Ver detalle del turno"
+                            className="px-2.5 py-1.5 rounded-lg bg-surface text-on-surface hover:bg-surface-bright text-xs font-bold border border-outline-variant transition-colors flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>Detalle</span>
+                            <ChevronRight size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  );
+                })}
               </div>
             )}
           </div>
-          
-          <div className="p-4 border-t border-outline-variant bg-surface-dim shrink-0">
-            <button 
-              onClick={() => setIsNewAppointmentOpen(true)}
-              className="w-full py-3 bg-primary text-white rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:shadow-primary/40 active:scale-95 transition-all"
-            >
-              <Clock size={16} />
-              NUEVO TURNO
-            </button>
+        )}
+
+        {/* Sidebar: Day View (Solo en vistas Semana y Día) */}
+        {view !== 'month' && (
+          <div className="hidden lg:flex bg-white rounded-2xl border border-outline-variant shadow-sm flex-col overflow-hidden max-h-full">
+            <div className="p-6 border-b border-outline-variant bg-surface-bright shrink-0">
+              <p className="text-[10px] font-black text-on-surface-variant uppercase tracking-[0.2em] mb-1">Agenda del día</p>
+              <h3 className="text-sm font-bold text-on-surface capitalize">
+                {new Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'numeric', month: 'long' }).format(selectedDate)}
+              </h3>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar min-h-0">
+              {selectedDateAppointments.length > 0 ? (
+                selectedDateAppointments.map((apt) => (
+                  <motion.div
+                    key={apt.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    onClick={() => handleAppointmentClick(apt)}
+                    className={cn(
+                      "p-4 rounded-xl border border-outline-variant shadow-none hover:shadow-md transition-all cursor-pointer group relative overflow-hidden",
+                      apt.status === 'pendiente' ? "hover:border-amber-400 bg-amber-50/30" :
+                      apt.status === 'confirmed' ? "hover:border-primary/40" :
+                      apt.status === 'in-session' ? "hover:border-tertiary/40 bg-tertiary-container/10" :
+                      apt.status === 'finished' ? "hover:border-secondary/40 opacity-70" : "opacity-50"
+                    )}
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[13px] font-black text-primary bg-primary/5 px-2 py-0.5 rounded border border-primary/10">
+                          {apt.time}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleSendWhatsAppReminder(apt, e)}
+                          title="Enviar recordatorio por WhatsApp"
+                          className="p-1 rounded-md text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
+                        >
+                          <MessageCircle size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleOpenEditAppointment(apt, e)}
+                          title="Editar fecha y hora"
+                          className="p-1 rounded-md text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors"
+                        >
+                          <Edit2 size={13} />
+                        </button>
+                      </div>
+                      <div className={cn(
+                        "w-2 h-2 rounded-full",
+                        apt.status === 'pendiente' ? "bg-amber-500" :
+                        apt.status === 'confirmed' ? "bg-primary" :
+                        apt.status === 'in-session' ? "bg-tertiary" :
+                        apt.status === 'finished' ? "bg-secondary" : "bg-on-surface-variant"
+                      )} />
+                    </div>
+                    <h4 className="text-[14px] font-bold text-on-surface mb-1 group-hover:text-primary transition-colors">{apt.patientName}</h4>
+                    <div className="flex items-center gap-2 text-[11px] font-bold text-on-surface-variant uppercase tracking-tighter">
+                      <span className="truncate">{apt.type}</span>
+                      <span className="shrink-0">•</span>
+                      <span className="shrink-0">{apt.duration || 30}m</span>
+                      {apt.isPackageSession && (
+                        <span className="text-[9px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300 flex items-center gap-0.5 ml-auto">
+                          <Package size={9} /> Paquete ($0)
+                        </span>
+                      )}
+                    </div>
+                  </motion.div>
+                ))
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center opacity-30 py-20 text-center">
+                  <Calendar size={48} className="mb-4 text-on-surface-variant" />
+                  <p className="text-[11px] font-black uppercase tracking-widest leading-loose">
+                    No hay turnos agendados<br />para este día
+                  </p>
+                  <button 
+                    onClick={() => setIsNewAppointmentOpen(true)}
+                    className="mt-6 text-[10px] font-black text-primary uppercase underline tracking-widest"
+                  >
+                    Agendar Primero
+                  </button>
+                </div>
+              )}
+            </div>
+            
+            <div className="p-4 border-t border-outline-variant bg-surface-dim shrink-0">
+              <button 
+                onClick={() => setIsNewAppointmentOpen(true)}
+                className="w-full py-3 bg-primary text-white rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:shadow-primary/40 active:scale-95 transition-all"
+              >
+                <Clock size={16} />
+                NUEVO TURNO
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <Modal 
@@ -1011,7 +1320,7 @@ export function Agenda() {
             {!isCreatingNewPatient && <input type="hidden" required value={newApt.patientId} />}
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Fecha</label>
               <input 
@@ -1177,10 +1486,16 @@ export function Agenda() {
                 <p className="text-[11px] text-on-surface-variant tracking-wide uppercase font-bold">
                   {selectedAppointment.time} • {selectedAppointment.duration || 30} min
                 </p>
+                {getPatientPhone(selectedAppointment) && (
+                  <p className="text-xs text-emerald-700 font-semibold flex items-center gap-1 mt-0.5">
+                    <Phone size={11} />
+                    {getPatientPhone(selectedAppointment)}
+                  </p>
+                )}
               </div>
             </div>
 
-            {/* Fecha y Hora con botón de edición */}
+            {/* Fecha y Hora con botón de edición y WhatsApp */}
             <div className="p-4 bg-surface-bright rounded-xl border border-outline-variant flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center font-bold shrink-0">
@@ -1193,14 +1508,24 @@ export function Agenda() {
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => handleOpenEditAppointment(selectedAppointment)}
-                className="px-3 py-2 bg-primary text-white hover:bg-primary/90 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm"
-              >
-                <Edit2 size={13} />
-                Editar Fecha / Hora
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSendWhatsAppReminder(selectedAppointment)}
+                  className="px-3 py-2 bg-emerald-600 text-white hover:bg-emerald-700 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm"
+                >
+                  <MessageCircle size={14} />
+                  Recordatorio WhatsApp
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenEditAppointment(selectedAppointment)}
+                  className="px-3 py-2 bg-primary text-white hover:bg-primary/90 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm"
+                >
+                  <Edit2 size={13} />
+                  Editar Fecha / Hora
+                </button>
+              </div>
             </div>
 
             {selectedAppointment.isPackageSession && (

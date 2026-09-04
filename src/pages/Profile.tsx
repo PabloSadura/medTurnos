@@ -331,7 +331,7 @@ export function Profile() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 self-end sm:self-center">
+        <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
           <AnimatePresence>
             {success && (
               <motion.div 
@@ -340,7 +340,7 @@ export function Profile() {
                 exit={{ opacity: 0 }}
                 className="flex items-center gap-1.5 text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider"
               >
-                <CheckCircle2 size={15} /> Cambios guardados
+                <CheckCircle2 size={15} /> <span className="hidden sm:inline">Cambios guardados</span>
               </motion.div>
             )}
           </AnimatePresence>
@@ -348,7 +348,7 @@ export function Profile() {
             onClick={handleSave}
             disabled={saving}
             className={cn(
-              "px-5 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 shadow-md uppercase tracking-wider transition-all cursor-pointer",
+              "w-full sm:w-auto justify-center px-5 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 shadow-md uppercase tracking-wider transition-all cursor-pointer",
               saving 
                 ? "bg-surface-dim text-on-surface-variant opacity-60 cursor-not-allowed" 
                 : "bg-primary text-white hover:bg-primary/90 active:scale-95 shadow-primary/20"
@@ -361,11 +361,11 @@ export function Profile() {
       </div>
 
       {/* Tabs Navigation */}
-      <div className="flex border-b border-outline-variant bg-white px-4 rounded-xl shadow-sm gap-2">
+      <div className="flex border-b border-outline-variant bg-white px-2 sm:px-4 rounded-xl shadow-sm gap-1 sm:gap-2 overflow-x-auto scrollbar-none">
         <button
           onClick={() => setActiveTab('info')}
           className={cn(
-            "flex items-center gap-2 py-3.5 px-4 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer",
+            "flex items-center gap-1.5 sm:gap-2 py-3 sm:py-3.5 px-3 sm:px-4 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer whitespace-nowrap",
             activeTab === 'info'
               ? "border-primary text-primary"
               : "border-transparent text-on-surface-variant hover:text-on-surface"
@@ -378,7 +378,7 @@ export function Profile() {
           <button
             onClick={() => setActiveTab('schedule')}
             className={cn(
-              "flex items-center gap-2 py-3.5 px-4 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer",
+              "flex items-center gap-1.5 sm:gap-2 py-3 sm:py-3.5 px-3 sm:px-4 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer whitespace-nowrap",
               activeTab === 'schedule'
                 ? "border-primary text-primary"
                 : "border-transparent text-on-surface-variant hover:text-on-surface"
@@ -391,7 +391,7 @@ export function Profile() {
         <button
           onClick={() => setActiveTab('security')}
           className={cn(
-            "flex items-center gap-2 py-3.5 px-4 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer",
+            "flex items-center gap-1.5 sm:gap-2 py-3 sm:py-3.5 px-3 sm:px-4 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer whitespace-nowrap",
             activeTab === 'security'
               ? "border-primary text-primary"
               : "border-transparent text-on-surface-variant hover:text-on-surface"

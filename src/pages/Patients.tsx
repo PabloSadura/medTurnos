@@ -203,11 +203,14 @@ export function Patients() {
       // Subscribe to patient's packages
       const pkgQ = query(
         collection(db, 'patient_packages'),
+        where('userId', '==', ownerId),
         where('patientId', '==', selectedPatient.id)
       );
       const unsubscribePackages = onSnapshot(pkgQ, (snapshot) => {
         const pDocs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as PatientPackage));
         setPatientPackages(pDocs);
+      }, (error) => {
+        console.error('Error listening to patient packages:', error);
       });
 
       return () => {
@@ -562,7 +565,79 @@ export function Patients() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobile Patient Cards (< md) */}
+        <div className="block md:hidden divide-y divide-outline-variant/60">
+          {filteredPatients.length === 0 ? (
+            <div className="p-8 text-center text-xs text-on-surface-variant">
+              No se encontraron pacientes.
+            </div>
+          ) : (
+            filteredPatients.map((patient) => (
+              <div 
+                key={patient.id}
+                className="p-4 bg-white hover:bg-surface/50 transition-colors flex flex-col gap-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-primary-container text-primary flex items-center justify-center text-sm font-bold shrink-0">
+                      {patient.name.charAt(0)}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-on-surface truncate">{patient.name}</p>
+                      <p className="text-[11px] text-on-surface-variant font-medium">
+                        DNI: <span className="font-mono text-on-surface">{patient.idNumber}</span> • {calculateAge(patient.birthDate)} años
+                      </p>
+                    </div>
+                  </div>
+                  <span className={cn(
+                    "px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider shrink-0",
+                    patient.status === 'active' ? "bg-tertiary-container text-on-tertiary-container" : "bg-surface-dim text-on-surface-variant"
+                  )}>
+                    {patient.status === 'active' ? 'ACTIVO' : 'INACTIVO'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs text-on-surface-variant pt-1 border-t border-outline-variant/40">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <Phone size={12} className="text-primary/70 shrink-0" />
+                    <span className="truncate">{patient.phone || 'Sin teléfono'}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 truncate">
+                    <Calendar size={12} className="text-secondary/70 shrink-0" />
+                    <span className="truncate">Última: {patient.lastVisit}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-2 border-t border-outline-variant/40">
+                  <button 
+                    onClick={() => handleOpenModal('history', patient)}
+                    className="flex-1 py-1.5 px-2.5 bg-primary/10 hover:bg-primary/20 text-primary text-[11px] font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <FileText size={13} />
+                    Historia Clínica
+                  </button>
+                  <button 
+                    onClick={() => handleOpenModal('edit', patient)}
+                    className="p-2 hover:bg-surface border border-outline-variant text-on-surface-variant rounded-lg transition-colors"
+                    title="Editar"
+                  >
+                    <Edit2 size={14} />
+                  </button>
+                  <button 
+                    onClick={() => handleOpenModal('delete', patient)}
+                    className="p-2 hover:bg-error-container text-error rounded-lg transition-colors"
+                    title="Eliminar"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Desktop Table (>= md) */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left">
             <thead>
               <tr className="bg-surface-bright border-b border-outline-variant">
@@ -669,8 +744,8 @@ export function Patients() {
         className="max-w-xl"
       >
         <form className="space-y-4" onSubmit={handleSavePatient}>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+            <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Nombre Completo</label>
               <input 
                 type="text" 
@@ -681,7 +756,7 @@ export function Patients() {
                 placeholder="Ej: Juan Pérez" 
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">DNI / Identificación</label>
               <input 
                 type="text" 
@@ -694,8 +769,8 @@ export function Patients() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+            <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Teléfono</label>
               <input 
                 type="tel" 
@@ -705,7 +780,7 @@ export function Patients() {
                 placeholder="+1 234 567 890" 
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Email</label>
               <input 
                 type="email" 
@@ -717,8 +792,8 @@ export function Patients() {
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
-            <div className="space-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+            <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Género</label>
               <select 
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
@@ -730,7 +805,7 @@ export function Patients() {
                 <option value="Other">Otro</option>
               </select>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Fecha de Nacimiento</label>
               <input 
                 type="date" 
@@ -739,7 +814,7 @@ export function Patients() {
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Estado</label>
               <select 
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
@@ -805,7 +880,7 @@ export function Patients() {
           </div>
 
           {/* Attendance & Financial KPIs */}
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
               <CheckCircle2 size={16} className="text-tertiary mb-1" />
               <span className="text-[18px] font-bold text-on-surface">{patientStats.attendance}%</span>

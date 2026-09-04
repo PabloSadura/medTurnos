@@ -199,10 +199,10 @@ export function Inventory() {
           <h1 className="headline-lg text-on-surface">Inventario de Clínica</h1>
           <p className="body-md text-on-surface-variant">Seguimiento de niveles de stock, consumo de materiales y alertas de reposición.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button 
             onClick={() => handleOpenModal('adjust')}
-            className="px-3 py-1.5 bg-white border border-outline-variant rounded-md text-[11px] font-bold flex items-center gap-2 hover:bg-surface transition-all text-on-surface-variant uppercase tracking-wider"
+            className="px-3 py-2 bg-white border border-outline-variant rounded-md text-[11px] font-bold flex items-center gap-2 hover:bg-surface transition-all text-on-surface-variant uppercase tracking-wider"
           >
             <RefreshCw size={14} />
             AJUSTAR STOCK
@@ -217,38 +217,38 @@ export function Inventory() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {[
           { label: 'Total Ítems', value: stats.totalItems, icon: Package, color: 'bg-primary-container text-primary' },
           { label: 'Stock Bajo', value: stats.lowStock, icon: AlertCircle, color: 'bg-error-container text-error' },
           { label: 'Consumo', value: stats.consumption, icon: TrendingDown, color: 'bg-tertiary-container text-on-tertiary-container' },
           { label: 'Valor Total', value: `$${stats.totalValue.toLocaleString()}`, icon: BarChart3, color: 'bg-secondary-container text-secondary' },
         ].map((stat) => (
-          <div key={stat.label} className="bg-white p-4 rounded-xl border border-outline-variant shadow-sm flex items-center gap-4">
-            <div className={cn("p-2 rounded-lg", stat.color)}>
+          <div key={stat.label} className="bg-white p-3.5 sm:p-4 rounded-xl border border-outline-variant shadow-sm flex items-center gap-3 sm:gap-4 min-w-0">
+            <div className={cn("p-2 rounded-lg shrink-0", stat.color)}>
               <stat.icon size={18} />
             </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">{stat.label}</p>
-              <h3 className="text-lg font-bold text-on-surface">{stat.value}</h3>
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant truncate">{stat.label}</p>
+              <h3 className="text-base sm:text-lg font-bold text-on-surface truncate">{stat.value}</h3>
             </div>
           </div>
         ))}
       </div>
 
       <div className="bg-white rounded-xl border border-outline-variant shadow-sm overflow-hidden">
-        <div className="px-6 py-3 border-b border-outline-variant flex justify-between items-center bg-white">
-          <div className="relative w-80">
+        <div className="p-3 sm:px-6 sm:py-3 border-b border-outline-variant flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 bg-white">
+          <div className="relative w-full sm:w-80">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
             <input 
               type="text" 
               placeholder="Buscar producto..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-4 py-1.5 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary text-[13px] outline-none" 
+              className="w-full pl-9 pr-4 py-2 sm:py-1.5 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary text-[13px] outline-none" 
             />
           </div>
-          <div className="flex gap-1">
+          <div className="flex gap-1.5 self-start sm:self-auto">
             <button 
               onClick={() => setStatusFilter('all')}
               className={cn(
@@ -270,7 +270,60 @@ export function Inventory() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobile Cards View */}
+        <div className="block md:hidden divide-y divide-outline-variant/50">
+          {filteredInventory.map((item) => (
+            <div 
+              key={item.id} 
+              onClick={() => handleOpenModal('details', item)}
+              className="p-4 hover:bg-surface/50 active:bg-surface transition-colors cursor-pointer"
+            >
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <h4 className="text-sm font-bold text-on-surface">{item.name}</h4>
+                  <p className="text-xs font-semibold text-primary mt-0.5">${(item.price || 0).toLocaleString()} <span className="text-[10px] text-on-surface-variant font-normal">/ {item.unit}</span></p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className={cn(
+                    "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
+                    item.status === 'out' ? "bg-error-container text-error" :
+                    item.status === 'low' ? "bg-amber-100 text-amber-800" :
+                    "bg-emerald-50 text-emerald-700"
+                  )}>
+                    {item.status === 'out' ? 'Agotado' : item.status === 'low' ? 'Bajo' : 'OK'}
+                  </span>
+                  <ChevronRight size={16} className="text-on-surface-variant" />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-xs text-on-surface-variant mt-2 pt-2 border-t border-outline-variant/30">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-on-surface">{item.stock} {item.unit}</span>
+                  <div className="w-20 h-1.5 bg-surface-dim rounded-full overflow-hidden">
+                    <div 
+                      className={cn("h-full rounded-full", 
+                        item.status === 'out' ? 'w-0' : 
+                        item.status === 'low' ? 'bg-error w-1/4' : 
+                        'bg-primary w-2/3'
+                      )}
+                    ></div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-medium text-on-surface-variant">
+                  Valor: ${(item.stock * (item.price || 0)).toLocaleString()}
+                </span>
+              </div>
+            </div>
+          ))}
+          {filteredInventory.length === 0 && (
+            <div className="p-8 text-center text-on-surface-variant text-xs font-bold">
+              No se encontraron productos en el inventario.
+            </div>
+          )}
+        </div>
+
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left">
             <thead>
               <tr className="bg-surface-bright border-b border-outline-variant">
@@ -341,7 +394,7 @@ export function Inventory() {
             />
           </div>
           
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Stock Inicial</label>
               <input 
@@ -365,7 +418,7 @@ export function Inventory() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Mínimo Stock</label>
               <input 
@@ -416,7 +469,7 @@ export function Inventory() {
             </select>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Tipo de Ajuste</label>
               <div className="flex gap-2">

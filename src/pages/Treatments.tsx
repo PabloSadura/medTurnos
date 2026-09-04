@@ -161,11 +161,11 @@ export function Treatments() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-2 border-b border-outline-variant">
+      <div className="flex items-center gap-2 border-b border-outline-variant overflow-x-auto">
         <button
           onClick={() => setActiveTab('treatments')}
           className={cn(
-            "flex items-center gap-2 px-5 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px",
+            "flex items-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap",
             activeTab === 'treatments'
               ? "border-primary text-primary"
               : "border-transparent text-on-surface-variant hover:text-on-surface"
@@ -178,7 +178,7 @@ export function Treatments() {
         <button
           onClick={() => setActiveTab('packages')}
           className={cn(
-            "flex items-center gap-2 px-5 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px",
+            "flex items-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap",
             activeTab === 'packages'
               ? "border-primary text-primary"
               : "border-transparent text-on-surface-variant hover:text-on-surface"
@@ -214,18 +214,20 @@ export function Treatments() {
                     <div className="p-2 bg-primary-container text-primary rounded-lg">
                       <Stethoscope size={18} />
                     </div>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                       <button 
                         onClick={() => handleOpenModal('edit', treatment)}
-                        className="p-1 hover:bg-surface rounded text-on-surface-variant"
+                        className="p-1.5 hover:bg-surface rounded text-on-surface-variant"
+                        title="Editar"
                       >
-                        <Edit3 size={14} />
+                        <Edit3 size={15} />
                       </button>
                       <button 
                         onClick={() => handleOpenModal('delete', treatment)}
-                        className="p-1 hover:bg-error-container text-error rounded"
+                        className="p-1.5 hover:bg-error-container text-error rounded"
+                        title="Eliminar"
                       >
-                        <Trash2 size={14} />
+                        <Trash2 size={15} />
                       </button>
                     </div>
                   </div>
@@ -279,7 +281,7 @@ export function Treatments() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Costo ($)</label>
               <input 

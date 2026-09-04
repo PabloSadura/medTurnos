@@ -164,6 +164,9 @@ export interface MonthMetrics {
   absent: number;
   canceled: number;
   attendanceRate: number;
+  appointmentsRevenue: number;
+  packagesRevenue: number;
+  packagesCount: number;
   revenue: number;
   avgTicket: number;
 }
@@ -172,7 +175,8 @@ export function computeMonthlyEvolution(
   months: string[],
   appointments: any[],
   treatments: any[] = [],
-  evolutions: any[] = []
+  evolutions: any[] = [],
+  packages: any[] = []
 ): MonthMetrics[] {
   return months.map(ym => {
     const monthApps = appointments.filter(a => {
@@ -184,6 +188,15 @@ export function computeMonthlyEvolution(
       const d = ev.date || (ev.createdAt?.toDate ? ev.createdAt.toDate().toISOString().split('T')[0] : '');
       return typeof d === 'string' && d.startsWith(ym);
     });
+
+    // Packages purchased in this month
+    const monthPackages = packages.filter(pkg => {
+      const d = pkg.purchaseDate || (pkg.createdAt?.toDate ? pkg.createdAt.toDate().toISOString().split('T')[0] : '');
+      return typeof d === 'string' && d.startsWith(ym);
+    });
+
+    const packagesRevenue = monthPackages.reduce((acc, p) => acc + (Number(p.pricePaid) || 0), 0);
+    const packagesCount = monthPackages.length;
 
     // Standalone evolutions (clinical attentions registered directly without a linked appointment)
     const standaloneEvolutions = monthEvolutions.filter(ev => {
@@ -198,7 +211,8 @@ export function computeMonthlyEvolution(
     const totalAppointments = monthApps.length + standaloneEvolutions.length;
     const uniquePatientIds = new Set([
       ...monthApps.map(a => a.patientId || a.patientName || a.id).filter(Boolean),
-      ...standaloneEvolutions.map(ev => ev.patientId || ev.patientName || ev.id).filter(Boolean)
+      ...standaloneEvolutions.map(ev => ev.patientId || ev.patientName || ev.id).filter(Boolean),
+      ...monthPackages.map(p => p.patientId || p.patientName || p.id).filter(Boolean)
     ]);
     const uniquePatients = uniquePatientIds.size;
 
@@ -206,13 +220,13 @@ export function computeMonthlyEvolution(
     let pending = 0;
     let absent = 0;
     let canceled = 0;
-    let revenue = 0;
+    let appointmentsRevenue = 0;
 
     monthApps.forEach(app => {
       const st = normalizeStatus(app.status);
       if (st === 'finished') {
         finished++;
-        revenue += getAppointmentRevenue(app, treatments, monthEvolutions);
+        appointmentsRevenue += getAppointmentRevenue(app, treatments, monthEvolutions);
       } else if (st === 'absent') {
         absent++;
       } else if (st === 'canceled') {
@@ -230,11 +244,13 @@ export function computeMonthlyEvolution(
         : (typeof ev.cost === 'number' && !isNaN(ev.cost))
           ? ev.cost
           : 0;
-      revenue += evPaid;
+      appointmentsRevenue += evPaid;
     });
 
+    const totalRevenue = appointmentsRevenue + packagesRevenue;
     const attendanceRate = totalAppointments > 0 ? Math.round((finished / totalAppointments) * 100) : 0;
-    const avgTicket = finished > 0 ? Math.round(revenue / finished) : 0;
+    const totalTransactions = finished + packagesCount;
+    const avgTicket = totalTransactions > 0 ? Math.round(totalRevenue / totalTransactions) : 0;
 
     return {
       yearMonth: ym,
@@ -247,7 +263,10 @@ export function computeMonthlyEvolution(
       absent,
       canceled,
       attendanceRate,
-      revenue,
+      appointmentsRevenue,
+      packagesRevenue,
+      packagesCount,
+      revenue: totalRevenue,
       avgTicket
     };
   });

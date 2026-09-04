@@ -102,6 +102,8 @@ async function startServer() {
         "appointments",
         "patients",
         "treatments",
+        "packages",
+        "patient_packages",
         "stocks",
         "profiles",
         "reminder_settings",

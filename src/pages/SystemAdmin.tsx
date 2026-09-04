@@ -261,7 +261,7 @@ export function SystemAdmin() {
         <button
           onClick={handleSeedDatabase}
           disabled={seeding}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-[12px] font-bold tracking-wide hover:bg-primary/90 transition-all shadow-sm cursor-pointer disabled:opacity-50"
+          className="w-full sm:w-auto justify-center flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-[12px] font-bold tracking-wide hover:bg-primary/90 transition-all shadow-sm cursor-pointer disabled:opacity-50"
         >
           {seeding ? (
             <>
@@ -278,11 +278,11 @@ export function SystemAdmin() {
       </div>
 
       {/* Tab Selector */}
-      <div className="flex border-b border-outline-variant gap-2">
+      <div className="flex border-b border-outline-variant gap-2 overflow-x-auto">
         <button
           onClick={() => setActiveAdminTab('users')}
           className={cn(
-            "px-6 py-3 text-[11px] font-bold uppercase tracking-widest border-b-2 font-sans transition-all cursor-pointer",
+            "px-4 sm:px-6 py-2.5 sm:py-3 text-[11px] font-bold uppercase tracking-widest border-b-2 font-sans transition-all cursor-pointer whitespace-nowrap",
             activeAdminTab === 'users'
               ? "border-primary text-primary"
               : "border-transparent text-on-surface-variant hover:text-on-surface hover:border-outline-variant"
@@ -293,7 +293,7 @@ export function SystemAdmin() {
         <button
           onClick={() => setActiveAdminTab('plans')}
           className={cn(
-            "px-6 py-3 text-[11px] font-bold uppercase tracking-widest border-b-2 font-sans transition-all cursor-pointer",
+            "px-4 sm:px-6 py-2.5 sm:py-3 text-[11px] font-bold uppercase tracking-widest border-b-2 font-sans transition-all cursor-pointer whitespace-nowrap",
             activeAdminTab === 'plans'
               ? "border-primary text-primary"
               : "border-transparent text-on-surface-variant hover:text-on-surface hover:border-outline-variant"
@@ -313,16 +313,16 @@ export function SystemAdmin() {
             transition={{ duration: 0.15 }}
             className="space-y-6"
           >
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
               {stats.map((stat, i) => (
-                <div key={i} className="bg-white p-5 rounded-xl border border-outline-variant shadow-sm">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className={cn("p-2 rounded-lg", stat.color)}>
+                <div key={i} className="bg-white p-3.5 sm:p-5 rounded-xl border border-outline-variant shadow-sm min-w-0">
+                  <div className="flex items-center gap-2 sm:gap-3 mb-2 sm:mb-3">
+                    <div className={cn("p-2 rounded-lg shrink-0", stat.color)}>
                       <stat.icon size={18} />
                     </div>
-                    <p className="text-[10px] font-black uppercase tracking-[0.15em] text-on-surface-variant">{stat.label}</p>
+                    <p className="text-[10px] font-black uppercase tracking-[0.15em] text-on-surface-variant truncate">{stat.label}</p>
                   </div>
-                  <p className="text-2xl font-bold text-on-surface">{stat.value}</p>
+                  <p className="text-xl sm:text-2xl font-bold text-on-surface truncate">{stat.value}</p>
                 </div>
               ))}
             </div>
@@ -444,9 +444,9 @@ export function SystemAdmin() {
             </div>
 
             <div className="bg-white rounded-xl border border-outline-variant shadow-sm overflow-hidden">
-              <div className="px-6 py-4 border-b border-outline-variant flex flex-col md:flex-row justify-between items-center gap-4">
+              <div className="p-4 sm:px-6 sm:py-4 border-b border-outline-variant flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3 sm:gap-4">
                 <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Gestión de Usuarios</h3>
-                <div className="flex items-center gap-3 w-full md:w-auto">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
                   <div className="relative flex-1 md:w-64">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/40" size={16} />
                     <input 
@@ -463,7 +463,7 @@ export function SystemAdmin() {
                       setForm({ name: '', email: '', password: '', role: 'medico', status: 'Activo', activePlanId: 'plus' });
                       setIsModalOpen(true);
                     }}
-                    className="flex items-center gap-2 px-4 py-2 bg-primary text-white text-[11px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans whitespace-nowrap cursor-pointer"
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-primary text-white text-[11px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans whitespace-nowrap cursor-pointer"
                   >
                     <Plus size={14} />
                     Añadir Usuario
@@ -471,7 +471,75 @@ export function SystemAdmin() {
                 </div>
               </div>
 
-              <div className="overflow-x-auto">
+              {/* Mobile Cards View */}
+              <div className="block md:hidden divide-y divide-outline-variant/40 font-sans">
+                {filteredProfs.map((p) => (
+                  <div key={p.id} className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-primary-container text-primary flex items-center justify-center font-bold text-sm shrink-0">
+                          {p.name?.charAt(0) || p.email?.charAt(0)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-on-surface truncate">{p.name || 'Sin nombre'}</p>
+                          <p className="text-xs text-on-surface-variant truncate">{p.email}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button 
+                          onClick={() => {
+                            setSelectedProf(p);
+                            setForm({
+                              name: p.name || '',
+                              email: p.email || '',
+                              password: '',
+                              role: p.role || 'medico',
+                              status: p.status || 'Activo',
+                              activePlanId: p.activePlanId || 'plus'
+                            });
+                            setIsModalOpen(true);
+                          }}
+                          className="p-2 hover:bg-surface rounded-lg text-on-surface-variant transition-colors"
+                          title="Configurar"
+                        >
+                          <Settings size={17} />
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteProf(p.id)}
+                          className="p-2 hover:bg-error-container/20 rounded-lg text-error transition-colors"
+                          title="Eliminar"
+                        >
+                          <Trash2 size={17} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-outline-variant/30 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold px-2 py-0.5 bg-surface rounded-full text-on-surface-variant uppercase tracking-tighter">
+                          {p.role === 'medico' ? 'Profesional' : p.role === 'secretary' ? 'Secretaria' : 'Admin'}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <div className={cn(
+                            "w-1.5 h-1.5 rounded-full",
+                            (p.status === 'Activo' || p.status === 'active') ? "bg-tertiary" : "bg-error"
+                          )} />
+                          <span className="text-[11px] font-medium text-on-surface">{p.status || 'Activo'}</span>
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-on-surface-variant">Acceso reciente</span>
+                    </div>
+                  </div>
+                ))}
+                {filteredProfs.length === 0 && (
+                  <div className="p-8 text-center text-on-surface-variant text-xs font-medium">
+                    No se encontraron profesionales registrados.
+                  </div>
+                )}
+              </div>
+
+              {/* Desktop Table View */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left font-sans">
                   <thead className="bg-surface-bright border-b border-outline-variant">
                     <tr>
@@ -717,7 +785,7 @@ export function SystemAdmin() {
               placeholder="••••••••"
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Rol</label>
               <select 
@@ -797,7 +865,7 @@ export function SystemAdmin() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Profesionales Máx.</label>
               <input 
@@ -820,7 +888,7 @@ export function SystemAdmin() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">WhatsApps Incl.</label>
               <input 
