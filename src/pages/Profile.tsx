@@ -13,7 +13,13 @@ import {
   Award, 
   Phone, 
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  Cloud,
+  ExternalLink,
+  Folder,
+  RefreshCw,
+  Loader2,
+  FolderOpen
 } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { motion, AnimatePresence } from 'motion/react';
@@ -22,16 +28,26 @@ import { doc, onSnapshot, setDoc, getDoc, serverTimestamp } from 'firebase/fires
 import { sendEmailVerification } from 'firebase/auth';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useGoogleDrive } from '../contexts/GoogleDriveContext';
 
 export function Profile() {
   const { isStaff, profile: authProfile } = useAuth();
   const user = auth.currentUser;
   const { showToast } = useToast();
+  const { 
+    isConnected: isDriveConnected, 
+    isConnecting: isDriveConnecting, 
+    googleUser, 
+    connectGoogleDrive, 
+    disconnectGoogleDrive,
+    rootFolderId,
+    getRootFolderId
+  } = useGoogleDrive();
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
-  const [activeTab, setActiveTab] = useState<'info' | 'schedule' | 'security'>('info');
+  const [activeTab, setActiveTab] = useState<'info' | 'schedule' | 'security' | 'integrations'>('info');
 
   const [profile, setProfile] = useState({
     displayName: authProfile?.name || user?.displayName || '',
@@ -399,6 +415,18 @@ export function Profile() {
         >
           <Shield size={15} /> Seguridad y Cuenta
         </button>
+
+        <button
+          onClick={() => setActiveTab('integrations')}
+          className={cn(
+            "flex items-center gap-1.5 sm:gap-2 py-3 sm:py-3.5 px-3 sm:px-4 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer whitespace-nowrap",
+            activeTab === 'integrations'
+              ? "border-primary text-primary"
+              : "border-transparent text-on-surface-variant hover:text-on-surface"
+          )}
+        >
+          <Cloud size={15} /> Google Drive y Nube
+        </button>
       </div>
 
       {/* Tab 1: Info */}
@@ -513,6 +541,14 @@ export function Profile() {
                     <span className="font-bold text-primary">{profile.workingDays.length} días/sem</span>
                   </div>
                 )}
+                <div className="flex justify-between items-center py-2 border-b border-outline-variant/50 text-xs">
+                  <span className="text-on-surface-variant font-medium flex items-center gap-1.5">
+                    <Cloud size={13} className="text-primary" /> Google Drive
+                  </span>
+                  <span className={cn("font-bold text-[11px]", isDriveConnected ? "text-emerald-600" : "text-amber-600")}>
+                    {isDriveConnected ? 'Conectado' : 'Sin conectar'}
+                  </span>
+                </div>
                 <div className="flex justify-between items-center py-2 text-xs">
                   <span className="text-on-surface-variant font-medium">Email</span>
                   <span className="font-bold text-on-surface truncate max-w-[140px]">{user?.email}</span>
@@ -729,6 +765,154 @@ export function Profile() {
               <span className="text-[10px] font-black uppercase px-2.5 py-1 bg-surface-bright rounded-lg border border-outline-variant text-on-surface-variant">
                 Activo
               </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab 4: Integrations (Google Drive) */}
+      {activeTab === 'integrations' && (
+        <div className="bg-white p-6 rounded-2xl border border-outline-variant shadow-sm space-y-6">
+          <div>
+            <h3 className="text-sm font-bold text-on-surface flex items-center gap-2 uppercase tracking-wider">
+              <Cloud size={17} className="text-primary" /> Integración con Google Drive
+            </h3>
+            <p className="text-xs text-on-surface-variant mt-1">
+              Conecta tu cuenta de Google para almacenar automáticamente historias clínicas, radiografías, estudios y adjuntos de tus pacientes.
+            </p>
+          </div>
+
+          {/* Connection status card */}
+          <div className="p-5 rounded-2xl border border-outline-variant bg-surface space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-white border border-outline-variant shadow-sm flex items-center justify-center shrink-0">
+                  <svg className="w-6 h-6" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                  </svg>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-bold text-on-surface">Cuenta de Google</h4>
+                    {isDriveConnected ? (
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
+                        <CheckCircle2 size={11} /> Conectado
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-700 text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
+                        <AlertCircle size={11} /> No conectado
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-on-surface-variant mt-0.5">
+                    {isDriveConnected 
+                      ? (googleUser?.email || 'Sesión autorizada y activa') 
+                      : 'Conecta tu cuenta para habilitar el guardado en la nube'}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                {isDriveConnected ? (
+                  <div className="flex items-center gap-2">
+                    {rootFolderId ? (
+                      <a
+                        href={`https://drive.google.com/drive/folders/${rootFolderId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-2 bg-primary/10 text-primary hover:bg-primary/20 rounded-xl text-xs font-bold uppercase tracking-wider transition-all"
+                      >
+                        <FolderOpen size={14} />
+                        Carpeta en Drive
+                        <ExternalLink size={12} />
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const id = await getRootFolderId();
+                          if (id) window.open(`https://drive.google.com/drive/folders/${id}`, '_blank');
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 bg-primary/10 text-primary hover:bg-primary/20 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
+                      >
+                        <FolderOpen size={14} />
+                        Abrir Carpeta
+                        <ExternalLink size={12} />
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={disconnectGoogleDrive}
+                      className="px-3 py-2 border border-outline-variant hover:bg-surface-dim text-on-surface-variant hover:text-error rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
+                    >
+                      Desconectar
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    id="btn-profile-connect-drive"
+                    type="button"
+                    onClick={() => { void connectGoogleDrive(); }}
+                    disabled={isDriveConnecting}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-white hover:bg-primary/90 rounded-xl text-xs font-bold uppercase tracking-wider shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isDriveConnecting ? (
+                      <>
+                        <Loader2 size={15} className="animate-spin" />
+                        Conectando...
+                      </>
+                    ) : (
+                      <>
+                        <Cloud size={15} />
+                        Conectar con Google Drive
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Benefits and Organization Details */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-4 bg-surface rounded-xl border border-outline-variant space-y-1.5">
+              <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                <Folder size={16} />
+              </div>
+              <h5 className="text-xs font-bold text-on-surface uppercase tracking-wider">
+                Estructura Inteligente
+              </h5>
+              <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                Se crea la carpeta principal <strong>MedTurnos</strong> y dentro una subcarpeta identificada por cada paciente.
+              </p>
+            </div>
+
+            <div className="p-4 bg-surface rounded-xl border border-outline-variant space-y-1.5">
+              <div className="w-8 h-8 rounded-lg bg-secondary/10 text-secondary flex items-center justify-center">
+                <Sparkles size={16} />
+              </div>
+              <h5 className="text-xs font-bold text-on-surface uppercase tracking-wider">
+                Historias Clínicas en 1 Clic
+              </h5>
+              <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                Genera el documento consolidado de la historia clínica y súbelo instantáneamente desde la ficha del paciente.
+              </p>
+            </div>
+
+            <div className="p-4 bg-surface rounded-xl border border-outline-variant space-y-1.5">
+              <div className="w-8 h-8 rounded-lg bg-tertiary/10 text-tertiary flex items-center justify-center">
+                <Shield size={16} />
+              </div>
+              <h5 className="text-xs font-bold text-on-surface uppercase tracking-wider">
+                Permiso Restringido Seguro
+              </h5>
+              <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                Utilizamos el scope seguro <code>drive.file</code>. La app solo interactúa con los archivos creados por ella.
+              </p>
             </div>
           </div>
         </div>

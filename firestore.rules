@@ -41,6 +41,10 @@ service cloud.firestore {
     // Collections
     // ------------------------------------------------------------
 
+    match /test/{id} {
+      allow read: if true;
+    }
+
     match /plans/{id} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
@@ -90,6 +94,11 @@ service cloud.firestore {
     }
 
     match /patient_packages/{id} {
+      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+    }
+
+    match /patient_photos/{id} {
       allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
       allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
     }

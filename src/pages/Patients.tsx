@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save, TrendingUp, Stethoscope, CalendarClock, DollarSign, Clock, Link2, Package, Layers, Sparkles } from 'lucide-react';
+import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save, TrendingUp, Stethoscope, CalendarClock, DollarSign, Clock, Link2, Package, Layers, Sparkles, Cloud, Split, Camera, Image } from 'lucide-react';
 import { cn, calculateAge } from '../lib/utils';
 import { motion } from 'motion/react';
 import { Modal } from '../components/Modal';
@@ -9,6 +9,8 @@ import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, serve
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { PatientPackagesView } from '../components/PatientPackagesView';
+import { PatientDriveFiles } from '../components/PatientDriveFiles';
+import { PatientEvolutionPhotos } from '../components/PatientEvolutionPhotos';
 import { consumePackageSession } from '../lib/packageUtils';
 import { PatientPackage } from '../types';
 
@@ -20,7 +22,7 @@ export function Patients() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'history' | 'add-entry' | null>(null);
   const [selectedPatient, setSelectedPatient] = useState<any>(null);
-  const [patientDetailTab, setPatientDetailTab] = useState<'evolutions' | 'packages'>('evolutions');
+  const [patientDetailTab, setPatientDetailTab] = useState<'evolutions' | 'photos' | 'packages' | 'drive'>('evolutions');
   const [patientPackages, setPatientPackages] = useState<PatientPackage[]>([]);
   const [isAddingEntry, setIsAddingEntry] = useState(false);
   const [evolutions, setEvolutions] = useState<any[]>([]);
@@ -99,7 +101,7 @@ export function Patients() {
     if (patientId && patients.length > 0) {
       const patient = patients.find(p => p.id === patientId);
       if (patient) {
-        handleOpenModal(action === 'add-entry' ? 'add-entry' : 'history', patient, appointmentId || undefined);
+        handleOpenModal(action === 'add-entry' ? 'add-entry' : action === 'drive' ? 'drive' : action === 'photos' ? 'photos' : 'history', patient, appointmentId || undefined);
       }
     }
   }, [searchParams, patients]);
@@ -263,7 +265,7 @@ export function Patients() {
     }));
   };
 
-  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'history' | 'add-entry', patient?: any, initialAppointmentId?: string) => {
+  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'history' | 'add-entry' | 'drive' | 'photos', patient?: any, initialAppointmentId?: string) => {
     setSelectedPatient(patient || null);
     if (initialAppointmentId) {
       setTargetAppointmentId(initialAppointmentId);
@@ -289,8 +291,24 @@ export function Patients() {
         status: 'active'
       });
     }
+
+    if (type === 'photos') {
+      setActiveModal('history');
+      setPatientDetailTab('photos');
+      setIsAddingEntry(false);
+      return;
+    }
+
+    if (type === 'drive') {
+      setActiveModal('history');
+      setPatientDetailTab('drive');
+      setIsAddingEntry(false);
+      return;
+    }
+
     setActiveModal(type === 'add-entry' ? 'history' : type);
     if (type === 'add-entry') {
+      setPatientDetailTab('evolutions');
       setIsAddingEntry(true);
       const todayStr = new Date().toISOString().split('T')[0];
       setEvolutionData(prev => ({
@@ -303,6 +321,7 @@ export function Patients() {
       }));
     }
     if (type === 'history') {
+      setPatientDetailTab('evolutions');
       setIsAddingEntry(false);
       const todayStr = new Date().toISOString().split('T')[0];
       setEvolutionData(prev => ({
@@ -367,8 +386,15 @@ export function Patients() {
       const isPkgSession = Boolean(evolutionData.isPackageSession && evolutionData.patientPackageId);
 
       // If this evolution is covered by a patient package, deduct the session from the package
+      // (This atomically deducts the package session and its linked treatment materials)
       if (isPkgSession && evolutionData.patientPackageId) {
-        await consumePackageSession(db, evolutionData.patientPackageId, evolutionData.treatment);
+        await consumePackageSession(
+          db, 
+          evolutionData.patientPackageId, 
+          evolutionData.treatment,
+          ownerId,
+          selectedPatient.name
+        );
       }
 
       const batch = writeBatch(db);
@@ -412,8 +438,8 @@ export function Patients() {
       batch.set(newEvolutionRef, evolutionPayload);
       batch.set(globalEvolutionRef, evolutionPayload);
 
-      // Deduct materials if treatment has materials linked
-      if (treatment && treatment.materials && treatment.materials.length > 0) {
+      // Deduct materials if treatment has materials linked (only for non-package evolutions; package sessions are handled atomically above)
+      if (!isPkgSession && treatment && treatment.materials && treatment.materials.length > 0) {
         for (const item of treatment.materials) {
           const matId = item.materialId || item.id;
           const qty = Number(item.qty || item.quantity || 0);
@@ -611,10 +637,26 @@ export function Patients() {
                 <div className="flex items-center gap-2 pt-2 border-t border-outline-variant/40">
                   <button 
                     onClick={() => handleOpenModal('history', patient)}
-                    className="flex-1 py-1.5 px-2.5 bg-primary/10 hover:bg-primary/20 text-primary text-[11px] font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors"
+                    className="flex-1 py-1.5 px-2 bg-primary/10 hover:bg-primary/20 text-primary text-[11px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors"
                   >
                     <FileText size={13} />
-                    Historia Clínica
+                    Historia
+                  </button>
+                  <button 
+                    onClick={() => handleOpenModal('photos', patient)}
+                    className="py-1.5 px-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 text-[11px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors"
+                    title="Fotos Antes y Después"
+                  >
+                    <Camera size={13} />
+                    Fotos
+                  </button>
+                  <button 
+                    onClick={() => handleOpenModal('drive', patient)}
+                    className="py-1.5 px-2.5 bg-tertiary/10 hover:bg-tertiary/20 text-tertiary text-[11px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors"
+                    title="Archivos en Google Drive"
+                  >
+                    <Cloud size={13} />
+                    Drive
                   </button>
                   <button 
                     onClick={() => handleOpenModal('edit', patient)}
@@ -703,6 +745,20 @@ export function Patients() {
                         title="Historia Clínica"
                       >
                         <FileText size={14} />
+                      </button>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleOpenModal('photos', patient); }}
+                        className="p-1.5 hover:bg-emerald-50 text-emerald-600 rounded transition-all" 
+                        title="Fotos Antes y Después (Evolución)"
+                      >
+                        <Camera size={14} />
+                      </button>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleOpenModal('drive', patient); }}
+                        className="p-1.5 hover:bg-tertiary/20 text-tertiary rounded transition-all" 
+                        title="Archivos en Google Drive"
+                      >
+                        <Cloud size={14} />
                       </button>
                       <button 
                         onClick={(e) => { e.stopPropagation(); handleOpenModal('edit', patient); }}
@@ -858,7 +914,7 @@ export function Patients() {
         isOpen={activeModal === 'history'}
         onClose={() => setActiveModal(null)}
         title={`Detalles del Paciente: ${currentPatient?.name}`}
-        className="max-w-2xl"
+        className={cn("w-full transition-all", patientDetailTab === 'photos' ? "max-w-4xl" : "max-w-2xl")}
       >
         <div className="space-y-6">
           <div className="flex items-center gap-4 p-4 bg-surface-bright rounded-xl border border-outline-variant">
@@ -903,13 +959,14 @@ export function Patients() {
             </div>
           </div>
 
-          {/* Sub-tabs: Evoluciones vs Paquetes */}
-          <div className="flex items-center gap-2 border-b border-outline-variant">
+          {/* Sub-tabs: Evoluciones vs Fotos vs Paquetes vs Google Drive */}
+          <div className="flex items-center gap-2 border-b border-outline-variant overflow-x-auto">
             <button
               type="button"
+              id="tab-patient-evolutions"
               onClick={() => setPatientDetailTab('evolutions')}
               className={cn(
-                "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px",
+                "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap",
                 patientDetailTab === 'evolutions'
                   ? "border-primary text-primary"
                   : "border-transparent text-on-surface-variant hover:text-on-surface"
@@ -921,9 +978,25 @@ export function Patients() {
 
             <button
               type="button"
+              id="tab-patient-photos"
+              onClick={() => setPatientDetailTab('photos')}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap",
+                patientDetailTab === 'photos'
+                  ? "border-primary text-primary"
+                  : "border-transparent text-on-surface-variant hover:text-on-surface"
+              )}
+            >
+              <Camera size={14} />
+              Antes y Después (Fotos)
+            </button>
+
+            <button
+              type="button"
+              id="tab-patient-packages"
               onClick={() => setPatientDetailTab('packages')}
               className={cn(
-                "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px",
+                "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap",
                 patientDetailTab === 'packages'
                   ? "border-primary text-primary"
                   : "border-transparent text-on-surface-variant hover:text-on-surface"
@@ -932,12 +1005,39 @@ export function Patients() {
               <Package size={14} />
               Paquetes Adquiridos ({patientPackages.length})
             </button>
+
+            <button
+              type="button"
+              id="tab-patient-drive"
+              onClick={() => setPatientDetailTab('drive')}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap",
+                patientDetailTab === 'drive'
+                  ? "border-primary text-primary"
+                  : "border-transparent text-on-surface-variant hover:text-on-surface"
+              )}
+            >
+              <Cloud size={14} className={cn(patientDetailTab === 'drive' ? "text-primary" : "text-on-surface-variant")} />
+              Archivos y Google Drive
+            </button>
           </div>
 
-          {patientDetailTab === 'packages' ? (
+          {patientDetailTab === 'photos' ? (
+            <PatientEvolutionPhotos
+              patient={currentPatient || selectedPatient}
+              ownerId={ownerId}
+              treatments={treatments}
+            />
+          ) : patientDetailTab === 'packages' ? (
             <PatientPackagesView 
               patient={currentPatient || selectedPatient} 
               ownerId={ownerId} 
+            />
+          ) : patientDetailTab === 'drive' ? (
+            <PatientDriveFiles
+              patient={currentPatient || selectedPatient}
+              evolutions={evolutions}
+              doctorName={currentDoctorName}
             />
           ) : (
             <div className="space-y-4">

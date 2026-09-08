@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { 
   Package, Plus, Search, DollarSign, Layers, Edit3, Trash2, 
-  Save, AlertTriangle, X, Info, UserCheck, Sparkles, CheckCircle2, ChevronRight 
+  Save, AlertTriangle, X, Info, UserCheck, Sparkles, CheckCircle2, ChevronRight, Boxes 
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Modal } from './Modal';
@@ -9,15 +9,16 @@ import { motion } from 'motion/react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, where } from 'firebase/firestore';
 import { useToast } from './Toast';
-import { PackageDefinition, PackageItem } from '../types';
-import { assignPackageToPatient } from '../lib/packageUtils';
+import { PackageDefinition, PackageItem, PackageMaterialItem } from '../types';
+import { assignPackageToPatient, calculatePackageMaterials } from '../lib/packageUtils';
 
 interface PackagesManagerProps {
   ownerId: string;
   treatments: any[];
+  inventory?: any[];
 }
 
-export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
+export function PackagesManager({ ownerId, treatments, inventory = [] }: PackagesManagerProps) {
   const { showToast } = useToast();
   const [packages, setPackages] = useState<PackageDefinition[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
@@ -112,10 +113,23 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
     const treatment = treatments.find(t => t.id === selectedTreatmentId);
     if (!treatment) return;
 
+    const treatmentMaterials: PackageMaterialItem[] = (treatment.materials || []).map((m: any) => {
+      const stockItem = inventory.find(i => i.id === m.materialId);
+      return {
+        materialId: m.materialId,
+        qty: Number(m.qty) || 1,
+        materialName: stockItem?.name || m.materialName || 'Insumo',
+        unit: stockItem?.unit || m.unit || 'uds'
+      };
+    });
+
     const existingIndex = packageItems.findIndex(it => it.treatmentId === selectedTreatmentId);
     if (existingIndex >= 0) {
       const updated = [...packageItems];
       updated[existingIndex].quantity += Math.max(1, itemQuantity);
+      if (!updated[existingIndex].materials || updated[existingIndex].materials.length === 0) {
+        updated[existingIndex].materials = treatmentMaterials;
+      }
       setPackageItems(updated);
     } else {
       setPackageItems([
@@ -123,7 +137,8 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
         {
           treatmentId: treatment.id,
           treatmentName: treatment.name,
-          quantity: Math.max(1, itemQuantity)
+          quantity: Math.max(1, itemQuantity),
+          materials: treatmentMaterials
         }
       ]);
     }
@@ -147,6 +162,8 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
     return acc + ((t?.cost || 0) * (it.quantity || 0));
   }, 0);
 
+  const aggregatedMaterialsInForm = calculatePackageMaterials(packageItems, treatments, inventory);
+
   const handleSavePackage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (packageItems.length === 0) {
@@ -155,12 +172,32 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
     }
 
     try {
+      const itemsWithMaterials: PackageItem[] = packageItems.map(item => {
+        const t = treatments.find(trait => trait.id === item.treatmentId || trait.name === item.treatmentName);
+        const materials = (t?.materials || []).map((m: any) => {
+          const stockItem = inventory.find(i => i.id === m.materialId);
+          return {
+            materialId: m.materialId,
+            qty: Number(m.qty) || 1,
+            materialName: stockItem?.name || m.materialName || 'Insumo',
+            unit: stockItem?.unit || m.unit || 'uds'
+          };
+        });
+        return {
+          ...item,
+          materials: (item.materials && item.materials.length > 0) ? item.materials : materials
+        };
+      });
+
+      const totalMaterials = calculatePackageMaterials(itemsWithMaterials, treatments, inventory);
+
       const payload = {
         name: packageName.trim(),
         price: Number(packagePrice) || 0,
         description: packageDescription.trim(),
-        items: packageItems,
+        items: itemsWithMaterials,
         totalSessions: totalSessionsInForm,
+        totalMaterials,
         userId: ownerId,
         updatedAt: serverTimestamp()
       };
@@ -204,7 +241,7 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
     if (!patient) return;
 
     try {
-      await assignPackageToPatient(db, ownerId, patient, selectedPackage, assignPricePaid);
+      await assignPackageToPatient(db, ownerId, patient, selectedPackage, assignPricePaid, treatments);
       setActiveModal(null);
       showToast(`Paquete "${selectedPackage.name}" asignado exitosamente a ${patient.name}`);
     } catch (error: any) {
@@ -352,6 +389,32 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
                       ))}
                     </div>
                   </div>
+
+                  {/* Insumos Vinculados al Paquete */}
+                  {(() => {
+                    const cardMaterials = calculatePackageMaterials(pkg.items || [], treatments, inventory);
+                    if (cardMaterials.length === 0) return null;
+                    return (
+                      <div className="mt-3 pt-2.5 border-t border-outline-variant/50 space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">
+                          <span className="flex items-center gap-1 text-primary">
+                            <Boxes size={12} />
+                            Insumos Vinculados ({cardMaterials.length})
+                          </span>
+                          <span className="text-[9px] text-on-surface-variant font-normal lowercase">
+                            se descuentan por sesión
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {cardMaterials.map(m => (
+                            <span key={m.materialId} className="px-2 py-0.5 bg-surface rounded text-[10px] font-medium text-on-surface border border-outline-variant/60">
+                              {m.materialName}: <b className="text-primary">{m.totalQty} {m.unit || 'uds'}</b>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Card Action: Vender / Asignar a Paciente */}
@@ -443,43 +506,70 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
             </div>
 
             {/* Input para agregar tratamiento */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3 pt-1">
-              <div className="flex-1 space-y-1">
-                <label className="text-[10px] font-bold text-on-surface-variant uppercase">Tratamiento</label>
-                <select
-                  value={selectedTreatmentId}
-                  onChange={(e) => setSelectedTreatmentId(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary"
+            <div className="space-y-2 pt-1">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3">
+                <div className="flex-1 space-y-1">
+                  <label className="text-[10px] font-bold text-on-surface-variant uppercase">Tratamiento</label>
+                  <select
+                    value={selectedTreatmentId}
+                    onChange={(e) => setSelectedTreatmentId(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    <option value="">-- Seleccionar Tratamiento --</option>
+                    {treatments.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} (${Number(t.cost || 0).toLocaleString()})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="w-full sm:w-28 space-y-1">
+                  <label className="text-[10px] font-bold text-on-surface-variant uppercase">Cant. Sesiones</label>
+                  <input 
+                    type="number"
+                    min="1"
+                    value={itemQuantity}
+                    onChange={(e) => setItemQuantity(parseInt(e.target.value) || 1)}
+                    className="w-full px-3 py-2 bg-white border border-outline-variant rounded-lg text-xs font-bold outline-none focus:ring-1 focus:ring-primary text-center"
+                  />
+                </div>
+
+                <button 
+                  type="button" 
+                  onClick={handleAddTreatmentItem}
+                  disabled={!selectedTreatmentId}
+                  className="px-4 py-2 bg-primary text-white text-xs font-bold rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-all flex items-center justify-center gap-1.5 shrink-0"
                 >
-                  <option value="">-- Seleccionar Tratamiento --</option>
-                  {treatments.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name} (${Number(t.cost || 0).toLocaleString()})
-                    </option>
-                  ))}
-                </select>
+                  <Plus size={15} />
+                  Agregar
+                </button>
               </div>
 
-              <div className="w-full sm:w-28 space-y-1">
-                <label className="text-[10px] font-bold text-on-surface-variant uppercase">Cant. Sesiones</label>
-                <input 
-                  type="number"
-                  min="1"
-                  value={itemQuantity}
-                  onChange={(e) => setItemQuantity(parseInt(e.target.value) || 1)}
-                  className="w-full px-3 py-2 bg-white border border-outline-variant rounded-lg text-xs font-bold outline-none focus:ring-1 focus:ring-primary text-center"
-                />
-              </div>
-
-              <button 
-                type="button"
-                onClick={handleAddTreatmentItem}
-                disabled={!selectedTreatmentId}
-                className="px-4 py-2 bg-primary text-white text-xs font-bold rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-all flex items-center justify-center gap-1.5 shrink-0"
-              >
-                <Plus size={15} />
-                Agregar
-              </button>
+              {/* Preview of selected treatment materials */}
+              {(() => {
+                const selectedT = treatments.find(t => t.id === selectedTreatmentId);
+                if (!selectedT) return null;
+                const mats = selectedT.materials || [];
+                return (
+                  <div className="text-[11px] text-on-surface-variant bg-surface-bright p-2 rounded-lg border border-outline-variant/50 flex items-center gap-2">
+                    <Boxes size={13} className="text-primary shrink-0" />
+                    <span>
+                      {mats.length > 0 ? (
+                        <>
+                          <strong className="text-on-surface font-semibold">Insumos por sesión:</strong>{' '}
+                          {mats.map((m: any) => {
+                            const sItem = inventory.find(i => i.id === m.materialId);
+                            return `${m.qty} ${sItem?.unit || 'uds'} de ${sItem?.name || m.materialName || 'Insumo'}`;
+                          }).join(', ')}
+                        </>
+                      ) : (
+                        <span className="text-on-surface-variant/70 italic">Este tratamiento no requiere insumos de inventario registrados.</span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Lista de tratamientos agregados */}
@@ -488,6 +578,9 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
                 const treatment = treatments.find(t => t.id === item.treatmentId || t.name === item.treatmentName);
                 const unitCost = treatment?.cost || 0;
                 const subtotal = unitCost * item.quantity;
+                const mats = (item.materials && item.materials.length > 0)
+                  ? item.materials
+                  : (treatment?.materials || []);
 
                 return (
                   <div 
@@ -499,6 +592,24 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
                       <p className="text-[10px] text-on-surface-variant">
                         ${unitCost.toLocaleString()} c/u • Subtotal catálogo: ${subtotal.toLocaleString()}
                       </p>
+
+                      {/* Materials for this treatment item */}
+                      {mats && mats.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1 mt-1">
+                          <span className="text-[10px] font-semibold text-primary flex items-center gap-1">
+                            <Boxes size={11} /> Insumos por sesión:
+                          </span>
+                          {mats.map((m: any, mIdx: number) => {
+                            const sItem = inventory.find(i => i.id === m.materialId);
+                            const totalForLine = (Number(m.qty) || 1) * item.quantity;
+                            return (
+                              <span key={mIdx} className="text-[9px] bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium">
+                                {m.qty} {sItem?.unit || m.unit || 'uds'} {sItem?.name || m.materialName || 'Insumo'} (total: {totalForLine})
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-3 shrink-0">
@@ -523,7 +634,7 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
                       </div>
 
                       <button 
-                        type="button"
+                        type="button" 
                         onClick={() => handleRemoveItem(idx)}
                         className="p-1 hover:bg-error-container text-error rounded transition-colors"
                         title="Quitar del paquete"
@@ -550,6 +661,39 @@ export function PackagesManager({ ownerId, treatments }: PackagesManagerProps) {
                     Ahorro para el paciente: ${(totalStandardValueInForm - packagePrice).toLocaleString()}
                   </span>
                 )}
+              </div>
+            )}
+
+            {/* Insumos Totales Vinculados al Paquete */}
+            {aggregatedMaterialsInForm.length > 0 && (
+              <div className="p-3.5 bg-primary/5 rounded-xl border border-primary/20 space-y-2">
+                <div className="flex items-center gap-2 text-primary font-bold text-xs uppercase tracking-wider">
+                  <Boxes size={14} />
+                  <span>Insumos a descontar de Stock por cada sesión ({aggregatedMaterialsInForm.length})</span>
+                </div>
+                <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                  Cada vez que se descuente una sesión de este paquete para un paciente (en Agenda, Evolución o Paquetes Adquiridos), se descontará automáticamente la cantidad correspondiente de insumos del inventario:
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  {aggregatedMaterialsInForm.map((mat) => {
+                    const stockItem = inventory.find(i => i.id === mat.materialId);
+                    const currentStock = stockItem?.stock ?? 0;
+                    const isLow = currentStock < mat.totalQty;
+                    return (
+                      <div key={mat.materialId} className="flex justify-between items-center p-2 bg-white rounded-lg border border-outline-variant/60 text-xs">
+                        <div className="truncate pr-2">
+                          <span className="font-semibold text-on-surface truncate block">{mat.materialName}</span>
+                          <span className="block text-[10px] text-on-surface-variant">
+                            Stock actual: {currentStock} {mat.unit || 'uds'} {isLow && <span className="text-amber-600 font-bold ml-1">(Stock bajo)</span>}
+                          </span>
+                        </div>
+                        <span className="px-2 py-0.5 bg-primary/10 text-primary font-black rounded text-[11px] shrink-0">
+                          {mat.totalQty} {mat.unit || 'uds'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>

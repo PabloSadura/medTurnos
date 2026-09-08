@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-type ToastType = 'success' | 'error' | 'info';
+type ToastType = 'success' | 'error' | 'info' | 'warning';
 
 interface Toast {
   id: string;
@@ -47,23 +47,26 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                 "pointer-events-auto flex items-start gap-3 p-4 rounded-xl shadow-lg border min-w-[300px] max-w-md backdrop-blur-sm shadow-black/5",
                 toast.type === 'success' && "bg-white/95 dark:bg-surface/95 border-green-100 dark:border-green-900/30",
                 toast.type === 'error' && "bg-white/95 dark:bg-surface/95 border-red-100 dark:border-red-900/30",
-                toast.type === 'info' && "bg-white/95 dark:bg-surface/95 border-blue-100 dark:border-blue-900/30"
+                toast.type === 'info' && "bg-white/95 dark:bg-surface/95 border-blue-100 dark:border-blue-900/30",
+                toast.type === 'warning' && "bg-white/95 dark:bg-surface/95 border-amber-100 dark:border-amber-900/30"
               )}
             >
               <div className={cn(
                 "p-1.5 rounded-full shrink-0",
                 toast.type === 'success' && "text-green-600 bg-green-50 dark:bg-green-500/10",
                 toast.type === 'error' && "text-red-600 bg-red-50 dark:bg-red-500/10",
-                toast.type === 'info' && "text-blue-600 bg-blue-50 dark:bg-blue-500/10"
+                toast.type === 'info' && "text-blue-600 bg-blue-50 dark:bg-blue-500/10",
+                toast.type === 'warning' && "text-amber-600 bg-amber-50 dark:bg-amber-500/10"
               )}>
                 {toast.type === 'success' && <CheckCircle2 size={18} />}
                 {toast.type === 'error' && <AlertCircle size={18} />}
                 {toast.type === 'info' && <Info size={18} />}
+                {toast.type === 'warning' && <AlertCircle size={18} />}
               </div>
               
               <div className="flex-1 pt-1 font-sans">
                 <p className="text-xs font-black text-on-surface uppercase tracking-wider leading-tight mb-0.5">
-                  {toast.type === 'success' ? 'Éxito' : toast.type === 'error' ? 'Error' : 'Aviso'}
+                  {toast.type === 'success' ? 'Éxito' : toast.type === 'error' ? 'Error' : toast.type === 'warning' ? 'Atención' : 'Aviso'}
                 </p>
                 <p className="text-[12px] text-on-surface-variant font-medium leading-relaxed">
                   {toast.message}

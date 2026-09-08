@@ -299,16 +299,24 @@ export function Agenda() {
       const isPkg = Boolean(selectedAppointment.isPackageSession);
 
       // If changing to 'finished' and appointment is marked as package session, consume from package
+      // (This atomically deducts the package session and its linked materials)
       if (status === 'finished' && selectedAppointment.status !== 'finished') {
         if (isPkg && selectedAppointment.patientPackageId && !selectedAppointment.packageDiscounted) {
-          await consumePackageSession(db, selectedAppointment.patientPackageId, selectedAppointment.type || selectedAppointment.treatment);
+          await consumePackageSession(
+            db, 
+            selectedAppointment.patientPackageId, 
+            selectedAppointment.type || selectedAppointment.treatment,
+            ownerId,
+            selectedAppointment.patientName
+          );
         }
       }
 
       const batch = writeBatch(db);
 
-      // Impact logic: If changing to 'finished', deduct materials from stocks
-      if (status === 'finished' && selectedAppointment.status !== 'finished') {
+      // Impact logic: If changing to 'finished' for non-package appointments, deduct materials from stocks
+      // (Package appointments have materials deducted by consumePackageSession above)
+      if (status === 'finished' && selectedAppointment.status !== 'finished' && !isPkg) {
         const treatment = treatments.find(t => t.name === selectedAppointment.type);
         if (treatment && treatment.materials && treatment.materials.length > 0) {
           for (const item of treatment.materials) {

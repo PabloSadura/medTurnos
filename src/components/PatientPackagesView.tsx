@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Package, Plus, CheckCircle2, AlertCircle, ShoppingBag, Clock, ChevronRight, DollarSign, Trash2 } from 'lucide-react';
+import { 
+  Package, Plus, CheckCircle2, AlertCircle, ShoppingBag, Clock, 
+  ChevronRight, DollarSign, Trash2, Boxes, MinusCircle, RotateCcw 
+} from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { useToast } from './Toast';
-import { PackageDefinition, PatientPackage } from '../types';
-import { assignPackageToPatient, deletePatientPackage } from '../lib/packageUtils';
+import { PackageDefinition, PatientPackage, PatientPackageItem } from '../types';
+import { assignPackageToPatient, deletePatientPackage, consumePackageSession, restorePackageSession } from '../lib/packageUtils';
 
 interface PatientPackagesViewProps {
   patient: any;
@@ -17,12 +20,15 @@ export function PatientPackagesView({ patient, ownerId, onPackageUpdated }: Pati
   const { showToast } = useToast();
   const [patientPackages, setPatientPackages] = useState<PatientPackage[]>([]);
   const [catalogPackages, setCatalogPackages] = useState<PackageDefinition[]>([]);
+  const [treatments, setTreatments] = useState<any[]>([]);
+  const [inventory, setInventory] = useState<any[]>([]);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [selectedCatalogPackageId, setSelectedCatalogPackageId] = useState('');
   const [customPricePaid, setCustomPricePaid] = useState<number>(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [packageToDelete, setPackageToDelete] = useState<PatientPackage | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [processingItemId, setProcessingItemId] = useState<string | null>(null);
 
   // Load patient's packages
   useEffect(() => {
@@ -56,9 +62,23 @@ export function PatientPackagesView({ patient, ownerId, onPackageUpdated }: Pati
       setCatalogPackages(cDocs.sort((a, b) => a.name.localeCompare(b.name)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'packages'));
 
+    // Load treatments for material resolution
+    const tQ = query(collection(db, 'treatments'), where('userId', '==', ownerId));
+    const unsubscribeTreatments = onSnapshot(tQ, (snapshot) => {
+      setTreatments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'treatments'));
+
+    // Load inventory for material names and units
+    const sQ = query(collection(db, 'stocks'), where('userId', '==', ownerId));
+    const unsubscribeStocks = onSnapshot(sQ, (snapshot) => {
+      setInventory(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'stocks'));
+
     return () => {
       unsubscribe();
       unsubscribeCat();
+      unsubscribeTreatments();
+      unsubscribeStocks();
     };
   }, [patient?.id, ownerId]);
 
@@ -90,7 +110,7 @@ export function PatientPackagesView({ patient, ownerId, onPackageUpdated }: Pati
 
     setIsSubmitting(true);
     try {
-      await assignPackageToPatient(db, ownerId, patient, packageDef, customPricePaid);
+      await assignPackageToPatient(db, ownerId, patient, packageDef, customPricePaid, treatments);
       setIsAssignModalOpen(false);
       showToast(`Paquete "${packageDef.name}" asignado con éxito a ${patient.name}`);
     } catch (error: any) {
@@ -98,6 +118,71 @@ export function PatientPackagesView({ patient, ownerId, onPackageUpdated }: Pati
       showToast('Error al asignar el paquete al paciente', 'error');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleManualConsumeSession = async (pkg: PatientPackage, item: PatientPackageItem) => {
+    if (item.remainingQuantity <= 0) {
+      showToast('No quedan sesiones disponibles de este tratamiento', 'error');
+      return;
+    }
+
+    const itemKey = `${pkg.id}-${item.treatmentId || item.treatmentName}`;
+    setProcessingItemId(itemKey);
+
+    try {
+      const res = await consumePackageSession(
+        db, 
+        pkg.id, 
+        item.treatmentId || item.treatmentName, 
+        ownerId, 
+        patient?.name
+      );
+
+      if (res.success) {
+        let msg = `Sesión de ${item.treatmentName} descontada`;
+        if (res.deductedMaterials && res.deductedMaterials.length > 0) {
+          msg += ` y se descontaron ${res.deductedMaterials.length} insumos de inventario`;
+        }
+        showToast(msg);
+        if (onPackageUpdated) onPackageUpdated();
+      } else {
+        showToast(res.error || 'Error al descontar sesión del paquete', 'error');
+      }
+    } catch (err: any) {
+      console.error(err);
+      showToast('Error al descontar la sesión', 'error');
+    } finally {
+      setProcessingItemId(null);
+    }
+  };
+
+  const handleManualRestoreSession = async (pkg: PatientPackage, item: PatientPackageItem) => {
+    if ((item.usedQuantity || 0) <= 0) return;
+
+    const itemKey = `${pkg.id}-${item.treatmentId || item.treatmentName}`;
+    setProcessingItemId(itemKey);
+
+    try {
+      const res = await restorePackageSession(
+        db, 
+        pkg.id, 
+        item.treatmentId || item.treatmentName, 
+        ownerId, 
+        patient?.name
+      );
+
+      if (res.success) {
+        showToast(`Sesión de ${item.treatmentName} restituida e insumos devueltos al inventario`);
+        if (onPackageUpdated) onPackageUpdated();
+      } else {
+        showToast(res.error || 'Error al restituir sesión', 'error');
+      }
+    } catch (err: any) {
+      console.error(err);
+      showToast('Error al restituir la sesión', 'error');
+    } finally {
+      setProcessingItemId(null);
     }
   };
 
@@ -218,28 +303,104 @@ export function PatientPackagesView({ patient, ownerId, onPackageUpdated }: Pati
                 </div>
 
                 {/* Items breakdown */}
-                <div className="pt-2 border-t border-outline-variant/60">
-                  <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5">
-                    Detalle por Tratamiento:
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    {(pkg.items || []).map((item, idx) => (
-                      <div 
-                        key={idx}
-                        className="flex items-center justify-between p-2 bg-surface rounded-lg text-xs border border-outline-variant/40"
-                      >
-                        <span className="font-medium text-on-surface truncate pr-2">
-                          {item.treatmentName}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded font-bold text-[11px] shrink-0 ${
-                          item.remainingQuantity > 0 
-                            ? 'bg-primary/10 text-primary' 
-                            : 'bg-surface-dim text-on-surface-variant'
-                        }`}>
-                          {item.remainingQuantity} / {item.totalQuantity} disp.
-                        </span>
-                      </div>
-                    ))}
+                <div className="pt-2 border-t border-outline-variant/60 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">
+                      Detalle por Tratamiento e Insumos:
+                    </p>
+                    <span className="text-[9px] text-on-surface-variant italic">
+                      Los insumos se descuentan automáticamente del stock
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2">
+                    {(pkg.items || []).map((item, idx) => {
+                      const matchedTreatment = treatments.find(
+                        t => t.id === item.treatmentId || t.name === item.treatmentName
+                      );
+                      const mats = (item.materials && item.materials.length > 0)
+                        ? item.materials
+                        : (matchedTreatment?.materials || []);
+
+                      const itemKey = `${pkg.id}-${item.treatmentId || item.treatmentName}`;
+                      const isProcessing = processingItemId === itemKey;
+
+                      return (
+                        <div 
+                          key={idx}
+                          className="p-2.5 bg-surface rounded-xl text-xs border border-outline-variant/50 space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <span className="font-bold text-on-surface truncate block">
+                                {item.treatmentName}
+                              </span>
+                              <span className="text-[10px] text-on-surface-variant">
+                                Usadas: <b>{item.usedQuantity || 0}</b> • Restantes: <b className="text-primary">{item.remainingQuantity}</b> de {item.totalQuantity}
+                              </span>
+                            </div>
+
+                            <span className={`px-2 py-0.5 rounded font-bold text-[11px] shrink-0 ${
+                              item.remainingQuantity > 0 
+                                ? 'bg-primary/10 text-primary' 
+                                : 'bg-surface-dim text-on-surface-variant'
+                            }`}>
+                              {item.remainingQuantity > 0 ? `${item.remainingQuantity} disp.` : 'Agotado'}
+                            </span>
+                          </div>
+
+                          {/* Insumos vinculados al tratamiento de este paquete */}
+                          {mats && mats.length > 0 ? (
+                            <div className="flex flex-wrap items-center gap-1 pt-1 border-t border-outline-variant/40">
+                              <span className="text-[10px] font-semibold text-primary flex items-center gap-1 mr-1">
+                                <Boxes size={11} /> Insumos / sesión:
+                              </span>
+                              {mats.map((m: any, mIdx: number) => {
+                                const stockItem = inventory.find(i => i.id === m.materialId);
+                                return (
+                                  <span key={mIdx} className="text-[9px] bg-white text-on-surface px-1.5 py-0.5 rounded border border-outline-variant/60 font-medium">
+                                    {m.qty} {stockItem?.unit || m.unit || 'uds'} {stockItem?.name || m.materialName || 'Insumo'}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-[10px] text-on-surface-variant/70 italic pt-0.5">
+                              Sin insumos de inventario vinculados a este tratamiento
+                            </div>
+                          )}
+
+                          {/* Action Buttons to manually discount or restore a session */}
+                          <div className="flex items-center justify-end gap-2 pt-1">
+                            {(item.usedQuantity || 0) > 0 && (
+                              <button
+                                type="button"
+                                disabled={isProcessing}
+                                onClick={() => handleManualRestoreSession(pkg, item)}
+                                className="px-2 py-1 bg-surface-bright hover:bg-outline-variant/60 text-on-surface-variant text-[11px] font-semibold rounded-md border border-outline-variant transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                title="Restituir 1 sesión y reintegrar insumos al stock"
+                              >
+                                <RotateCcw size={12} />
+                                Restituir (+1)
+                              </button>
+                            )}
+
+                            {item.remainingQuantity > 0 && (
+                              <button
+                                type="button"
+                                disabled={isProcessing}
+                                onClick={() => handleManualConsumeSession(pkg, item)}
+                                className="px-2.5 py-1 bg-primary text-white text-[11px] font-bold rounded-md hover:bg-primary/90 transition-all flex items-center gap-1 cursor-pointer shadow-sm disabled:opacity-50"
+                                title="Descontar 1 sesión y descontar sus insumos del inventario"
+                              >
+                                <MinusCircle size={12} />
+                                {isProcessing ? 'Descontando...' : 'Descontar 1 Sesión'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -300,14 +461,35 @@ export function PatientPackagesView({ patient, ownerId, onPackageUpdated }: Pati
 
           {selectedCatalogPkg && (
             <div className="p-3 bg-surface rounded-xl border border-outline-variant text-xs space-y-2">
-              <p className="font-bold text-on-surface">Tratamientos incluidos:</p>
-              <div className="space-y-1">
-                {(selectedCatalogPkg.items || []).map((it, idx) => (
-                  <div key={idx} className="flex justify-between items-center text-on-surface-variant">
-                    <span>• {it.treatmentName}</span>
-                    <span className="font-bold text-primary">{it.quantity} {it.quantity === 1 ? 'sesión' : 'sesiones'}</span>
-                  </div>
-                ))}
+              <p className="font-bold text-on-surface">Tratamientos e insumos incluidos:</p>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                {(selectedCatalogPkg.items || []).map((it, idx) => {
+                  const matchedTreatment = treatments.find(t => t.id === it.treatmentId || t.name === it.treatmentName);
+                  const mats = (it.materials && it.materials.length > 0) ? it.materials : (matchedTreatment?.materials || []);
+                  return (
+                    <div key={idx} className="p-2 bg-white rounded-lg border border-outline-variant/50 space-y-1">
+                      <div className="flex justify-between items-center text-on-surface">
+                        <span className="font-semibold">• {it.treatmentName}</span>
+                        <span className="font-bold text-primary shrink-0">{it.quantity} {it.quantity === 1 ? 'sesión' : 'sesiones'}</span>
+                      </div>
+                      {mats && mats.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1 text-[10px] text-on-surface-variant">
+                          <span className="text-primary font-medium flex items-center gap-0.5">
+                            <Boxes size={10} /> Insumos/sesión:
+                          </span>
+                          {mats.map((m: any, mIdx: number) => {
+                            const stockItem = inventory.find(i => i.id === m.materialId);
+                            return (
+                              <span key={mIdx} className="bg-surface px-1.5 py-0.5 rounded border border-outline-variant/60">
+                                {m.qty} {stockItem?.unit || m.unit || 'uds'} {stockItem?.name || m.materialName || 'Insumo'}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

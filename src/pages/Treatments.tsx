@@ -190,7 +190,7 @@ export function Treatments() {
       </div>
 
       {activeTab === 'packages' ? (
-        <PackagesManager ownerId={ownerId} treatments={treatments} />
+        <PackagesManager ownerId={ownerId} treatments={treatments} inventory={inventory} />
       ) : (
         <>
           <div className="flex items-center gap-4 bg-white p-3 rounded-xl border border-outline-variant shadow-sm">

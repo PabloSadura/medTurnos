@@ -1,7 +1,22 @@
+export interface PackageMaterialItem {
+  materialId: string;
+  qty: number;
+  materialName?: string;
+  unit?: string;
+}
+
 export interface PackageItem {
   treatmentId: string;
   treatmentName: string;
   quantity: number;
+  materials?: PackageMaterialItem[];
+}
+
+export interface PackageAggregatedMaterial {
+  materialId: string;
+  materialName: string;
+  totalQty: number;
+  unit?: string;
 }
 
 export interface PackageDefinition {
@@ -12,6 +27,7 @@ export interface PackageDefinition {
   price: number;
   items: PackageItem[];
   totalSessions: number;
+  totalMaterials?: PackageAggregatedMaterial[];
   createdAt?: any;
   updatedAt?: any;
 }
@@ -22,6 +38,7 @@ export interface PatientPackageItem {
   totalQuantity: number;
   usedQuantity: number;
   remainingQuantity: number;
+  materials?: PackageMaterialItem[];
 }
 
 export interface PatientPackage {
@@ -38,6 +55,25 @@ export interface PatientPackage {
   usedSessions: number;
   remainingSessions: number;
   userId: string;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
+export interface PatientEvolutionPhoto {
+  id: string;
+  patientId: string;
+  userId: string;
+  imageUrl: string;
+  driveFileId?: string;
+  driveViewLink?: string;
+  date: string; // YYYY-MM-DD
+  title: string;
+  stage?: string; // e.g. "Foto Inicial (Antes)", "Control 15 días", "Sesión 3", "Foto Final (Después)"
+  isBeforePhoto?: boolean;
+  isAfterPhoto?: boolean;
+  treatmentId?: string;
+  treatmentName?: string;
+  notes?: string;
   createdAt?: any;
   updatedAt?: any;
 }

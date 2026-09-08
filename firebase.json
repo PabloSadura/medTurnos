@@ -1,0 +1,12 @@
+{
+  "firestore": [
+    {
+      "database": "turneroweb",
+      "rules": "firestore.rules"
+    },
+    {
+      "database": "(default)",
+      "rules": "firestore.rules"
+    }
+  ]
+}

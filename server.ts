@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import admin from "firebase-admin";
 import fs from "fs";
 import axios from "axios";
@@ -23,28 +22,45 @@ try {
   console.warn("Could not read firebase-applet-config.json, using defaults:", err);
 }
 
-// Initialize Firebase Admin safely
-let adminDb: any;
-let auth: any;
+// Initialize Firebase Admin safely with lazy initialization
+let adminDbInstance: any = null;
+let authInstance: any = null;
 
-try {
-  if (!admin.apps.length) {
-    admin.initializeApp({
-      projectId: firebaseConfig.projectId || process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0464775009",
-    });
-  }
-  adminDb = admin.firestore();
-  if (firebaseConfig.firestoreDatabaseId) {
+function getFirebaseAdmin() {
+  if (!adminDbInstance || !authInstance) {
     try {
-      (adminDb as any).settings({ databaseId: firebaseConfig.firestoreDatabaseId });
-    } catch (e) {
-      // Ignored if settings already locked
+      if (!admin.apps.length) {
+        admin.initializeApp({
+          projectId: firebaseConfig.projectId || process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0464775009",
+        });
+      }
+      if (!adminDbInstance) {
+        adminDbInstance = admin.firestore();
+        if (firebaseConfig.firestoreDatabaseId) {
+          try {
+            (adminDbInstance as any).settings({ databaseId: firebaseConfig.firestoreDatabaseId });
+          } catch (e) {
+            // Ignored if settings already locked
+          }
+        }
+      }
+      if (!authInstance) {
+        authInstance = admin.auth();
+      }
+    } catch (err) {
+      console.warn("Firebase Admin SDK initialization warning:", err);
     }
   }
-  auth = admin.auth();
-} catch (err) {
-  console.warn("Firebase Admin SDK initialization warning:", err);
+  return { adminDb: adminDbInstance, auth: authInstance };
 }
+
+// Global safety error handlers
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception thrown:", err);
+});
 
 async function startServer() {
   const app = express();
@@ -60,6 +76,10 @@ async function startServer() {
   // Database Initialization Endpoint based on firebase-blueprint.json
   app.post("/api/database/init", async (req, res) => {
     try {
+      const { adminDb } = getFirebaseAdmin();
+      if (!adminDb) {
+        return res.status(503).json({ error: "Firebase Admin is not available" });
+      }
       const results: Record<string, any> = {};
 
       // 1. Initialize Plans collection
@@ -146,12 +166,16 @@ async function startServer() {
     }
 
     try {
+      const { adminDb, auth } = getFirebaseAdmin();
       let authUser;
       let createdInAuth = false;
       let authErrorEncountered = false;
       let authErrorMessage = "";
       
       try {
+        if (!auth) {
+          throw new Error("Identity Toolkit API / Auth SDK not available");
+        }
         // Try to use Admin SDK first
         authUser = await auth.getUserByEmail(email);
         
@@ -359,9 +383,13 @@ async function startServer() {
   // Get Patients
   app.get("/api/patients", async (req, res) => {
     try {
+      const { adminDb } = getFirebaseAdmin();
+      if (!adminDb) {
+        return res.status(503).json({ error: "Database not available" });
+      }
       console.log("Fetching patients from Firestore (Admin)...");
       const snapshot = await adminDb.collection("patients").orderBy("name", "asc").get();
-      const patients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const patients = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
       console.log(`Successfully fetched ${patients.length} patients.`);
       res.json(patients);
     } catch (error: any) {
@@ -373,9 +401,13 @@ async function startServer() {
   // Get Stocks
   app.get("/api/stocks", async (req, res) => {
     try {
+      const { adminDb } = getFirebaseAdmin();
+      if (!adminDb) {
+        return res.status(503).json({ error: "Database not available" });
+      }
       console.log("Fetching stocks from Firestore (Admin)...");
       const snapshot = await adminDb.collection("stocks").orderBy("name", "asc").get();
-      const stocks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const stocks = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
       console.log(`Successfully fetched ${stocks.length} items.`);
       res.json(stocks);
     } catch (error: any) {
@@ -389,11 +421,15 @@ async function startServer() {
   // Get all users (for system admin except admins)
   app.get("/api/admin/professionals", async (req, res) => {
     try {
+      const { adminDb } = getFirebaseAdmin();
+      if (!adminDb) {
+        return res.status(503).json({ error: "Database not available" });
+      }
       const snapshot = await adminDb.collection("users").get();
       
       const professionals = snapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() as any }))
-        .filter(user => user.role !== "admin");
+        .map((doc: any) => ({ id: doc.id, ...doc.data() as any }))
+        .filter((user: any) => user.role !== "admin");
       res.json(professionals);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -409,12 +445,16 @@ async function startServer() {
     }
     
     try {
+      const { adminDb, auth } = getFirebaseAdmin();
       let authUser;
       let createdInAuth = false;
       let authErrorEncountered = false;
       let authErrorMessage = "";
       
       try {
+        if (!auth) {
+          throw new Error("Identity Toolkit API / Auth SDK not available");
+        }
         // Try to use Admin SDK first
         authUser = await auth.getUserByEmail(email);
         
@@ -580,9 +620,21 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
+  // Detect production environment reliably (when running bundled dist/server.cjs, NODE_ENV=production, or dist/index.html exists)
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    process.argv[1]?.includes("server.cjs") ||
+    (typeof __filename !== "undefined" && __filename.endsWith("server.cjs")) ||
+    (!fs.existsSync(path.join(process.cwd(), "src", "main.tsx")) && fs.existsSync(path.join(process.cwd(), "dist", "index.html")));
+
+  if (isProduction) {
+    process.env.NODE_ENV = "production";
+  }
+
+  // Vite middleware for development vs static files for production
+  if (!isProduction) {
+    const { createServer } = await import("vite");
+    const vite = await createServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
@@ -595,8 +647,19 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+  });
+
+  server.on("error", (err) => {
+    console.error("Server error:", err);
+  });
+
+  process.on("SIGTERM", () => {
+    console.log("SIGTERM received, closing server gracefully...");
+    server.close(() => {
+      process.exit(0);
+    });
   });
 }
 

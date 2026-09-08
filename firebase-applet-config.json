@@ -7,5 +7,7 @@
   "firestoreDatabaseId": "turneroweb",
   "storageBucket": "gen-lang-client-0464775009.firebasestorage.app",
   "messagingSenderId": "400563388302",
-  "measurementId": ""
+  "measurementId": "",
+  "oAuthClientId": "410876856184-50cmm871petrptm30kn2ciloahlqe87b.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }

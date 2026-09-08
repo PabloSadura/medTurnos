@@ -1,11 +1,14 @@
-import { Bell, Menu, PanelLeft } from 'lucide-react';
+import { Bell, Menu, PanelLeft, Cloud } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { auth } from '../lib/firebase';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useGoogleDrive } from '../contexts/GoogleDriveContext';
 import { cn } from '../lib/utils';
 
 export function TopAppBar() {
   const user = auth.currentUser;
   const { isCollapsed, toggleSidebar } = useSidebar();
+  const { isConnected: isDriveConnected, connectGoogleDrive, isConnecting: isDriveConnecting } = useGoogleDrive();
 
   return (
     <header
@@ -37,6 +40,29 @@ export function TopAppBar() {
       </div>
 
       <div className="flex items-center gap-3">
+        {isDriveConnected ? (
+          <Link
+            to="/profile"
+            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200/80 rounded-full text-[10px] font-black uppercase tracking-wider hover:bg-emerald-100 transition-all"
+            title="Google Drive Conectado. Clic para ver detalles en tu perfil."
+          >
+            <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+            <span className="hidden md:inline">Drive</span> Conectado
+          </Link>
+        ) : (
+          <button
+            id="btn-topbar-connect-drive"
+            type="button"
+            onClick={() => { void connectGoogleDrive(); }}
+            disabled={isDriveConnecting}
+            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 bg-surface-bright text-on-surface-variant border border-outline-variant rounded-full text-[10px] font-bold uppercase tracking-wider hover:text-primary hover:border-primary/40 hover:bg-primary/5 transition-all cursor-pointer disabled:opacity-50"
+            title="Conectar cuenta de Google Drive para historias y archivos"
+          >
+            <Cloud className="w-3.5 h-3.5 text-primary" />
+            {isDriveConnecting ? 'Conectando...' : 'Conectar Drive'}
+          </button>
+        )}
+
         <button 
           id="topbar-notifications-btn"
           type="button"

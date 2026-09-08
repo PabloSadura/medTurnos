@@ -17,6 +17,7 @@ import { Administration } from './pages/Administration';
 import { SystemAdmin } from './pages/SystemAdmin';
 import { ToastProvider } from './components/Toast';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { GoogleDriveProvider } from './contexts/GoogleDriveContext';
 import { NAV_ITEMS } from './lib/navigation';
 
 function HomeRedirect() {
@@ -124,7 +125,9 @@ export default function App() {
   return (
     <ToastProvider>
       <AuthProvider>
-        <AppContent />
+        <GoogleDriveProvider>
+          <AppContent />
+        </GoogleDriveProvider>
       </AuthProvider>
     </ToastProvider>
   );
