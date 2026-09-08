@@ -4,6 +4,7 @@ import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVer
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
+import { WhatsAppReminderModal } from '../components/WhatsAppReminderModal';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch, getDoc } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
@@ -45,6 +46,7 @@ export function Agenda() {
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [whatsappModalApt, setWhatsappModalApt] = useState<any | null>(null);
   const [editAptData, setEditAptData] = useState<{
     id: string;
     patientId: string;
@@ -489,58 +491,14 @@ export function Agenda() {
     return patient?.phone || '';
   };
 
-  const handleSendWhatsAppReminder = async (apt: any, e?: React.MouseEvent) => {
+  const handleSendWhatsAppReminder = (apt: any, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     
     const phone = getPatientPhone(apt);
-    const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
-
-    if (!cleanPhone) {
-      showToast(`El paciente ${apt?.patientName || ''} no tiene un número de teléfono registrado.`, 'error');
-      return;
-    }
-
-    // Format readable date
-    let dateFormatted = apt?.date || '';
-    if (apt?.date) {
-      const parts = apt.date.split('-').map(Number);
-      if (parts.length === 3) {
-        const dt = new Date(parts[0], parts[1] - 1, parts[2]);
-        const formatted = new Intl.DateTimeFormat('es-AR', {
-          weekday: 'long',
-          day: 'numeric',
-          month: 'long'
-        }).format(dt);
-        dateFormatted = formatted.charAt(0).toUpperCase() + formatted.slice(1);
-      }
-    }
-
-    const patientName = apt?.patientName || 'Paciente';
-    const time = apt?.time || '09:00';
-    const treatment = apt?.type || apt?.treatment || 'su consulta';
-
-    const message = `Hola ${patientName}, te recordamos tu turno para el ${dateFormatted} a las ${time} hs (${treatment}). ¡Te esperamos! Por favor confirmar asistencia respondiendo a este mensaje.`;
-
-    if (ownerId) {
-      try {
-        await addDoc(collection(db, 'whatsapp_logs'), {
-          to: phone,
-          patientName,
-          appointmentId: apt.id,
-          message,
-          status: 'success',
-          userId: ownerId,
-          createdAt: serverTimestamp(),
-          method: 'manual'
-        });
-      } catch (err) {
-        console.warn('Could not log WhatsApp reminder:', err);
-      }
-    }
-
-    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
-    showToast(`Abriendo WhatsApp para enviar recordatorio a ${patientName}`, 'info');
+    setWhatsappModalApt({
+      ...apt,
+      patientPhone: phone || apt?.patientPhone || apt?.phone || ''
+    });
   };
 
   const changeMonth = (offset: number) => {
@@ -1745,6 +1703,18 @@ export function Agenda() {
           </div>
         </form>
       </Modal>
+
+      {/* WhatsApp Customization & Sending Modal */}
+      {whatsappModalApt && (
+        <WhatsAppReminderModal
+          isOpen={Boolean(whatsappModalApt)}
+          onClose={() => setWhatsappModalApt(null)}
+          appointment={whatsappModalApt}
+          onMessageSent={(_aptId, _msg, method) => {
+            showToast(`Recordatorio de WhatsApp procesado con éxito (${method === 'meta_api' ? 'API' : 'Web/Móvil'})`, 'success');
+          }}
+        />
+      )}
     </div>
   );
 }

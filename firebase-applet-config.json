@@ -3,11 +3,10 @@
   "appId": "1:400563388302:web:7cbe744bbfa8becbf7aedf",
   "apiKey": "AIzaSyAJ7do3-ncfbXYZWaCnNdWTlpG7r0DhGuQ",
   "authDomain": "gen-lang-client-0464775009.firebaseapp.com",
-  "databaseURL": "https://gen-lang-client-0464775009-default-rtdb.firebaseio.com",
   "firestoreDatabaseId": "turneroweb",
   "storageBucket": "gen-lang-client-0464775009.firebasestorage.app",
   "messagingSenderId": "400563388302",
   "measurementId": "",
-  "oAuthClientId": "410876856184-50cmm871petrptm30kn2ciloahlqe87b.apps.googleusercontent.com",
+  "oAuthClientId": "400563388302-fgsh40gjh5vgd67vj7mk3m74pn11ms3u.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

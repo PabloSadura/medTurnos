@@ -135,7 +135,19 @@ service cloud.firestore {
     }
 
     match /reminder_settings/{id} {
-      allow read, write: if isSignedIn() && (id == request.auth.uid || isAdmin() || isStaffOf(id));
+      allow read, write: if isSignedIn() && (
+        id == request.auth.uid || 
+        canAccessData(id) || 
+        (resource != null && canAccessData(resource.data.userId)) || 
+        isAdmin() || 
+        isStaffOf(id)
+      );
+      allow create: if isSignedIn() && (
+        id == request.auth.uid || 
+        canAccessData(id) || 
+        canAccessData(request.resource.data.userId) || 
+        isAdmin()
+      );
     }
   }
 }
