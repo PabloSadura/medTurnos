@@ -73,7 +73,11 @@ export function TopAppBar() {
           <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-error rounded-full border-2 border-white"></span>
         </button>
 
-        <div className="w-7 h-7 rounded-full border border-primary/20 overflow-hidden bg-surface flex-shrink-0 ml-1">
+        <Link
+          to="/profile"
+          className="w-8 h-8 rounded-full border border-primary/20 overflow-hidden bg-surface flex-shrink-0 ml-1 hover:ring-2 hover:ring-primary/40 transition-all cursor-pointer block"
+          title="Ver perfil y cambiar contraseña"
+        >
           {user?.photoURL ? (
             <img src={user.photoURL} alt="Profile" className="w-full h-full object-cover" />
           ) : (
@@ -81,7 +85,7 @@ export function TopAppBar() {
               {user?.displayName?.charAt(0) || user?.email?.charAt(0) || 'U'}
             </div>
           )}
-        </div>
+        </Link>
       </div>
     </header>
   );

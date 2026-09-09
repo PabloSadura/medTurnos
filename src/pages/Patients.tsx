@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save, TrendingUp, Stethoscope, CalendarClock, DollarSign, Clock, Link2, Package, Layers, Sparkles, Cloud, Split, Camera, Image } from 'lucide-react';
+import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save, TrendingUp, Stethoscope, CalendarClock, DollarSign, Clock, Link2, Package, Layers, Sparkles, Cloud, Split, Camera, Image, CalendarPlus } from 'lucide-react';
 import { cn, calculateAge } from '../lib/utils';
 import { motion } from 'motion/react';
 import { Modal } from '../components/Modal';
@@ -13,6 +13,7 @@ import { PatientDriveFiles } from '../components/PatientDriveFiles';
 import { PatientEvolutionPhotos } from '../components/PatientEvolutionPhotos';
 import { consumePackageSession } from '../lib/packageUtils';
 import { PatientPackage } from '../types';
+import { splitFullName, formatPatientFullName, getPatientFirstName, getPatientLastName, comparePatientsByLastName, formatPatientLastNameFirst } from '../lib/patientNameUtils';
 
 export function Patients() {
   const { showToast } = useToast();
@@ -46,6 +47,8 @@ export function Patients() {
 
   // Form states
   const [formData, setFormData] = useState({
+    firstName: '',
+    lastName: '',
     name: '',
     idNumber: '',
     phone: '',
@@ -68,6 +71,26 @@ export function Patients() {
     packageName: ''
   });
 
+  // Schedule Next Appointment State (Within Evolution)
+  const [scheduleNextApt, setScheduleNextApt] = useState(false);
+  const [nextAptData, setNextAptData] = useState({
+    date: '',
+    time: '10:00',
+    treatment: 'Control / Seguimiento',
+    duration: 30,
+    notes: '',
+    status: 'pendiente'
+  });
+
+  const getDateOffset = (daysToAdd: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + daysToAdd);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
   useEffect(() => {
     if (!ownerId) return;
 
@@ -77,7 +100,7 @@ export function Patients() {
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPatients(docs.sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')));
+      setPatients(docs.sort(comparePatientsByLastName));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
     const treatmentsQ = query(collection(db, 'treatments'), where('userId', '==', ownerId));
@@ -101,7 +124,8 @@ export function Patients() {
     if (patientId && patients.length > 0) {
       const patient = patients.find(p => p.id === patientId);
       if (patient) {
-        handleOpenModal(action === 'add-entry' ? 'add-entry' : action === 'drive' ? 'drive' : action === 'photos' ? 'photos' : 'history', patient, appointmentId || undefined);
+        const modalType = (action === 'add-entry' || appointmentId) ? 'add-entry' : action === 'drive' ? 'drive' : action === 'photos' ? 'photos' : 'history';
+        handleOpenModal(modalType, patient, appointmentId || undefined);
       }
     }
   }, [searchParams, patients]);
@@ -271,9 +295,14 @@ export function Patients() {
       setTargetAppointmentId(initialAppointmentId);
     }
     if (patient) {
+      const parsed = splitFullName(patient.name || '');
+      const fn = patient.firstName || parsed.firstName;
+      const ln = patient.lastName || parsed.lastName;
       setFormData({
-        name: patient.name,
-        idNumber: patient.idNumber,
+        firstName: fn,
+        lastName: ln,
+        name: patient.name || formatPatientFullName(fn, ln),
+        idNumber: patient.idNumber || '',
         phone: patient.phone || '',
         email: patient.email || '',
         gender: patient.gender || 'Male',
@@ -282,6 +311,8 @@ export function Patients() {
       });
     } else {
       setFormData({
+        firstName: '',
+        lastName: '',
         name: '',
         idNumber: '',
         phone: '',
@@ -338,8 +369,15 @@ export function Patients() {
   const handleSavePatient = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const fn = formData.firstName.trim();
+      const ln = formData.lastName.trim();
+      const fullName = formatPatientFullName(fn, ln, formData.name);
+
       const data = {
         ...formData,
+        firstName: fn,
+        lastName: ln,
+        name: fullName,
         updatedAt: serverTimestamp()
       };
 
@@ -505,10 +543,54 @@ export function Patients() {
         }
       });
 
+      // User request: Schedule new appointment inside the evolution
+      let nextAptScheduled = false;
+      if (scheduleNextApt && nextAptData.date && nextAptData.time) {
+        const [nextYear, nextMonth, nextDay] = nextAptData.date.split('-').map(Number);
+        const [nextH, nextM] = nextAptData.time.split(':').map(Number);
+        const nextStartDate = new Date(nextYear, nextMonth - 1, nextDay, nextH, nextM);
+
+        const nextMatchedTreatment = treatments.find(t => t.name === nextAptData.treatment);
+        const nextPrice = nextMatchedTreatment?.cost ? Number(nextMatchedTreatment.cost) : 0;
+
+        const parsed = splitFullName(selectedPatient.name || '');
+        const pFn = selectedPatient.firstName || parsed.firstName || '';
+        const pLn = selectedPatient.lastName || parsed.lastName || '';
+
+        const newAptRef = doc(collection(db, 'appointments'));
+        batch.set(newAptRef, {
+          id: newAptRef.id,
+          patientId: selectedPatient.id,
+          patientName: selectedPatient.name || `${pFn} ${pLn}`.trim(),
+          patientFirstName: pFn,
+          patientLastName: pLn,
+          patientPhone: selectedPatient.phone || '',
+          phone: selectedPatient.phone || '',
+          date: nextAptData.date,
+          time: nextAptData.time,
+          startTime: nextStartDate,
+          type: nextAptData.treatment || 'Control / Seguimiento',
+          treatment: nextAptData.treatment || 'Control / Seguimiento',
+          treatmentId: nextMatchedTreatment?.id || '',
+          cost: nextPrice,
+          price: nextPrice,
+          paidAmount: nextPrice,
+          notes: nextAptData.notes || '',
+          duration: Number(nextAptData.duration) || nextMatchedTreatment?.duration || 30,
+          status: 'pendiente',
+          userId: ownerId,
+          attendance: (selectedPatient.attendance || 0) + 1,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        nextAptScheduled = true;
+      }
+
       await batch.commit();
 
       setIsAddingEntry(false);
       setTargetAppointmentId(null);
+      setScheduleNextApt(false);
       setEvolutionData({
         appointmentId: '',
         treatment: treatments.length > 0 ? treatments[0].name : '',
@@ -521,7 +603,11 @@ export function Patients() {
         patientPackageId: '',
         packageName: ''
       });
-      showToast(isPkgSession ? 'Evolución guardada y sesión descontada del paquete ($0 adicional)' : 'Evolución clínica guardada exitosamente en la base de datos');
+      if (nextAptScheduled) {
+        showToast(`Evolución guardada y próximo turno agendado (${nextAptData.date} ${nextAptData.time} hs)`, 'success');
+      } else {
+        showToast(isPkgSession ? 'Evolución guardada y sesión descontada del paquete ($0 adicional)' : 'Evolución clínica guardada exitosamente en la base de datos');
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `patients/${selectedPatient.id}/evolutions`);
     }
@@ -541,14 +627,53 @@ export function Patients() {
     }
   };
 
-  const filteredPatients = patients.filter(p => {
-    const nameMatch = p.name?.toLowerCase().includes(searchTerm.toLowerCase()) || false;
-    const idMatch = p.idNumber?.toLowerCase().includes(searchTerm.toLowerCase()) || false;
-    const phoneMatch = p.phone?.toLowerCase().includes(searchTerm.toLowerCase()) || false;
-    return nameMatch || idMatch || phoneMatch;
-  });
+  const filteredPatients = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    const result = patients.filter(p => {
+      if (!term) return true;
+      const nameMatch = p.name?.toLowerCase().includes(term) || false;
+      const firstNameMatch = p.firstName?.toLowerCase().includes(term) || false;
+      const lastNameMatch = p.lastName?.toLowerCase().includes(term) || false;
+      const idMatch = p.idNumber?.toLowerCase().includes(term) || false;
+      const phoneMatch = p.phone?.toLowerCase().includes(term) || false;
+      return nameMatch || firstNameMatch || lastNameMatch || idMatch || phoneMatch;
+    });
+    return result.sort(comparePatientsByLastName);
+  }, [patients, searchTerm]);
 
   const currentPatient = patients.find(p => p.id === selectedPatient?.id) || selectedPatient;
+
+  const handleExportPatients = () => {
+    if (patients.length === 0) {
+      showToast('No hay pacientes para exportar');
+      return;
+    }
+    const headers = ['Apellido', 'Nombre', 'DNI', 'Teléfono', 'Email', 'Género', 'Fecha Nacimiento', 'Estado'];
+    const rows = patients.map(p => {
+      const ln = p.lastName || getPatientLastName(p);
+      const fn = p.firstName || getPatientFirstName(p);
+      return [
+        `"${(ln || '').replace(/"/g, '""')}"`,
+        `"${(fn || '').replace(/"/g, '""')}"`,
+        `"${(p.idNumber || '').replace(/"/g, '""')}"`,
+        `"${(p.phone || '').replace(/"/g, '""')}"`,
+        `"${(p.email || '').replace(/"/g, '""')}"`,
+        `"${(p.gender || '').replace(/"/g, '""')}"`,
+        `"${(p.birthDate || '').replace(/"/g, '""')}"`,
+        `"${(p.status || 'active').replace(/"/g, '""')}"`,
+      ].join(',');
+    });
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `pacientes_ordenados_por_apellido_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast('Lista de pacientes exportada exitosamente');
+  };
 
   return (
     <div className="space-y-6">
@@ -558,9 +683,13 @@ export function Patients() {
           <p className="body-md text-on-surface-variant">Listado completo de pacientes registrados y sus historias clínicas.</p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="px-3 py-1.5 bg-white border border-outline-variant rounded-md text-[11px] font-bold flex items-center gap-2 hover:bg-surface transition-all text-on-surface-variant">
+          <button 
+            onClick={handleExportPatients}
+            className="px-3 py-1.5 bg-white border border-outline-variant rounded-md text-[11px] font-bold flex items-center gap-2 hover:bg-surface transition-all text-on-surface-variant cursor-pointer active:scale-95"
+            title="Exportar lista ordenada por apellido a CSV"
+          >
             <Download size={14} />
-            EXPORTAR
+            EXPORTAR CSV
           </button>
           <button 
             onClick={() => handleOpenModal('create')}
@@ -606,10 +735,24 @@ export function Patients() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-10 h-10 rounded-xl bg-primary-container text-primary flex items-center justify-center text-sm font-bold shrink-0">
-                      {patient.name.charAt(0)}
+                      {(getPatientLastName(patient) || patient.name || 'P').charAt(0).toUpperCase()}
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-bold text-on-surface truncate">{patient.name}</p>
+                      <p className="text-sm font-bold text-on-surface truncate">
+                        {(() => {
+                          const ln = patient.lastName || getPatientLastName(patient);
+                          const fn = patient.firstName || getPatientFirstName(patient);
+                          if (ln) {
+                            return (
+                              <>
+                                <span className="font-extrabold">{ln}</span>
+                                {fn && fn !== 'Paciente' && <span className="font-medium text-on-surface-variant">, {fn}</span>}
+                              </>
+                            );
+                          }
+                          return formatPatientLastNameFirst(patient);
+                        })()}
+                      </p>
                       <p className="text-[11px] text-on-surface-variant font-medium">
                         DNI: <span className="font-mono text-on-surface">{patient.idNumber}</span> • {calculateAge(patient.birthDate)} años
                       </p>
@@ -683,7 +826,14 @@ export function Patients() {
           <table className="w-full text-left">
             <thead>
               <tr className="bg-surface-bright border-b border-outline-variant">
-                <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Paciente</th>
+                <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">
+                  <div className="flex items-center gap-1.5">
+                    <span>Paciente (Apellido, Nombre)</span>
+                    <span className="px-1.5 py-0.5 text-[9px] bg-primary/10 text-primary rounded font-bold tracking-normal">
+                      A-Z
+                    </span>
+                  </div>
+                </th>
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Identificación</th>
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Contacto</th>
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Última Visita</th>
@@ -702,10 +852,24 @@ export function Patients() {
                   <td className="px-6 py-3">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center text-primary text-[12px] font-bold shrink-0">
-                        {patient.name.charAt(0)}
+                        {(getPatientLastName(patient) || patient.name || 'P').charAt(0).toUpperCase()}
                       </div>
                       <div className="min-w-0">
-                        <p className="text-[13px] font-bold text-on-surface truncate">{patient.name}</p>
+                        <p className="text-[13px] font-bold text-on-surface truncate">
+                          {(() => {
+                            const ln = patient.lastName || getPatientLastName(patient);
+                            const fn = patient.firstName || getPatientFirstName(patient);
+                            if (ln) {
+                              return (
+                                <>
+                                  <span className="font-extrabold text-on-surface">{ln}</span>
+                                  {fn && fn !== 'Paciente' && <span className="font-medium text-on-surface-variant">, {fn}</span>}
+                                </>
+                              );
+                            }
+                            return formatPatientLastNameFirst(patient);
+                          })()}
+                        </p>
                         <p className="text-[11px] text-on-surface-variant">{patient.gender}, {calculateAge(patient.birthDate)} años</p>
                       </div>
                     </div>
@@ -800,18 +964,58 @@ export function Patients() {
         className="max-w-xl"
       >
         <form className="space-y-4" onSubmit={handleSavePatient}>
+          {/* Nombre y Apellido */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Nombre Completo</label>
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                Nombre *
+              </label>
               <input 
                 type="text" 
                 required
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                value={formData.firstName}
+                onChange={(e) => {
+                  const fn = e.target.value;
+                  setFormData({
+                    ...formData,
+                    firstName: fn,
+                    name: formatPatientFullName(fn, formData.lastName)
+                  });
+                }}
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
-                placeholder="Ej: Juan Pérez" 
+                placeholder="Ej: Juan" 
               />
             </div>
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                Apellido *
+              </label>
+              <input 
+                type="text" 
+                required
+                value={formData.lastName}
+                onChange={(e) => {
+                  const ln = e.target.value;
+                  setFormData({
+                    ...formData,
+                    lastName: ln,
+                    name: formatPatientFullName(formData.firstName, ln)
+                  });
+                }}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                placeholder="Ej: Pérez" 
+              />
+            </div>
+          </div>
+
+          <div className="flex items-start gap-1.5 px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 rounded-lg text-[11px] text-emerald-900 dark:text-emerald-200">
+            <span className="font-semibold shrink-0">💬 Recordatorios WhatsApp:</span>
+            <span>
+              Al enviar recordatorios, el mensaje saludará únicamente con el <b>Nombre</b> (ej: <i>"Hola {formData.firstName || 'Nombre'}..."</i>).
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">DNI / Identificación</label>
               <input 
@@ -823,9 +1027,6 @@ export function Patients() {
                 placeholder="Ej: 12.345.678" 
               />
             </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Teléfono</label>
               <input 
@@ -833,19 +1034,20 @@ export function Patients() {
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
-                placeholder="+1 234 567 890" 
+                placeholder="+54 9 11 1234-5678" 
               />
             </div>
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Email</label>
-              <input 
-                type="email" 
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
-                placeholder="juan@example.com" 
-              />
-            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Email</label>
+            <input 
+              type="email" 
+              value={formData.email}
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+              placeholder="juan@example.com" 
+            />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
@@ -1318,6 +1520,166 @@ export function Patients() {
                       value={evolutionData.note}
                       onChange={(e) => setEvolutionData({ ...evolutionData, note: e.target.value })}
                     />
+                  </div>
+
+                  {/* Agendar Próximo Turno / Control (Dentro de la Evolución) */}
+                  <div className={cn(
+                    "rounded-xl border transition-all p-3 space-y-2.5",
+                    scheduleNextApt 
+                      ? "bg-primary-container/25 border-primary/40 shadow-xs" 
+                      : "bg-surface border-outline-variant/70 hover:border-outline-variant"
+                  )}>
+                    <div className="flex items-center justify-between gap-2">
+                      <label 
+                        htmlFor="patients-schedule-next-apt-toggle"
+                        className="flex items-center gap-2 cursor-pointer select-none"
+                      >
+                        <input
+                          id="patients-schedule-next-apt-toggle"
+                          type="checkbox"
+                          checked={scheduleNextApt}
+                          onChange={(e) => {
+                            setScheduleNextApt(e.target.checked);
+                            if (e.target.checked && !nextAptData.date) {
+                              setNextAptData(prev => ({ ...prev, date: getDateOffset(7) }));
+                            }
+                          }}
+                          className="w-4 h-4 rounded text-primary focus:ring-primary border-outline-variant cursor-pointer"
+                        />
+                        <div className="flex items-center gap-1.5">
+                          <CalendarPlus size={14} className={scheduleNextApt ? "text-primary" : "text-on-surface-variant"} />
+                          <span className={cn(
+                            "text-xs font-bold uppercase tracking-wider",
+                            scheduleNextApt ? "text-primary font-black" : "text-on-surface font-semibold"
+                          )}>
+                            Agendar Próximo Turno / Control
+                          </span>
+                        </div>
+                      </label>
+
+                      {scheduleNextApt ? (
+                        <span className="text-[9px] font-bold text-primary bg-primary/15 px-2 py-0.5 rounded-full">
+                          Se agendará al guardar
+                        </span>
+                      ) : (
+                        <span className="text-[9px] text-on-surface-variant/70">
+                          Opcional
+                        </span>
+                      )}
+                    </div>
+
+                    {scheduleNextApt && (
+                      <div className="pt-2 border-t border-primary/20 space-y-2.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider mr-1">
+                            Atajos:
+                          </span>
+                          {[
+                            { label: '+7d', days: 7 },
+                            { label: '+14d', days: 14 },
+                            { label: '+21d', days: 21 },
+                            { label: '+30d', days: 30 },
+                          ].map((preset) => {
+                            const calculated = getDateOffset(preset.days);
+                            const isSelected = nextAptData.date === calculated;
+                            return (
+                              <button
+                                key={preset.days}
+                                type="button"
+                                onClick={() => setNextAptData(prev => ({ ...prev, date: calculated }))}
+                                className={cn(
+                                  "px-2 py-0.5 rounded text-[10px] font-bold uppercase transition-all border cursor-pointer",
+                                  isSelected
+                                    ? "bg-primary text-white border-primary"
+                                    : "bg-white text-on-surface-variant border-outline-variant hover:bg-surface-bright"
+                                )}
+                              >
+                                {preset.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-[9px] font-bold text-on-surface-variant uppercase flex items-center gap-1">
+                              <Calendar size={10} className="text-primary" /> Fecha *
+                            </label>
+                            <input
+                              type="date"
+                              required
+                              className="w-full px-2 py-1 bg-white border border-outline-variant rounded text-[11px] font-medium outline-none focus:border-primary"
+                              value={nextAptData.date}
+                              onChange={(e) => setNextAptData(prev => ({ ...prev, date: e.target.value }))}
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[9px] font-bold text-on-surface-variant uppercase flex items-center gap-1">
+                              <Clock size={10} className="text-primary" /> Hora *
+                            </label>
+                            <input
+                              type="time"
+                              required
+                              className="w-full px-2 py-1 bg-white border border-outline-variant rounded text-[11px] font-medium outline-none focus:border-primary"
+                              value={nextAptData.time}
+                              onChange={(e) => setNextAptData(prev => ({ ...prev, time: e.target.value }))}
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[9px] font-bold text-on-surface-variant uppercase flex items-center gap-1">
+                              <Clock size={10} className="text-primary" /> Duración
+                            </label>
+                            <select
+                              className="w-full px-2 py-1 bg-white border border-outline-variant rounded text-[11px] font-medium outline-none focus:border-primary cursor-pointer"
+                              value={nextAptData.duration}
+                              onChange={(e) => setNextAptData(prev => ({ ...prev, duration: Number(e.target.value) || 30 }))}
+                            >
+                              <option value={15}>15 min</option>
+                              <option value={30}>30 min</option>
+                              <option value={45}>45 min</option>
+                              <option value={60}>60 min</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-[9px] font-bold text-on-surface-variant uppercase flex items-center gap-1">
+                              <Stethoscope size={10} className="text-primary" /> Motivo / Tratamiento
+                            </label>
+                            <input
+                              type="text"
+                              list="patients-next-treatments-list"
+                              placeholder="Ej: Control / Seguimiento..."
+                              className="w-full px-2 py-1 bg-white border border-outline-variant rounded text-[11px] font-medium outline-none focus:border-primary"
+                              value={nextAptData.treatment}
+                              onChange={(e) => setNextAptData(prev => ({ ...prev, treatment: e.target.value }))}
+                            />
+                            <datalist id="patients-next-treatments-list">
+                              <option value="Control / Seguimiento" />
+                              {treatments.map(t => (
+                                <option key={t.id} value={t.name} />
+                              ))}
+                            </datalist>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[9px] font-bold text-on-surface-variant uppercase">
+                              Indicaciones para el turno
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej: Control post-tratamiento..."
+                              className="w-full px-2 py-1 bg-white border border-outline-variant rounded text-[11px] font-medium outline-none focus:border-primary"
+                              value={nextAptData.notes}
+                              onChange={(e) => setNextAptData(prev => ({ ...prev, notes: e.target.value }))}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="flex justify-end gap-2 pt-1">
                     <button 

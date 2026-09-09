@@ -10,18 +10,20 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
-        request.auth.token.email == 'admin@mail.com' ||
-        request.auth.token.email == 'pablosadura@gmail.com' ||
+        ('email' in request.auth.token && (
+          request.auth.token.email == 'admin@mail.com' ||
+          request.auth.token.email == 'pablosadura@gmail.com'
+        )) ||
         request.auth.uid == 'tFHvaQo649hwrlQfisr2x8qlv8v2' ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin')
       );
     }
 
     function isStaffOf(userId) {
       return isSignedIn() && 
              exists(/databases/$(database)/documents/staff/$(request.auth.uid)) && 
-             get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.userId == userId;
+             get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.get('userId', '') == userId;
     }
 
     function canAccessData(userId) {
@@ -51,65 +53,68 @@ service cloud.firestore {
     }
 
     match /appointments/{id} {
-      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
     }
 
     match /patients/{id} {
-      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
       
       match /evolutions/{eid} {
-        allow read, write: if isSignedIn() && (
-          canAccessData(resource.data.userId) || 
-          canAccessData(get(/databases/$(database)/documents/patients/$(id)).data.userId) || 
-          isAdmin()
-        );
-        allow create: if isSignedIn() && (
-          canAccessData(request.resource.data.userId) || 
-          canAccessData(get(/databases/$(database)/documents/patients/$(id)).data.userId) || 
-          isAdmin()
-        );
+        allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+        allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+        allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
       }
     }
 
     match /evolutions/{id} {
-      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
     }
 
     match /{path=**}/evolutions/{eid} {
-      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
     }
 
     match /treatments/{id} {
-      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
     }
 
     match /packages/{id} {
-      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
     }
 
     match /patient_packages/{id} {
-      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
     }
 
     match /patient_photos/{id} {
-      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
     }
 
     match /stocks/{id} {
-      allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
       
       match /movements/{mid} {
-        allow read, write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-        allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
+        allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+        allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+        allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
       }
     }
 
@@ -118,37 +123,44 @@ service cloud.firestore {
       allow write: if isSignedIn() && (id == request.auth.uid || isAdmin());
     }
 
+    match /profiles/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && (id == request.auth.uid || isAdmin());
+    }
+
     match /staff/{id} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn() && (
+      allow create: if isSignedIn() && (
         request.auth.uid == id || 
-        (request.resource != null && request.resource.data.userId == request.auth.uid) || 
-        (resource != null && resource.data.userId == request.auth.uid) ||
+        ('userId' in request.resource.data && request.resource.data.userId == request.auth.uid) || 
+        isAdmin()
+      );
+      allow update, delete: if isSignedIn() && (
+        request.auth.uid == id || 
+        ('userId' in resource.data && resource.data.userId == request.auth.uid) || 
         isAdmin()
       );
     }
 
     match /whatsapp_logs/{id} {
-      allow read: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
-      allow create: if isSignedIn() && (canAccessData(request.resource.data.userId) || isAdmin());
-      allow write: if isSignedIn() && (canAccessData(resource.data.userId) || isAdmin());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || canAccessData(request.resource.data.userId) || isAdmin());
+      allow update, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || canAccessData(resource.data.userId) || isAdmin());
     }
 
     match /reminder_settings/{id} {
-      allow read, write: if isSignedIn() && (
+      allow read: if isSignedIn() && (
         id == request.auth.uid || 
         canAccessData(id) || 
-        (resource != null && canAccessData(resource.data.userId)) || 
         isAdmin() || 
-        isStaffOf(id)
+        (resource != null && 'userId' in resource.data && canAccessData(resource.data.userId))
       );
-      allow create: if isSignedIn() && (
+      allow create, update, delete: if isSignedIn() && (
         id == request.auth.uid || 
         canAccessData(id) || 
-        canAccessData(request.resource.data.userId) || 
-        isAdmin()
+        isAdmin() || 
+        (request.resource != null && 'userId' in request.resource.data && canAccessData(request.resource.data.userId))
       );
     }
   }
 }
-

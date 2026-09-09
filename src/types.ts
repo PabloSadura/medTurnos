@@ -66,6 +66,8 @@ export interface PatientEvolutionPhoto {
   imageUrl: string;
   driveFileId?: string;
   driveViewLink?: string;
+  driveFolderId?: string;
+  driveFolderName?: string;
   date: string; // YYYY-MM-DD
   title: string;
   stage?: string; // e.g. "Foto Inicial (Antes)", "Control 15 días", "Sesión 3", "Foto Final (Después)"
@@ -77,3 +79,52 @@ export interface PatientEvolutionPhoto {
   createdAt?: any;
   updatedAt?: any;
 }
+
+export interface Patient {
+  id: string;
+  name: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
+  idNumber: string;
+  gender?: string;
+  birthDate?: string;
+  status: 'active' | 'inactive';
+  lastVisit?: string;
+  userId: string;
+  driveFolderId?: string;
+  driveFolderName?: string;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
+export interface Appointment {
+  id: string;
+  patientId: string;
+  patientName: string;
+  patientFirstName?: string;
+  patientLastName?: string;
+  patientPhone?: string;
+  phone?: string;
+  date: string;
+  time: string;
+  startTime?: any;
+  duration?: number;
+  status: 'pendiente' | 'confirmed' | 'confirmado' | 'in-session' | 'finished' | 'cancelled' | 'cancelado' | 'ausente';
+  type: string;
+  treatment?: string;
+  treatmentId?: string;
+  cost?: number;
+  price?: number;
+  paidAmount?: number;
+  notes?: string;
+  attendance?: number;
+  userId: string;
+  isPackageSession?: boolean;
+  patientPackageId?: string;
+  packageName?: string;
+  createdAt?: any;
+  updatedAt?: any;
+}
+

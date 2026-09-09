@@ -11,6 +11,7 @@ import { collection, onSnapshot, query, addDoc, updateDoc, doc, deleteDoc, serve
 import { useToast } from './Toast';
 import { PackageDefinition, PackageItem, PackageMaterialItem } from '../types';
 import { assignPackageToPatient, calculatePackageMaterials } from '../lib/packageUtils';
+import { comparePatientsByLastName, formatPatientLastNameFirst } from '../lib/patientNameUtils';
 
 interface PackagesManagerProps {
   ownerId: string;
@@ -64,7 +65,7 @@ export function PackagesManager({ ownerId, treatments, inventory = [] }: Package
     );
     const unsubscribePatients = onSnapshot(pQ, (snapshot) => {
       const pDocs: any[] = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-      setPatients(pDocs.sort((a, b) => ((a.name as string) || '').localeCompare((b.name as string) || '')));
+      setPatients(pDocs.sort(comparePatientsByLastName));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
     return () => {
@@ -256,10 +257,14 @@ export function PackagesManager({ ownerId, treatments, inventory = [] }: Package
     pkg.items?.some(it => it.treatmentName.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
-  const filteredPatientsForAssign = patients.filter(p =>
-    p.name?.toLowerCase().includes(patientSearchTerm.toLowerCase()) ||
-    p.idNumber?.toLowerCase().includes(patientSearchTerm.toLowerCase())
-  );
+  const filteredPatientsForAssign = patients
+    .filter(p =>
+      p.name?.toLowerCase().includes(patientSearchTerm.toLowerCase()) ||
+      p.firstName?.toLowerCase().includes(patientSearchTerm.toLowerCase()) ||
+      p.lastName?.toLowerCase().includes(patientSearchTerm.toLowerCase()) ||
+      p.idNumber?.toLowerCase().includes(patientSearchTerm.toLowerCase())
+    )
+    .sort(comparePatientsByLastName);
 
   return (
     <div className="space-y-6">
@@ -761,7 +766,7 @@ export function PackagesManager({ ownerId, treatments, inventory = [] }: Package
               >
                 {filteredPatientsForAssign.map((p) => (
                   <option key={p.id} value={p.id} className="py-1">
-                    {p.name} — DNI: {p.idNumber || 'Sin DNI'} {p.phone ? `(${p.phone})` : ''}
+                    {formatPatientLastNameFirst(p)} — DNI: {p.idNumber || 'Sin DNI'} {p.phone ? `(${p.phone})` : ''}
                   </option>
                 ))}
               </select>

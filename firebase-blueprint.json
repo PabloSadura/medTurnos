@@ -7,6 +7,8 @@
       "properties": {
         "patientId": { "type": "string" },
         "patientName": { "type": "string" },
+        "patientFirstName": { "type": "string" },
+        "patientLastName": { "type": "string" },
         "date": { "type": "string", "format": "date" },
         "time": { "type": "string" },
         "startTime": { "type": "string", "format": "date-time" },
@@ -29,6 +31,8 @@
       "type": "object",
       "properties": {
         "name": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
         "email": { "type": "string", "format": "email" },
         "phone": { "type": "string" },
         "idNumber": { "type": "string" },
@@ -247,9 +251,39 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["patientId", "packageId", "packageName", "pricePaid", "items", "userId"]
+    },
+    "PatientPhoto": {
+      "title": "Patient Photo",
+      "description": "Clinical evolution and before/after photo of a patient",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string" },
+        "patientName": { "type": "string" },
+        "userId": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "driveFileId": { "type": "string" },
+        "driveViewLink": { "type": "string" },
+        "driveFolderId": { "type": "string" },
+        "driveFolderName": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "stage": { "type": "string" },
+        "title": { "type": "string" },
+        "notes": { "type": "string" },
+        "treatmentId": { "type": "string" },
+        "treatmentName": { "type": "string" },
+        "isBeforePhoto": { "type": "boolean" },
+        "isAfterPhoto": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["patientId", "userId", "imageUrl", "date"]
     }
   },
   "firestore": {
+    "/patient_photos": {
+      "schema": "PatientPhoto",
+      "description": "Collection of clinical evolution and before/after photos"
+    },
     "/packages": {
       "schema": "Package",
       "description": "Collection of treatment packages offered by the clinic"

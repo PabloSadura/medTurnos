@@ -160,18 +160,34 @@ export async function getOrCreateAppRootFolder(accessToken: string): Promise<str
 }
 
 /**
- * Get or create the specific folder for a patient
+ * Get or create the specific folder for a patient.
+ * Searches for existing folder by patient name (or with DNI) and creates it if not present.
  */
 export async function getOrCreatePatientFolder(
   patient: { id: string; name: string; idNumber?: string },
   accessToken: string
 ): Promise<string> {
   const rootFolderId = await getOrCreateAppRootFolder(accessToken);
-  const patientFolderName = `${patient.name} (${patient.idNumber ? `DNI ${patient.idNumber}` : patient.id.slice(0, 6)})`;
+  const cleanName = (patient.name || 'Paciente').trim();
+  const patientFolderNameWithDni = patient.idNumber ? `${cleanName} (DNI ${patient.idNumber})` : cleanName;
   
-  const existingId = await findDriveFolder(patientFolderName, rootFolderId, accessToken);
+  // 1. Check if folder already exists by exact name
+  let existingId = await findDriveFolder(cleanName, rootFolderId, accessToken);
+  // 2. Or by name with DNI
+  if (!existingId && patientFolderNameWithDni !== cleanName) {
+    existingId = await findDriveFolder(patientFolderNameWithDni, rootFolderId, accessToken);
+  }
+  // 3. Or check legacy ID slice format
+  if (!existingId && patient.id) {
+    const legacyName = `${cleanName} (${patient.idNumber ? `DNI ${patient.idNumber}` : patient.id.slice(0, 6)})`;
+    existingId = await findDriveFolder(legacyName, rootFolderId, accessToken);
+  }
+
   if (existingId) return existingId;
-  return await createDriveFolder(patientFolderName, rootFolderId, accessToken);
+
+  // Create folder with patient's name
+  const folderToCreate = patient.idNumber ? `${cleanName} (DNI ${patient.idNumber})` : cleanName;
+  return await createDriveFolder(folderToCreate, rootFolderId, accessToken);
 }
 
 /**

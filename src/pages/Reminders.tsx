@@ -31,6 +31,7 @@ import { WhatsAppReminderModal } from '../components/WhatsAppReminderModal';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp, addDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import { getPatientFirstName } from '../lib/patientNameUtils';
 
 export function Reminders() {
   const { ownerId } = useAuth();
@@ -159,7 +160,9 @@ export function Reminders() {
 
     return appointments.map((app: any) => {
       const patientData = app.patientId ? patients[app.patientId] : null;
-      const patientName = patientData?.name || app.patientName || 'Paciente';
+      const patientFullName = patientData?.name || app.patientName || 'Paciente';
+      const patientFirstName = app.patientFirstName || patientData?.firstName || getPatientFirstName(patientData || app || patientFullName);
+      const patientLastName = app.patientLastName || patientData?.lastName || '';
       const patientPhone = patientData?.phone || app.patientPhone || app.phone || '';
       
       const dateObj = parseAppointmentDate(app);
@@ -188,7 +191,10 @@ export function Reminders() {
 
       // Build default interpolated message
       let defaultMsg = settings.template || 'Hola {nombre}, te recordamos tu turno de {tratamiento} el {fecha} a las {hora} hs en {clinica}. ¡Te esperamos! Por favor confirma tu asistencia.';
-      defaultMsg = defaultMsg.replace(/{nombre}/g, patientName);
+      defaultMsg = defaultMsg.replace(/{nombre}/g, patientFirstName);
+      defaultMsg = defaultMsg.replace(/{paciente}/g, patientFirstName);
+      defaultMsg = defaultMsg.replace(/{nombre_completo}/g, patientFullName);
+      defaultMsg = defaultMsg.replace(/{apellido}/g, patientLastName);
       defaultMsg = defaultMsg.replace(/{fecha}/g, dateStr);
       defaultMsg = defaultMsg.replace(/{hora}/g, timeStr);
       defaultMsg = defaultMsg.replace(/{tratamiento}/g, treatmentStr);
@@ -201,7 +207,10 @@ export function Reminders() {
       return {
         id: app.id,
         rawAppointment: app,
-        patient: patientName,
+        patient: patientFullName,
+        patientFullName,
+        patientFirstName,
+        patientLastName,
         phone: patientPhone,
         time: timeStr,
         date: dateStr,
@@ -266,7 +275,9 @@ export function Reminders() {
   const handleOpenPersonalizeModal = (reminder: any) => {
     setModalAppointment({
       ...reminder.rawAppointment,
-      patientName: reminder.patient,
+      patientName: reminder.patientFullName || reminder.patient,
+      patientFirstName: reminder.patientFirstName,
+      patientLastName: reminder.patientLastName,
       patientPhone: reminder.phone,
       time: reminder.time,
       type: reminder.treatment,
@@ -879,14 +890,23 @@ export function Reminders() {
 
               {/* Variable insertion buttons */}
               <div className="flex gap-1 flex-wrap">
-                {['{nombre}', '{fecha}', '{hora}', '{tratamiento}', '{clinica}', '{direccion}'].map(v => (
+                {[
+                  { tag: '{nombre}', hint: 'Solo nombre (ej: Juan)' },
+                  { tag: '{nombre_completo}', hint: 'Nombre y apellido' },
+                  { tag: '{fecha}', hint: 'Fecha' },
+                  { tag: '{hora}', hint: 'Hora' },
+                  { tag: '{tratamiento}', hint: 'Tratamiento' },
+                  { tag: '{clinica}', hint: 'Nombre clínica' },
+                  { tag: '{direccion}', hint: 'Dirección' }
+                ].map(item => (
                   <button 
-                    key={v}
+                    key={item.tag}
                     type="button"
-                    onClick={() => setSettings({ ...settings, template: settings.template + ' ' + v })}
+                    title={item.hint}
+                    onClick={() => setSettings({ ...settings, template: settings.template + ' ' + item.tag })}
                     className="px-2 py-0.5 bg-surface text-[10px] font-mono font-bold rounded border border-outline-variant hover:border-primary transition-colors"
                   >
-                    {v}
+                    {item.tag}
                   </button>
                 ))}
               </div>

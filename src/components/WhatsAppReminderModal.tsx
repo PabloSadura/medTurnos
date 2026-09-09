@@ -23,6 +23,7 @@ import { cn } from '../lib/utils';
 import { db } from '../lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import { getPatientFirstName } from '../lib/patientNameUtils';
 
 export interface WhatsAppReminderModalProps {
   isOpen: boolean;
@@ -96,7 +97,9 @@ export function WhatsAppReminderModal({
     }
 
     const readableTime = appointment.time || dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const patientName = appointment.patientName || appointment.patient || 'Paciente';
+    const patientFullName = appointment.patientName || appointment.patient || 'Paciente';
+    const patientFirstName = appointment.patientFirstName || appointment.firstName || getPatientFirstName(appointment);
+    const patientLastName = appointment.patientLastName || appointment.lastName || '';
     const treatment = appointment.type || appointment.treatment || 'Consulta';
     const phone = appointment.patientPhone || appointment.phone || '';
 
@@ -104,7 +107,10 @@ export function WhatsAppReminderModal({
       dateObj,
       readableDate,
       readableTime,
-      patientName,
+      patientName: patientFullName,
+      patientFullName,
+      patientFirstName,
+      patientLastName,
       treatment,
       phone,
       clinicName: clinicInfo?.name || 'Clínica Dental',
@@ -116,38 +122,38 @@ export function WhatsAppReminderModal({
   const presets = useMemo(() => {
     if (!appointmentInfo) return [];
 
-    const { patientName, readableDate, readableTime, treatment, clinicName, clinicAddress } = appointmentInfo;
+    const { patientFirstName, readableDate, readableTime, treatment, clinicName, clinicAddress } = appointmentInfo;
 
     return [
       {
         id: 'standard',
         name: 'Estándar',
         icon: FileText,
-        text: `Hola ${patientName}, te recordamos tu turno de ${treatment} para el ${readableDate} a las ${readableTime} hs. ¡Te esperamos en ${clinicName}! Por favor confirma tu asistencia respondiendo a este mensaje.`
+        text: `Hola ${patientFirstName}, te recordamos tu turno de ${treatment} para el ${readableDate} a las ${readableTime} hs. ¡Te esperamos en ${clinicName}! Por favor confirma tu asistencia respondiendo a este mensaje.`
       },
       {
         id: 'address',
         name: 'Con Dirección',
         icon: MapPin,
-        text: `Hola ${patientName}, te esperamos para tu turno de ${treatment} el ${readableDate} a las ${readableTime} hs en ${clinicAddress} (${clinicName}). Te solicitamos presentarte 10 minutos antes. ¡Muchas gracias!`
+        text: `Hola ${patientFirstName}, te esperamos para tu turno de ${treatment} el ${readableDate} a las ${readableTime} hs en ${clinicAddress} (${clinicName}). Te solicitamos presentarte 10 minutos antes. ¡Muchas gracias!`
       },
       {
         id: 'confirm',
         name: 'Confirmar Asistencia',
         icon: Sparkles,
-        text: `Hola ${patientName}, tienes turno reservado para el ${readableDate} a las ${readableTime} hs (${treatment}). Por favor responde 'CONFIRMO' para asegurar tu horario en nuestra agenda.`
+        text: `Hola ${patientFirstName}, tienes turno reservado para el ${readableDate} a las ${readableTime} hs (${treatment}). Por favor responde 'CONFIRMO' para asegurar tu horario en nuestra agenda.`
       },
       {
         id: 'instructions',
         name: 'Indicaciones',
         icon: AlertCircle,
-        text: `Hola ${patientName}, recordatorio de tu turno el ${readableDate} a las ${readableTime} hs para ${treatment}. Indicaciones: asistir con DNI, traer estudios o placas si tienes, y concurrir 10 min antes.`
+        text: `Hola ${patientFirstName}, recordatorio de tu turno el ${readableDate} a las ${readableTime} hs para ${treatment}. Indicaciones: asistir con DNI, traer estudios o placas si tienes, y concurrir 10 min antes.`
       },
       {
         id: 'brief',
         name: 'Breve',
         icon: MessageSquare,
-        text: `¡Hola ${patientName}! Te recordamos tu turno el ${readableDate} a las ${readableTime} hs (${treatment}). ¿Nos confirmas asistencia? ¡Gracias!`
+        text: `¡Hola ${patientFirstName}! Te recordamos tu turno el ${readableDate} a las ${readableTime} hs (${treatment}). ¿Nos confirmas asistencia? ¡Gracias!`
       }
     ];
   }, [appointmentInfo]);
@@ -156,7 +162,11 @@ export function WhatsAppReminderModal({
   const interpolateTemplate = (templateStr: string) => {
     if (!appointmentInfo) return '';
     let res = templateStr;
-    res = res.replace(/{nombre}/g, appointmentInfo.patientName);
+    // Replace both {nombre} and {paciente} with patientFirstName (only first name)
+    res = res.replace(/{nombre}/g, appointmentInfo.patientFirstName);
+    res = res.replace(/{paciente}/g, appointmentInfo.patientFirstName);
+    res = res.replace(/{nombre_completo}/g, appointmentInfo.patientFullName);
+    res = res.replace(/{apellido}/g, appointmentInfo.patientLastName);
     res = res.replace(/{fecha}/g, appointmentInfo.readableDate);
     res = res.replace(/{hora}/g, appointmentInfo.readableTime);
     res = res.replace(/{tratamiento}/g, appointmentInfo.treatment);
@@ -357,8 +367,11 @@ export function WhatsAppReminderModal({
               <User size={18} />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h4 className="text-sm font-bold text-on-surface">{appointmentInfo.patientName}</h4>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h4 className="text-sm font-bold text-on-surface">{appointmentInfo.patientFullName}</h4>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300">
+                  Saludo: Hola {appointmentInfo.patientFirstName}
+                </span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-surface-dim text-on-surface-variant uppercase tracking-wider">
                   {appointmentInfo.treatment}
                 </span>
@@ -472,19 +485,20 @@ export function WhatsAppReminderModal({
               Insertar:
             </span>
             {[
-              { label: '{nombre}', value: appointmentInfo.patientName },
-              { label: '{fecha}', value: appointmentInfo.readableDate },
-              { label: '{hora}', value: appointmentInfo.readableTime },
-              { label: '{tratamiento}', value: appointmentInfo.treatment },
-              { label: '{clinica}', value: appointmentInfo.clinicName },
-              { label: '{direccion}', value: appointmentInfo.clinicAddress },
+              { label: '{nombre}', value: appointmentInfo.patientFirstName, hint: 'Solo nombre' },
+              { label: '{nombre_completo}', value: appointmentInfo.patientFullName, hint: 'Nombre y apellido' },
+              { label: '{fecha}', value: appointmentInfo.readableDate, hint: 'Fecha del turno' },
+              { label: '{hora}', value: appointmentInfo.readableTime, hint: 'Hora' },
+              { label: '{tratamiento}', value: appointmentInfo.treatment, hint: 'Tratamiento' },
+              { label: '{clinica}', value: appointmentInfo.clinicName, hint: 'Nombre clínica' },
+              { label: '{direccion}', value: appointmentInfo.clinicAddress, hint: 'Dirección' },
             ].map(item => (
               <button
                 key={item.label}
                 type="button"
                 onClick={() => handleInsertVariable(item.label)}
                 className="px-2 py-0.5 bg-surface-dim hover:bg-surface-bright text-on-surface-variant hover:text-primary text-[10px] font-mono font-semibold rounded border border-outline-variant transition-colors"
-                title={`Inserta el valor actual: ${item.value}`}
+                title={`${item.hint}: ${item.value}`}
               >
                 {item.label}
               </button>

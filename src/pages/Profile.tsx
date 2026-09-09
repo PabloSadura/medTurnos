@@ -19,13 +19,23 @@ import {
   Folder,
   RefreshCw,
   Loader2,
-  FolderOpen
+  FolderOpen,
+  KeyRound,
+  Eye,
+  EyeOff,
+  Key
 } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { doc, onSnapshot, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { sendEmailVerification } from 'firebase/auth';
+import { 
+  sendEmailVerification, 
+  updatePassword, 
+  reauthenticateWithCredential, 
+  EmailAuthProvider, 
+  sendPasswordResetEmail 
+} from 'firebase/auth';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useGoogleDrive } from '../contexts/GoogleDriveContext';
@@ -66,6 +76,96 @@ export function Profile() {
     afternoonEnd: authProfile?.schedule?.afternoonEnd || '18:00',
     afternoonActive: authProfile?.schedule?.afternoonActive !== false
   });
+
+  // Password change state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [passwordChangeSuccess, setPasswordChangeSuccess] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [isSendingResetEmail, setIsSendingResetEmail] = useState(false);
+  const [resetEmailSent, setResetEmailSent] = useState(false);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !user.email) return;
+
+    setPasswordError(null);
+    setPasswordChangeSuccess(false);
+
+    if (!currentPassword) {
+      setPasswordError('Debe ingresar su contraseña actual.');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setPasswordError('La nueva contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('Las nuevas contraseñas no coinciden.');
+      return;
+    }
+
+    if (currentPassword === newPassword) {
+      setPasswordError('La nueva contraseña debe ser diferente a la contraseña actual.');
+      return;
+    }
+
+    setIsChangingPassword(true);
+
+    try {
+      // 1. Re-authenticate user with current password to ensure freshness and valid credentials
+      const credential = EmailAuthProvider.credential(user.email, currentPassword);
+      await reauthenticateWithCredential(user, credential);
+
+      // 2. Perform password update in Firebase Authentication
+      await updatePassword(user, newPassword);
+
+      // 3. Clear inputs and show success
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordChangeSuccess(true);
+      showToast('¡Contraseña actualizada exitosamente con éxito!', 'success');
+    } catch (err: any) {
+      console.error('Error changing password:', err);
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials') {
+        setPasswordError('La contraseña actual ingresada es incorrecta.');
+      } else if (err.code === 'auth/weak-password') {
+        setPasswordError('La contraseña es muy débil. Se recomienda combinar letras, números y símbolos.');
+      } else if (err.code === 'auth/requires-recent-login') {
+        setPasswordError('Por motivos de seguridad, cierre sesión y vuelva a ingresar antes de cambiar la contraseña.');
+      } else if (err.code === 'auth/too-many-requests') {
+        setPasswordError('Demasiados intentos erróneos. Por favor espere unos minutos.');
+      } else {
+        setPasswordError(err.message || 'Error al actualizar la contraseña. Intente nuevamente.');
+      }
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const handleSendResetPasswordEmail = async () => {
+    if (!user || !user.email) return;
+    setIsSendingResetEmail(true);
+    setPasswordError(null);
+    try {
+      await sendPasswordResetEmail(auth, user.email);
+      setResetEmailSent(true);
+      showToast(`Enlace de restablecimiento enviado a ${user.email}`, 'info');
+    } catch (err: any) {
+      console.error('Error sending reset email:', err);
+      showToast('No se pudo enviar el correo de restablecimiento. Intente más tarde.', 'error');
+    } finally {
+      setIsSendingResetEmail(false);
+    }
+  };
 
   const handleVerifyEmail = async () => {
     if (!auth.currentUser) return;
@@ -347,7 +447,25 @@ export function Profile() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+        <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end flex-wrap">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('security');
+              setPasswordChangeSuccess(false);
+              setPasswordError(null);
+            }}
+            className={cn(
+              "px-3.5 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 uppercase tracking-wider",
+              activeTab === 'security'
+                ? "bg-primary/10 border-primary text-primary"
+                : "bg-white border-outline-variant hover:bg-surface text-on-surface-variant hover:text-primary"
+            )}
+          >
+            <KeyRound size={14} />
+            <span>Cambiar Contraseña</span>
+          </button>
+
           <AnimatePresence>
             {success && (
               <motion.div 
@@ -715,56 +833,232 @@ export function Profile() {
 
       {/* Tab 3: Security */}
       {activeTab === 'security' && (
-        <div className="bg-white p-6 rounded-2xl border border-outline-variant shadow-sm space-y-6">
-          <h3 className="text-sm font-bold text-on-surface flex items-center gap-2 uppercase tracking-wider">
-            <Lock size={17} className="text-primary" /> Seguridad y Credenciales
-          </h3>
-
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-surface rounded-2xl border border-outline-variant gap-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-white rounded-xl border border-outline-variant shadow-sm text-primary">
-                  <Mail size={18} />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-on-surface">Correo Electrónico Principal</p>
-                  <p className="text-xs text-on-surface-variant">{user?.email}</p>
-                  {user?.emailVerified ? (
-                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest flex items-center gap-1 mt-0.5">
-                      <CheckCircle2 size={12} /> Verificado
-                    </span>
-                  ) : (
-                    <span className="text-[10px] font-black text-amber-600 uppercase tracking-widest flex items-center gap-1 mt-0.5">
-                      <AlertCircle size={12} /> Pendiente de Verificación
-                    </span>
-                  )}
-                </div>
+        <div className="space-y-6">
+          {/* Change Password Card */}
+          <div className="bg-white p-6 rounded-2xl border border-outline-variant shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-outline-variant pb-4">
+              <div>
+                <h3 className="text-sm font-bold text-on-surface flex items-center gap-2 uppercase tracking-wider">
+                  <KeyRound size={17} className="text-primary" /> Cambiar Contraseña
+                </h3>
+                <p className="text-xs text-on-surface-variant mt-0.5">
+                  Actualice su clave de acceso para proteger y mantener segura su cuenta.
+                </p>
               </div>
-
-              {!user?.emailVerified && (
-                <button 
-                  type="button"
-                  onClick={handleVerifyEmail}
-                  className="px-4 py-2 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer"
-                >
-                  Enviar Email de Verificación
-                </button>
-              )}
+              <span className="text-[10px] font-black uppercase px-2.5 py-1 bg-primary/10 text-primary rounded-lg border border-primary/20 self-start sm:self-center">
+                Mínimo 6 caracteres
+              </span>
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-surface rounded-2xl border border-outline-variant gap-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-white rounded-xl border border-outline-variant shadow-sm text-primary">
-                  <Shield size={18} />
+            {passwordChangeSuccess && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-3 text-emerald-800"
+              >
+                <CheckCircle2 size={18} className="shrink-0 text-emerald-600" />
+                <div className="text-xs">
+                  <p className="font-bold">¡Contraseña modificada exitosamente!</p>
+                  <p className="text-emerald-700/80 mt-0.5">Su nueva clave ya está activa para los próximos inicios de sesión.</p>
                 </div>
-                <div>
-                  <p className="text-xs font-bold text-on-surface">Identificador de Usuario (UID)</p>
-                  <p className="text-[11px] font-mono text-on-surface-variant break-all">{user?.uid}</p>
+              </motion.div>
+            )}
+
+            {passwordError && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3 text-red-800"
+              >
+                <AlertCircle size={18} className="shrink-0 text-red-600" />
+                <div className="text-xs">
+                  <p className="font-bold">No se pudo actualizar la contraseña</p>
+                  <p className="text-red-700/80 mt-0.5">{passwordError}</p>
+                </div>
+              </motion.div>
+            )}
+
+            {resetEmailSent && (
+              <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl flex items-center gap-2.5 text-sky-800 text-xs">
+                <Mail size={15} className="text-sky-600 shrink-0" />
+                <span>Se envió un enlace para restablecer su clave a <b>{user?.email}</b>. Revise su bandeja de entrada o spam.</span>
+              </div>
+            )}
+
+            <form onSubmit={handleChangePassword} className="space-y-4 max-w-xl">
+              {/* Contraseña Actual */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-black uppercase tracking-widest text-on-surface-variant flex items-center gap-1.5">
+                  <Lock size={12} /> Contraseña Actual
+                </label>
+                <div className="relative">
+                  <input
+                    type={showCurrentPassword ? "text" : "password"}
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full pl-3.5 pr-10 py-2.5 bg-surface text-sm border border-outline-variant rounded-xl focus:border-primary outline-none text-on-surface transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-on-surface-variant hover:text-on-surface"
+                    tabIndex={-1}
+                  >
+                    {showCurrentPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
               </div>
-              <span className="text-[10px] font-black uppercase px-2.5 py-1 bg-surface-bright rounded-lg border border-outline-variant text-on-surface-variant">
-                Activo
-              </span>
+
+              {/* Nueva Contraseña */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-black uppercase tracking-widest text-on-surface-variant flex items-center gap-1.5">
+                    <Key size={12} /> Nueva Contraseña
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showNewPassword ? "text" : "password"}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Mínimo 6 caracteres"
+                      required
+                      minLength={6}
+                      className="w-full pl-3.5 pr-10 py-2.5 bg-surface text-sm border border-outline-variant rounded-xl focus:border-primary outline-none text-on-surface transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-on-surface-variant hover:text-on-surface"
+                      tabIndex={-1}
+                    >
+                      {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Confirmar Nueva Contraseña */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-black uppercase tracking-widest text-on-surface-variant flex items-center gap-1.5">
+                    <CheckCircle2 size={12} /> Confirmar Contraseña
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showConfirmPassword ? "text" : "password"}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Repita la nueva clave"
+                      required
+                      minLength={6}
+                      className={cn(
+                        "w-full pl-3.5 pr-10 py-2.5 bg-surface text-sm border rounded-xl focus:border-primary outline-none text-on-surface transition-all",
+                        confirmPassword && newPassword !== confirmPassword
+                          ? "border-amber-400 bg-amber-50/20"
+                          : "border-outline-variant"
+                      )}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-on-surface-variant hover:text-on-surface"
+                      tabIndex={-1}
+                    >
+                      {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Botones de acción */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={isChangingPassword || !currentPassword || !newPassword || !confirmPassword}
+                  className={cn(
+                    "px-6 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer",
+                    isChangingPassword || !currentPassword || !newPassword || !confirmPassword
+                      ? "bg-surface-dim text-on-surface-variant/50 cursor-not-allowed"
+                      : "bg-primary text-white hover:bg-primary/90 active:scale-95 shadow-primary/20"
+                  )}
+                >
+                  {isChangingPassword ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>Actualizando Clave...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Lock size={14} />
+                      <span>Actualizar Contraseña</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSendResetPasswordEmail}
+                  disabled={isSendingResetEmail}
+                  className="text-xs text-primary hover:underline font-bold transition-colors text-center sm:text-right cursor-pointer"
+                >
+                  {isSendingResetEmail ? 'Enviando enlace...' : '¿Olvidó su contraseña actual? Enviar enlace por email'}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Account Credentials info */}
+          <div className="bg-white p-6 rounded-2xl border border-outline-variant shadow-sm space-y-6">
+            <h3 className="text-sm font-bold text-on-surface flex items-center gap-2 uppercase tracking-wider">
+              <Shield size={17} className="text-primary" /> Información de la Cuenta
+            </h3>
+
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-surface rounded-2xl border border-outline-variant gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-white rounded-xl border border-outline-variant shadow-sm text-primary">
+                    <Mail size={18} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-on-surface">Correo Electrónico Principal</p>
+                    <p className="text-xs text-on-surface-variant">{user?.email}</p>
+                    {user?.emailVerified ? (
+                      <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest flex items-center gap-1 mt-0.5">
+                        <CheckCircle2 size={12} /> Verificado
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-black text-amber-600 uppercase tracking-widest flex items-center gap-1 mt-0.5">
+                        <AlertCircle size={12} /> Pendiente de Verificación
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {!user?.emailVerified && (
+                  <button 
+                    type="button"
+                    onClick={handleVerifyEmail}
+                    className="px-4 py-2 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl text-xs font-black uppercase tracking-wider transition-colors cursor-pointer"
+                  >
+                    Enviar Email de Verificación
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-surface rounded-2xl border border-outline-variant gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-white rounded-xl border border-outline-variant shadow-sm text-primary">
+                    <Shield size={18} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-on-surface">Identificador de Usuario (UID)</p>
+                    <p className="text-[11px] font-mono text-on-surface-variant break-all">{user?.uid}</p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-black uppercase px-2.5 py-1 bg-surface-bright rounded-lg border border-outline-variant text-on-surface-variant">
+                  Activo
+                </span>
+              </div>
             </div>
           </div>
         </div>

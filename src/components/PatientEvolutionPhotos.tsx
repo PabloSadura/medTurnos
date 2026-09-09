@@ -19,7 +19,11 @@ import {
   AlertCircle,
   Cloud,
   ChevronRight,
-  Split
+  Split,
+  Folder,
+  FolderPlus,
+  ExternalLink,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -38,7 +42,7 @@ import { PatientEvolutionPhoto } from '../types';
 import { compressImage } from '../lib/imageUtils';
 import { useToast } from './Toast';
 import { useGoogleDrive } from '../contexts/GoogleDriveContext';
-import { uploadFileToDrive } from '../lib/googleDrive';
+import { uploadFileToDrive, getOrCreatePatientFolder } from '../lib/googleDrive';
 import { cn } from '../lib/utils';
 
 interface PatientEvolutionPhotosProps {
@@ -63,6 +67,43 @@ const STAGE_PRESETS = [
 export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: PatientEvolutionPhotosProps) {
   const { showToast } = useToast();
   const { isConnected: isDriveConnected, accessToken, rootFolderId } = useGoogleDrive();
+
+  // Patient folder in Google Drive
+  const [patientFolderId, setPatientFolderId] = useState<string | null>(patient?.driveFolderId || null);
+  const [checkingFolder, setCheckingFolder] = useState<boolean>(false);
+
+  // Ensure / verify that a folder with the patient's name exists
+  const ensurePatientFolder = async (): Promise<string | null> => {
+    if (!accessToken || !patient?.id) return null;
+    setCheckingFolder(true);
+    try {
+      const pFolderId = await getOrCreatePatientFolder(patient, accessToken);
+      setPatientFolderId(pFolderId);
+      if (!patient.driveFolderId || patient.driveFolderId !== pFolderId) {
+        try {
+          await updateDoc(doc(db, 'patients', patient.id), {
+            driveFolderId: pFolderId,
+            driveFolderName: patient.name,
+            updatedAt: serverTimestamp(),
+          });
+        } catch (e) {
+          // Non-blocking
+        }
+      }
+      return pFolderId;
+    } catch (err: any) {
+      console.error('Error ensuring patient folder in Drive:', err);
+      return null;
+    } finally {
+      setCheckingFolder(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isDriveConnected && accessToken && patient?.id) {
+      ensurePatientFolder();
+    }
+  }, [isDriveConnected, accessToken, patient?.id]);
 
   const [photos, setPhotos] = useState<PatientEvolutionPhoto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -312,18 +353,26 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
     try {
       let driveFileId: string | undefined = undefined;
       let driveViewLink: string | undefined = undefined;
+      let targetFolderId: string | undefined = undefined;
 
-      // Optional Google Drive upload if connected
-      if (saveToDrive && isDriveConnected && accessToken && rootFolderId && compressedBlob) {
+      // Google Drive: Ensure folder with patient name exists first, then save photo inside that folder
+      if (saveToDrive && isDriveConnected && accessToken && compressedBlob) {
         try {
+          // 1. Obtener o crear primero la carpeta con el nombre del paciente
+          const pFolderId = patientFolderId || (await ensurePatientFolder()) || (await getOrCreatePatientFolder(patient, accessToken));
+          setPatientFolderId(pFolderId);
+          targetFolderId = pFolderId;
+
           const fileName = `Evolucion_${patient.name.replace(/\s+/g, '_')}_${formDate}_${formStage.replace(/[^a-zA-Z0-9]/g, '_')}.jpg`;
+          
+          // 2. Guardar la foto dentro de esa carpeta
           const driveFile = await uploadFileToDrive({
             file: compressedBlob,
             fileName,
-            parentFolderId: rootFolderId,
+            parentFolderId: pFolderId,
             accessToken,
             category: 'Evolución Fotográfica',
-            description: `Foto de Evolución Clínica (${formStage}) para ${patient.name}. Notas: ${formNotes || 'Sin notas'}`,
+            description: `Foto de Evolución Clínica (${formStage}) para ${patient.name}. Guardada en su carpeta personal. Notas: ${formNotes || 'Sin notas'}`,
           });
           driveFileId = driveFile.id;
           driveViewLink = driveFile.webViewLink;
@@ -341,6 +390,8 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
         imageUrl: previewDataUrl,
         driveFileId: driveFileId || null,
         driveViewLink: driveViewLink || null,
+        driveFolderId: targetFolderId || patientFolderId || null,
+        driveFolderName: patient.name,
         date: formDate,
         title: formTitle.trim() || formStage,
         stage: formStage,
@@ -375,7 +426,7 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
         setAfterPhotoId(docRef.id);
       }
 
-      showToast('Fotografía de evolución guardada con éxito.');
+      showToast(`Fotografía guardada con éxito en la carpeta de ${patient.name}.`);
       setIsUploadOpen(false);
       setViewMode('comparison');
     } catch (err: any) {
@@ -505,6 +556,57 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
             Nueva Foto
           </button>
         </div>
+      </div>
+
+      {/* Patient Folder Organization Banner */}
+      <div className="bg-surface-container-low border border-outline-variant/50 rounded-xl p-3 sm:p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+            <Folder size={20} />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-on-surface-variant font-medium">Carpeta del Paciente:</span>
+              <h4 className="text-xs font-bold text-on-surface truncate">{patient?.name}</h4>
+              {isDriveConnected && patientFolderId && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                  <CheckCircle2 size={11} /> Carpeta en Drive activa
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-on-surface-variant mt-0.5">
+              Las fotografías se organizan y guardan dentro de la carpeta exclusiva de este paciente.
+            </p>
+          </div>
+        </div>
+
+        {isDriveConnected && (
+          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+            {patientFolderId ? (
+              <a
+                href={`https://drive.google.com/drive/folders/${patientFolderId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-surface text-primary border border-outline-variant/60 hover:bg-surface-container-high transition-colors shadow-xs"
+                title="Abrir carpeta en Google Drive"
+              >
+                <ExternalLink size={13} />
+                Abrir carpeta en Drive
+              </a>
+            ) : (
+              <button
+                type="button"
+                onClick={() => ensurePatientFolder()}
+                disabled={checkingFolder}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-colors"
+                title="Crear o verificar carpeta del paciente en Google Drive"
+              >
+                {checkingFolder ? <Loader2 size={13} className="animate-spin" /> : <FolderPlus size={13} />}
+                Crear carpeta en Drive
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Loading state */}
@@ -984,14 +1086,27 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
                       </div>
 
                       <div className="flex items-center justify-between pt-1 text-[11px] text-on-surface-variant">
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadImage(photo)}
-                          className="hover:text-primary transition-colors flex items-center gap-1"
-                          title="Descargar fotografía"
-                        >
-                          <Download size={12} /> Descargar
-                        </button>
+                        <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadImage(photo)}
+                            className="hover:text-primary transition-colors flex items-center gap-1"
+                            title="Descargar fotografía"
+                          >
+                            <Download size={12} /> Descargar
+                          </button>
+                          {photo.driveViewLink && (
+                            <a
+                              href={photo.driveViewLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary hover:underline flex items-center gap-1 font-medium"
+                              title="Ver archivo en Google Drive"
+                            >
+                              <ExternalLink size={11} /> Drive
+                            </a>
+                          )}
+                        </div>
                         <button
                           type="button"
                           onClick={() => setPhotoToDelete(photo)}
@@ -1042,6 +1157,26 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
 
               {/* Form */}
               <form onSubmit={handleSavePhoto} className="p-5 space-y-4 overflow-y-auto flex-1">
+                {/* Destination folder card */}
+                <div className="p-3 bg-primary/5 border border-primary/20 rounded-xl flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <Folder size={18} className="text-primary shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-bold text-on-surface truncate">
+                        Carpeta del Paciente: <span className="text-primary font-black">{patient?.name}</span>
+                      </p>
+                      <p className="text-[10px] text-on-surface-variant">
+                        Esta foto se guardará dentro de la carpeta con el nombre de este paciente.
+                      </p>
+                    </div>
+                  </div>
+                  {isDriveConnected && (
+                    <span className="text-[10px] font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded shrink-0">
+                      Drive Sync
+                    </span>
+                  )}
+                </div>
+
                 {/* Image Upload Box */}
                 <div className="space-y-1.5">
                   <label className="text-[11px] font-bold text-on-surface uppercase tracking-wider block">
@@ -1233,17 +1368,25 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
                   </div>
 
                   {isDriveConnected && (
-                    <div className="flex items-center gap-2 pt-1 border-t border-outline-variant">
-                      <input 
-                        type="checkbox"
-                        id="chk-save-drive"
-                        checked={saveToDrive}
-                        onChange={(e) => setSaveToDrive(e.target.checked)}
-                        className="w-3.5 h-3.5 text-primary rounded border-outline-variant focus:ring-primary"
-                      />
-                      <label htmlFor="chk-save-drive" className="text-xs font-medium text-on-surface-variant flex items-center gap-1 cursor-pointer">
-                        <Cloud size={13} className="text-primary" /> Guardar copia de seguridad en Google Drive
-                      </label>
+                    <div className="pt-2 border-t border-outline-variant space-y-1">
+                      <div className="flex items-center gap-2">
+                        <input 
+                          type="checkbox"
+                          id="chk-save-drive"
+                          checked={saveToDrive}
+                          onChange={(e) => setSaveToDrive(e.target.checked)}
+                          className="w-3.5 h-3.5 text-primary rounded border-outline-variant focus:ring-primary"
+                        />
+                        <label htmlFor="chk-save-drive" className="text-xs font-semibold text-on-surface flex items-center gap-1.5 cursor-pointer">
+                          <Cloud size={13} className="text-primary" /> Guardar también en Google Drive
+                        </label>
+                      </div>
+                      {saveToDrive && (
+                        <p className="text-[10px] text-on-surface-variant flex items-center gap-1 pl-5">
+                          <Folder size={11} className="text-primary shrink-0" />
+                          Se almacenará directamente dentro de la carpeta: <b>{patient?.name}</b>
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>

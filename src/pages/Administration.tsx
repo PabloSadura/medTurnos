@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { comparePatientsByLastName } from '../lib/patientNameUtils';
 
 type AdminTab = 'overview' | 'users' | 'notifications' | 'backup' | 'theme' | 'billing';
 
@@ -280,7 +281,7 @@ export function Administration() {
       const pSnap = await getDocs(query(collection(db, 'patients'), where('userId', '==', ownerId)));
       const aSnap = await getDocs(query(collection(db, 'appointments'), where('userId', '==', ownerId)));
 
-      const patients = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const patients = pSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort(comparePatientsByLastName);
       const appointments = aSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
       const data = { patients, appointments, exportedAt: new Date().toISOString() };

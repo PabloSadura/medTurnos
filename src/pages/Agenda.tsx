@@ -5,12 +5,14 @@ import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 import { WhatsAppReminderModal } from '../components/WhatsAppReminderModal';
+import { ClinicalHistoryModal } from '../components/ClinicalHistoryModal';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch, getDoc } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { consumePackageSession } from '../lib/packageUtils';
 import { PatientPackage } from '../types';
+import { splitFullName, getPatientFirstName, formatPatientFullName, comparePatientsByLastName, formatPatientLastNameFirst, getPatientLastName } from '../lib/patientNameUtils';
 
 const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
@@ -38,7 +40,7 @@ export function Agenda() {
     });
     if (!isNewAppointmentOpen) {
       setIsCreatingNewPatient(false);
-      setNewPatientData({ name: '', phone: '', idNumber: '', birthDate: '' });
+      setNewPatientData({ firstName: '', lastName: '', name: '', phone: '', idNumber: '', birthDate: '' });
       setSearchTerm('');
     }
   }, [isNewAppointmentOpen]);
@@ -46,6 +48,9 @@ export function Agenda() {
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isClinicalHistoryOpen, setIsClinicalHistoryOpen] = useState(false);
+  const [clinicalHistoryAppointment, setClinicalHistoryAppointment] = useState<any>(null);
+  const [clinicalHistoryPatient, setClinicalHistoryPatient] = useState<any>(null);
   const [whatsappModalApt, setWhatsappModalApt] = useState<any | null>(null);
   const [editAptData, setEditAptData] = useState<{
     id: string;
@@ -71,6 +76,8 @@ export function Agenda() {
   const [selectedPatientStats, setSelectedPatientStats] = useState<{ attendance: number, absences: number } | null>(null);
 
   const [newPatientData, setNewPatientData] = useState({
+    firstName: '',
+    lastName: '',
     name: '',
     phone: '',
     idNumber: '',
@@ -89,6 +96,8 @@ export function Agenda() {
   const [newApt, setNewApt] = useState<{
     patientId: string;
     patientName: string;
+    patientFirstName?: string;
+    patientLastName?: string;
     date: string;
     time: string;
     type: string;
@@ -99,6 +108,8 @@ export function Agenda() {
   }>({
     patientId: '',
     patientName: '',
+    patientFirstName: '',
+    patientLastName: '',
     date: formatLocalDate(new Date()),
     time: '09:00',
     type: 'Check-up General',
@@ -182,7 +193,7 @@ export function Agenda() {
     const patientsQ = query(collection(db, 'patients'), where('userId', '==', ownerId));
     const unsubscribePatients = onSnapshot(patientsQ, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPatients(docs.sort((a: any, b: any) => a.name.localeCompare(b.name)));
+      setPatients(docs.sort(comparePatientsByLastName));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'patients'));
 
     return () => {
@@ -204,10 +215,18 @@ export function Agenda() {
     try {
       let patientId = newApt.patientId;
       let patientName = newApt.patientName;
+      let patientFirstName = newApt.patientFirstName || '';
+      let patientLastName = newApt.patientLastName || '';
 
       if (isCreatingNewPatient) {
+        const fn = newPatientData.firstName.trim();
+        const ln = newPatientData.lastName.trim();
+        const fullName = formatPatientFullName(fn, ln, newPatientData.name);
+
         const patientRef = await addDoc(collection(db, 'patients'), {
-          name: newPatientData.name,
+          firstName: fn,
+          lastName: ln,
+          name: fullName,
           phone: newPatientData.phone,
           idNumber: newPatientData.idNumber,
           birthDate: newPatientData.birthDate || '',
@@ -217,11 +236,20 @@ export function Agenda() {
           createdAt: serverTimestamp()
         });
         patientId = patientRef.id;
-        patientName = newPatientData.name;
+        patientName = fullName;
+        patientFirstName = fn || getPatientFirstName(fullName);
+        patientLastName = ln;
       }
 
-      const patient = isCreatingNewPatient ? { id: patientId, name: patientName } : patients.find(p => p.id === patientId);
+      const patient = isCreatingNewPatient 
+        ? { id: patientId, name: patientName, firstName: patientFirstName, lastName: patientLastName, phone: newPatientData.phone } 
+        : patients.find(p => p.id === patientId);
       if (!patient) return;
+
+      if (!isCreatingNewPatient) {
+        patientFirstName = patient.firstName || newApt.patientFirstName || getPatientFirstName(patient.name || patientName);
+        patientLastName = patient.lastName || newApt.patientLastName || '';
+      }
 
       // Calculate attendance count
       const attendanceCount = appointments.filter(a => a.patientId === patientId).length + 1;
@@ -266,6 +294,8 @@ export function Agenda() {
         ...newApt,
         patientId,
         patientName,
+        patientFirstName,
+        patientLastName,
         patientPhone,
         treatment: newApt.type,
         treatmentId: matchedTreatment?.id || '',
@@ -286,8 +316,8 @@ export function Agenda() {
 
       setIsNewAppointmentOpen(false);
       setIsCreatingNewPatient(false);
-      setNewPatientData({ name: '', phone: '', idNumber: '', birthDate: '' });
-      setNewApt({ ...newApt, patientId: '', patientName: '', notes: '', isPackageSession: false, patientPackageId: '', packageName: '' });
+      setNewPatientData({ firstName: '', lastName: '', name: '', phone: '', idNumber: '', birthDate: '' });
+      setNewApt({ ...newApt, patientId: '', patientName: '', patientFirstName: '', patientLastName: '', notes: '', isPackageSession: false, patientPackageId: '', packageName: '' });
       setSearchTerm('');
       showToast('Turno agendado correctamente');
     } catch (error) {
@@ -295,9 +325,44 @@ export function Agenda() {
     }
   };
 
+  const handleOpenClinicalHistory = (apt: any) => {
+    const patient = patients.find(p => p.id === apt.patientId) || {
+      id: apt.patientId,
+      name: apt.patientName,
+      phone: apt.phone || '',
+      idNumber: apt.idNumber || ''
+    };
+    setClinicalHistoryAppointment(apt);
+    setClinicalHistoryPatient(patient);
+    setIsClinicalHistoryOpen(true);
+  };
+
   const handleUpdateStatus = async (status: string) => {
     if (!selectedAppointment) return;
     try {
+      // User request: When changing status to 'in-session', automatically open the clinical history modal
+      if (status === 'in-session') {
+        await updateDoc(doc(db, 'appointments', selectedAppointment.id), {
+          status: 'in-session',
+          updatedAt: serverTimestamp()
+        });
+
+        setIsDetailModalOpen(false);
+
+        const patient = patients.find(p => p.id === selectedAppointment.patientId) || {
+          id: selectedAppointment.patientId,
+          name: selectedAppointment.patientName,
+          phone: selectedAppointment.phone || '',
+          idNumber: selectedAppointment.idNumber || ''
+        };
+
+        setClinicalHistoryAppointment({ ...selectedAppointment, status: 'in-session' });
+        setClinicalHistoryPatient(patient);
+        setIsClinicalHistoryOpen(true);
+        showToast('Turno en sesión. Abriendo historia clínica...', 'success');
+        return;
+      }
+
       const isPkg = Boolean(selectedAppointment.isPackageSession);
 
       // If changing to 'finished' and appointment is marked as package session, consume from package
@@ -447,10 +512,17 @@ export function Agenda() {
     }
   };
 
-  const filteredPatients = patients.filter(p => 
-    p.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.idNumber?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredPatients = patients
+    .filter(p => {
+      const term = searchTerm.toLowerCase();
+      return (
+        p.name?.toLowerCase().includes(term) ||
+        p.firstName?.toLowerCase().includes(term) ||
+        p.lastName?.toLowerCase().includes(term) ||
+        p.idNumber?.toLowerCase().includes(term)
+      );
+    })
+    .sort(comparePatientsByLastName);
 
   const getCalendarDays = () => {
     const year = viewDate.getFullYear();
@@ -495,9 +567,13 @@ export function Agenda() {
     if (e) e.stopPropagation();
     
     const phone = getPatientPhone(apt);
+    const patient = patients.find(p => p.id === apt?.patientId);
     setWhatsappModalApt({
       ...apt,
-      patientPhone: phone || apt?.patientPhone || apt?.phone || ''
+      patientPhone: phone || apt?.patientPhone || apt?.phone || '',
+      patientFirstName: apt?.patientFirstName || patient?.firstName || getPatientFirstName(apt?.patientName || patient?.name),
+      patientLastName: apt?.patientLastName || patient?.lastName || '',
+      patientName: apt?.patientName || patient?.name || 'Paciente'
     });
   };
 
@@ -1035,6 +1111,17 @@ export function Agenda() {
                         </button>
 
                         <div className="flex items-center gap-1">
+                          {apt.status === 'in-session' && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenClinicalHistory(apt)}
+                              title="Abrir historia clínica del paciente en sesión"
+                              className="px-2.5 py-1.5 rounded-lg bg-tertiary text-white hover:bg-tertiary/90 text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer animate-pulse"
+                            >
+                              <Stethoscope size={13} />
+                              <span>Historia Clínica</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={(e) => handleOpenEditAppointment(apt, e)}
@@ -1180,14 +1267,56 @@ export function Agenda() {
             
             {isCreatingNewPatient ? (
               <div className="space-y-3 bg-surface p-3 rounded-lg border border-outline-variant">
-                <input 
-                  type="text" 
-                  placeholder="Nombre completo"
-                  required
-                  value={newPatientData.name}
-                  onChange={(e) => setNewPatientData({ ...newPatientData, name: e.target.value })}
-                  className="w-full px-3 py-1.5 bg-white border border-outline-variant rounded text-[13px] outline-none focus:ring-1 focus:ring-primary"
-                />
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-bold text-on-surface-variant uppercase ml-1 block mb-1">
+                      Nombre *
+                    </label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej: Juan"
+                      required
+                      value={newPatientData.firstName}
+                      onChange={(e) => {
+                        const fn = e.target.value;
+                        setNewPatientData({
+                          ...newPatientData,
+                          firstName: fn,
+                          name: `${fn} ${newPatientData.lastName}`.trim()
+                        });
+                      }}
+                      className="w-full px-3 py-1.5 bg-white border border-outline-variant rounded text-[13px] outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-on-surface-variant uppercase ml-1 block mb-1">
+                      Apellido *
+                    </label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej: Pérez"
+                      required
+                      value={newPatientData.lastName}
+                      onChange={(e) => {
+                        const ln = e.target.value;
+                        setNewPatientData({
+                          ...newPatientData,
+                          lastName: ln,
+                          name: `${newPatientData.firstName} ${ln}`.trim()
+                        });
+                      }}
+                      className="w-full px-3 py-1.5 bg-white border border-outline-variant rounded text-[13px] outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-1.5 px-2.5 py-1.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 rounded-md text-[11px] text-emerald-900 dark:text-emerald-200">
+                  <span className="font-semibold shrink-0">💬 Recordatorio:</span>
+                  <span>
+                    El mensaje de WhatsApp saludará solo con el <b>Nombre</b> (ej: <i>"Hola {newPatientData.firstName || 'Nombre'}..."</i>).
+                  </span>
+                </div>
+
                 <div className="grid grid-cols-2 gap-2">
                   <input 
                     type="text" 
@@ -1231,12 +1360,39 @@ export function Agenda() {
                         key={p.id}
                         type="button"
                         onClick={() => {
-                          setNewApt({ ...newApt, patientId: p.id, patientName: p.name });
+                          setNewApt({
+                            ...newApt,
+                            patientId: p.id,
+                            patientName: p.name,
+                            patientFirstName: p.firstName || getPatientFirstName(p.name),
+                            patientLastName: p.lastName || ''
+                          });
                           setSearchTerm(p.name);
                         }}
-                        className="w-full px-4 py-2 text-left text-[12px] hover:bg-surface transition-colors border-b last:border-0 border-outline-variant"
+                        className="w-full px-4 py-2 text-left text-[12px] hover:bg-surface transition-colors border-b last:border-0 border-outline-variant flex items-center justify-between"
                       >
-                        {p.name} ({p.idNumber})
+                        <div>
+                          <span className="font-bold text-on-surface">
+                            {p.lastName || getPatientLastName(p) ? (
+                              <>
+                                <span className="font-extrabold">{p.lastName || getPatientLastName(p)}</span>
+                                {(p.firstName || getPatientFirstName(p)) && (
+                                  <span className="font-normal text-on-surface-variant">, {p.firstName || getPatientFirstName(p)}</span>
+                                )}
+                              </>
+                            ) : (
+                              p.name
+                            )}
+                          </span>
+                          {p.idNumber && (
+                            <span className="ml-2 font-mono text-[11px] text-on-surface-variant">
+                              DNI: {p.idNumber}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-on-surface-variant bg-surface px-1.5 py-0.5 rounded border border-outline-variant">
+                          Seleccionar
+                        </span>
                       </button>
                     ))}
                     {filteredPatients.length === 0 && (
@@ -1245,8 +1401,14 @@ export function Agenda() {
                         <button 
                           type="button"
                           onClick={() => {
+                            const parsed = splitFullName(searchTerm);
                             setIsCreatingNewPatient(true);
-                            setNewPatientData({ ...newPatientData, name: searchTerm });
+                            setNewPatientData({
+                              ...newPatientData,
+                              firstName: parsed.firstName,
+                              lastName: parsed.lastName,
+                              name: searchTerm
+                            });
                           }}
                           className="text-[11px] text-primary font-bold underline uppercase"
                         >
@@ -1579,19 +1741,30 @@ export function Agenda() {
               >
                 Ver Ficha
               </button>
-              <button 
-                type="button"
-                onClick={() => {
-                  if (selectedAppointment?.patientId) {
-                    navigate(`/patients?id=${selectedAppointment.patientId}&appointmentId=${selectedAppointment.id}`);
-                  }
-                  setIsDetailModalOpen(false);
-                }}
-                className="flex-1 px-4 py-2 bg-primary text-white text-[11px] font-bold rounded-lg hover:bg-primary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm"
-              >
-                <Stethoscope size={13} />
-                Atender / Evolución
-              </button>
+              {selectedAppointment.status === 'in-session' ? (
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setIsDetailModalOpen(false);
+                    handleOpenClinicalHistory(selectedAppointment);
+                  }}
+                  className="flex-1 px-4 py-2 bg-tertiary text-white text-[11px] font-bold rounded-lg hover:bg-tertiary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm animate-pulse"
+                >
+                  <Stethoscope size={13} />
+                  Historia Clínica (En Sesión)
+                </button>
+              ) : (
+                <button 
+                  type="button"
+                  onClick={async () => {
+                    await handleUpdateStatus('in-session');
+                  }}
+                  className="flex-1 px-4 py-2 bg-primary text-white text-[11px] font-bold rounded-lg hover:bg-primary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  <Stethoscope size={13} />
+                  Atender (Poner En Sesión)
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1712,6 +1885,25 @@ export function Agenda() {
           appointment={whatsappModalApt}
           onMessageSent={(_aptId, _msg, method) => {
             showToast(`Recordatorio de WhatsApp procesado con éxito (${method === 'meta_api' ? 'API' : 'Web/Móvil'})`, 'success');
+          }}
+        />
+      )}
+
+      {/* Modal Historia Clínica — Flujo Automático In-Session */}
+      {clinicalHistoryAppointment && (
+        <ClinicalHistoryModal
+          isOpen={isClinicalHistoryOpen}
+          onClose={() => {
+            setIsClinicalHistoryOpen(false);
+            setClinicalHistoryAppointment(null);
+            setClinicalHistoryPatient(null);
+          }}
+          appointment={clinicalHistoryAppointment}
+          patient={clinicalHistoryPatient}
+          ownerId={ownerId || ''}
+          treatments={treatments}
+          onSavedAndFinished={() => {
+            // Turno finalizado y guardado
           }}
         />
       )}

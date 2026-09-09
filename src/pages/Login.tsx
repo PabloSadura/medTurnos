@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { auth } from '../lib/firebase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { Activity, Mail, Lock, Eye, EyeOff, ShieldCheck, LockIcon, AlertCircle } from 'lucide-react';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
+import { Activity, Mail, Lock, Eye, EyeOff, ShieldCheck, LockIcon, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { Modal } from '../components/Modal';
 
 export function Login() {
   const [showPassword, setShowPassword] = useState(false);
@@ -10,6 +11,39 @@ export function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Password reset modal state
+  const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetSuccess, setResetSuccess] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  const handlePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError(null);
+    const clean = resetEmail.trim();
+    if (!clean) {
+      setResetError('Por favor ingrese su correo electrónico.');
+      return;
+    }
+    setResetLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, clean);
+      setResetSuccess(true);
+    } catch (err: any) {
+      console.error('Password reset error:', err);
+      if (err.code === 'auth/user-not-found') {
+        setResetError('No existe una cuenta registrada con ese correo electrónico.');
+      } else if (err.code === 'auth/invalid-email') {
+        setResetError('El formato de correo no es válido.');
+      } else {
+        setResetError('Error al enviar el enlace. Intente nuevamente más tarde.');
+      }
+    } finally {
+      setResetLoading(false);
+    }
+  };
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,7 +133,18 @@ export function Login() {
             <div className="space-y-1.5">
               <div className="flex justify-between items-center">
                 <label className="text-[10px] font-black text-on-surface-variant block uppercase tracking-wider" htmlFor="password">Contraseña</label>
-                <a href="#" className="text-[10px] font-black text-primary hover:underline uppercase tracking-wider">¿Olvidó su clave?</a>
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setResetEmail(email.trim());
+                    setResetSuccess(false);
+                    setResetError(null);
+                    setIsForgotModalOpen(true);
+                  }}
+                  className="text-[10px] font-black text-primary hover:underline uppercase tracking-wider cursor-pointer"
+                >
+                  ¿Olvidó su clave?
+                </button>
               </div>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-on-surface-variant">
@@ -161,6 +206,90 @@ export function Login() {
           </div>
         </div>
       </motion.div>
+
+      {/* Modal de Restablecer Contraseña */}
+      <Modal
+        isOpen={isForgotModalOpen}
+        onClose={() => setIsForgotModalOpen(false)}
+        title="Restablecer Contraseña"
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-on-surface-variant leading-relaxed">
+            Ingrese el correo electrónico asociado a su cuenta profesional. Le enviaremos un enlace seguro para restablecer su contraseña.
+          </p>
+
+          {resetSuccess ? (
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-3">
+              <div className="flex items-center gap-2.5 text-emerald-800">
+                <CheckCircle2 size={20} className="text-emerald-600 shrink-0" />
+                <p className="text-xs font-bold">¡Enlace enviado exitosamente!</p>
+              </div>
+              <p className="text-xs text-emerald-700 leading-relaxed">
+                Hemos enviado un correo a <b>{resetEmail}</b> con las instrucciones para crear una nueva clave. Revise también su carpeta de correo no deseado o spam.
+              </p>
+              <button
+                type="button"
+                onClick={() => setIsForgotModalOpen(false)}
+                className="w-full mt-2 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
+              >
+                Entendido
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handlePasswordReset} className="space-y-4">
+              {resetError && (
+                <div className="p-3 bg-error-container text-error rounded-lg flex items-center gap-2.5 border border-error/20 text-xs font-bold">
+                  <AlertCircle size={16} className="shrink-0" />
+                  <span>{resetError}</span>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label htmlFor="reset-email" className="text-[11px] font-black uppercase tracking-widest text-on-surface-variant flex items-center gap-1.5">
+                  <Mail size={13} /> Correo Electrónico
+                </label>
+                <div className="relative">
+                  <input
+                    id="reset-email"
+                    type="email"
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    placeholder="ejemplo@medico.com"
+                    required
+                    disabled={resetLoading}
+                    className="w-full pl-3.5 pr-3.5 py-2.5 bg-surface text-sm border border-outline-variant rounded-xl focus:border-primary outline-none text-on-surface transition-all disabled:opacity-50"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsForgotModalOpen(false)}
+                  disabled={resetLoading}
+                  className="px-4 py-2 text-xs font-bold text-on-surface-variant hover:text-on-surface hover:bg-surface rounded-lg transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={resetLoading || !resetEmail.trim()}
+                  className="px-5 py-2.5 bg-primary hover:bg-primary/90 text-white rounded-xl text-xs font-bold uppercase tracking-wider shadow-sm transition-all disabled:opacity-50 cursor-pointer flex items-center gap-2"
+                >
+                  {resetLoading ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Enviando...</span>
+                    </>
+                  ) : (
+                    'Enviar Enlace'
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }
