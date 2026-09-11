@@ -1,959 +1,713 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
-  MessageSquare, 
-  CalendarClock, 
-  Settings, 
-  Send, 
-  CheckCircle2, 
-  AlertCircle, 
-  Clock, 
-  Info, 
-  Save, 
-  ToggleLeft, 
-  ToggleRight, 
-  Search, 
-  Edit3, 
-  Copy, 
-  Check, 
-  Sparkles, 
-  Calendar, 
-  User, 
-  Phone, 
-  Building2, 
-  MapPin, 
-  RotateCcw,
-  ChevronDown,
-  Filter
+  MessageSquare, Search, Filter, Calendar, Clock, User, Phone, 
+  Send, CheckCircle2, AlertCircle, Sparkles, Settings, ExternalLink, 
+  RefreshCw, Check, Copy, ArrowUpDown, Building, MapPin, Eye, Zap
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
-import { Modal } from '../components/Modal';
-import { WhatsAppReminderModal } from '../components/WhatsAppReminderModal';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp, addDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { 
+  collection, onSnapshot, query, where, doc, updateDoc, 
+  serverTimestamp, setDoc, getDoc 
+} from 'firebase/firestore';
+import { ReminderModal } from '../components/ReminderModal';
 import { getPatientFirstName } from '../lib/patientNameUtils';
+import { formatDateDDMMAAAA, formatArgentinePhoneWithPrefix, getWhatsAppNumber } from '../lib/phoneUtils';
 
 export function Reminders() {
-  const { ownerId } = useAuth();
+  const { ownerId, profile } = useAuth();
+
   const [appointments, setAppointments] = useState<any[]>([]);
-  const [patients, setPatients] = useState<Record<string, any>>({});
+  const [patients, setPatients] = useState<any[]>([]);
+  const [staff, setStaff] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [sendingId, setSendingId] = useState<string | null>(null);
+
+  // Filters
   const [searchTerm, setSearchTerm] = useState('');
-  const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'tomorrow' | 'week'>('today');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'confirmed'>('all');
-  
-  // Custom message state per appointment (allows in-card or modal editing)
-  const [customMessages, setCustomMessages] = useState<Record<string, string>>({});
-  const [editingCardId, setEditingCardId] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [dateFilter, setDateFilter] = useState<'today' | 'tomorrow' | 'week' | 'all'>('today');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'sent'>('all');
+  const [selectedProfessional, setSelectedProfessional] = useState<string>('all');
 
-  // Selected appointment for full personalization modal
-  const [modalAppointment, setModalAppointment] = useState<any | null>(null);
-  const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
+  // Modal State
+  const [activeModalAppointment, setActiveModalAppointment] = useState<any | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // In-app notification toast
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  // Default Template & Clinic Info in Settings
+  const [template, setTemplate] = useState(
+    'Hola {nombre}, te recordamos tu turno el {fecha} a las {hora} con {profesional} en {clinica}, ubicada en {direccion}. Por favor responde este mensaje para confirmar tu asistencia. ¡Te esperamos!'
+  );
+  const [clinicName, setClinicName] = useState('Nuestra Clínica');
+  const [clinicAddress, setClinicAddress] = useState('Av. Libertador 1234');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
-  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const [settings, setSettings] = useState<any>({
-    template: 'Hola {nombre}, te recordamos tu turno de {tratamiento} el {fecha} a las {hora} hs en {clinica}. ¡Te esperamos! Por favor confirma tu asistencia respondiendo a este mensaje.',
-    botEnabled: false,
-    clinicName: 'Clínica Dental',
-    clinicAddress: '',
-    rules: [
-      { label: '24h Antes (Recordatorio)', active: true },
-      { label: '1h Antes (Alerta Final)', active: true },
-      { label: 'Seguimiento (Post 2 días)', active: false },
-      { label: 'Saludo Cumpleaños', active: true },
-    ]
-  });
-
+  // 1. Fetch Patients, Appointments & Staff
   useEffect(() => {
     if (!ownerId) return;
 
-    // Fetch settings reliably using direct document listener to prevent Firestore list rule errors
-    const unsubscribeSettings = onSnapshot(doc(db, 'reminder_settings', ownerId), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setSettings((prev: any) => ({ ...prev, ...data }));
-      }
-    }, (error) => {
-      console.warn('Could not sync reminder_settings doc, continuing with defaults:', error);
-    });
+    setLoading(true);
 
-    // Sync patients for enrichment
     const unsubscribePatients = onSnapshot(
-      query(collection(db, 'patients'), where('userId', '==', ownerId)), 
+      query(collection(db, 'patients'), where('userId', '==', ownerId)),
       (snapshot) => {
-        const pMap: Record<string, any> = {};
-        snapshot.docs.forEach(d => {
-          pMap[d.id] = d.data();
-        });
-        setPatients(pMap);
-      }, 
+        setPatients(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      },
       (error) => handleFirestoreError(error, OperationType.LIST, 'patients')
     );
 
-    // Fetch appointments for this user
-    const q = query(
-      collection(db, 'appointments'),
-      where('userId', '==', ownerId)
+    const unsubscribeAppointments = onSnapshot(
+      query(collection(db, 'appointments'), where('userId', '==', ownerId)),
+      (snapshot) => {
+        const apts = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        setAppointments(apts);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'appointments');
+        setLoading(false);
+      }
     );
 
-    const unsubscribeApps = onSnapshot(q, (snapshot) => {
-      const allApps = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-      setAppointments(allApps);
-      setLoading(false);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
+    const unsubscribeStaff = onSnapshot(
+      query(collection(db, 'staff'), where('userId', '==', ownerId)),
+      (snapshot) => {
+        setStaff(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'staff')
+    );
+
+    // Fetch Template & Clinic Settings
+    getDoc(doc(db, 'reminder_settings', ownerId)).then((snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d.template) setTemplate(d.template);
+        if (d.clinicName) setClinicName(d.clinicName);
+        if (d.clinicAddress) setClinicAddress(d.clinicAddress);
+      } else if (profile) {
+        if (profile.clinicName) setClinicName(profile.clinicName);
+        if (profile.clinicAddress || profile.address) setClinicAddress(profile.clinicAddress || profile.address);
+      }
+    }).catch(console.warn);
 
     return () => {
-      unsubscribeSettings();
       unsubscribePatients();
-      unsubscribeApps();
+      unsubscribeAppointments();
+      unsubscribeStaff();
     };
-  }, [ownerId]);
+  }, [ownerId, profile]);
 
-  // Robust date/time parser
-  const parseAppointmentDate = (app: any): Date => {
-    if (app.startTime?.toDate) {
-      return app.startTime.toDate();
-    }
-    if (app.startTime instanceof Date) {
-      return app.startTime;
-    }
-    if (typeof app.startTime === 'string') {
-      const parsed = new Date(app.startTime);
-      if (!isNaN(parsed.getTime())) return parsed;
-    }
-    if (app.date) {
-      const parts = app.date.split('-').map(Number);
-      if (parts.length === 3) {
-        const timeParts = (app.time || '09:00').split(':').map(Number);
-        return new Date(parts[0], parts[1] - 1, parts[2], timeParts[0] || 9, timeParts[1] || 0);
+  // Save Default Template and Clinic Info
+  const handleSaveSettings = async () => {
+    if (!ownerId) return;
+    setIsSavingSettings(true);
+    try {
+      await setDoc(doc(db, 'reminder_settings', ownerId), {
+        userId: ownerId,
+        template: template,
+        clinicName: clinicName.trim(),
+        clinicAddress: clinicAddress.trim(),
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+
+      // Synchronize with user profile doc
+      try {
+        await setDoc(doc(db, 'users', ownerId), {
+          clinicName: clinicName.trim(),
+          clinicAddress: clinicAddress.trim(),
+          address: clinicAddress.trim()
+        }, { merge: true });
+      } catch (e) {
+        console.warn('Could not sync clinic data with user profile:', e);
       }
+
+      showToast('Configuración y plantilla guardadas correctamente');
+      setShowSettings(false);
+    } catch (err) {
+      console.error('Error saving settings:', err);
+      showToast('Error al guardar la plantilla');
+    } finally {
+      setIsSavingSettings(false);
     }
-    return new Date();
   };
 
-  // Process and enrich reminders list
-  const processedReminders = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  // Helper date calculations
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    return d.toISOString().split('T')[0];
+  }, []);
 
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  }, []);
 
-    const dayAfterTomorrow = new Date(today);
-    dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
+  const nextWeekStr = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return d.toISOString().split('T')[0];
+  }, []);
 
-    const nextWeek = new Date(today);
-    nextWeek.setDate(nextWeek.getDate() + 7);
-    nextWeek.setHours(23, 59, 59, 999);
-
-    const nowTime = new Date();
-
-    return appointments.map((app: any) => {
-      const patientData = app.patientId ? patients[app.patientId] : null;
-      const patientFullName = patientData?.name || app.patientName || 'Paciente';
-      const patientFirstName = app.patientFirstName || patientData?.firstName || getPatientFirstName(patientData || app || patientFullName);
-      const patientLastName = app.patientLastName || patientData?.lastName || '';
-      const patientPhone = patientData?.phone || app.patientPhone || app.phone || '';
-      
-      const dateObj = parseAppointmentDate(app);
-      const appMidnight = new Date(dateObj);
-      appMidnight.setHours(0, 0, 0, 0);
-
-      const isToday = appMidnight.getTime() === today.getTime();
-      const isTomorrow = appMidnight.getTime() === tomorrow.getTime();
-      const isPast = dateObj < nowTime;
-
-      let dateStr = '';
-      if (isToday) {
-        dateStr = 'Hoy';
-      } else if (isTomorrow) {
-        dateStr = 'Mañana';
-      } else {
-        dateStr = new Intl.DateTimeFormat('es-AR', {
-          weekday: 'short',
-          day: 'numeric',
-          month: 'short'
-        }).format(dateObj);
-      }
-
-      const timeStr = app.time || dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const treatmentStr = app.type || app.treatment || 'Consulta';
-
-      // Build default interpolated message
-      let defaultMsg = settings.template || 'Hola {nombre}, te recordamos tu turno de {tratamiento} el {fecha} a las {hora} hs en {clinica}. ¡Te esperamos! Por favor confirma tu asistencia.';
-      defaultMsg = defaultMsg.replace(/{nombre}/g, patientFirstName);
-      defaultMsg = defaultMsg.replace(/{paciente}/g, patientFirstName);
-      defaultMsg = defaultMsg.replace(/{nombre_completo}/g, patientFullName);
-      defaultMsg = defaultMsg.replace(/{apellido}/g, patientLastName);
-      defaultMsg = defaultMsg.replace(/{fecha}/g, dateStr);
-      defaultMsg = defaultMsg.replace(/{hora}/g, timeStr);
-      defaultMsg = defaultMsg.replace(/{tratamiento}/g, treatmentStr);
-      defaultMsg = defaultMsg.replace(/{clinica}/g, settings.clinicName || 'Clínica Dental');
-      defaultMsg = defaultMsg.replace(/{direccion}/g, settings.clinicAddress || '');
-
-      // Check if user has a custom edited message for this appointment
-      const activeMessage = customMessages[app.id] || defaultMsg;
+  // Process and merge appointment data with patient phone and first names
+  const processedAppointments = useMemo(() => {
+    return appointments.map(apt => {
+      const patient = patients.find(p => p.id === apt.patientId);
+      const phone = patient?.phone || apt.patientPhone || apt.phone || '';
+      const patientName = apt.patientName || patient?.name || 'Paciente';
+      const firstName = apt.patientFirstName || patient?.firstName || getPatientFirstName(patient || patientName);
 
       return {
-        id: app.id,
-        rawAppointment: app,
-        patient: patientFullName,
-        patientFullName,
-        patientFirstName,
-        patientLastName,
-        phone: patientPhone,
-        time: timeStr,
-        date: dateStr,
-        dateObj,
-        isToday,
-        isTomorrow,
-        isPast,
-        status: app.status || 'pendiente',
-        treatment: treatmentStr,
-        message: activeMessage,
-        isCustomized: Boolean(customMessages[app.id])
+        ...apt,
+        patientName,
+        patientFirstName: firstName,
+        phone,
+        isToday: apt.date === todayStr,
+        isTomorrow: apt.date === tomorrowStr,
+        isFuture: apt.date >= todayStr
       };
-    }).sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
-  }, [appointments, patients, settings, customMessages]);
+    });
+  }, [appointments, patients, todayStr, tomorrowStr]);
 
-  // Filter according to user selection
-  const filteredReminders = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const weekEnd = new Date(today);
-    weekEnd.setDate(weekEnd.getDate() + 7);
-    weekEnd.setHours(23, 59, 59, 999);
-
-    return processedReminders.filter((rem) => {
+  // Filtered List
+  const filteredAppointments = useMemo(() => {
+    return processedAppointments.filter(apt => {
       // Date filter
-      if (dateFilter === 'today' && !rem.isToday) return false;
-      if (dateFilter === 'tomorrow' && !rem.isTomorrow) return false;
-      if (dateFilter === 'week') {
-        if (rem.dateObj < today || rem.dateObj > weekEnd) return false;
-      }
+      if (dateFilter === 'today' && apt.date !== todayStr) return false;
+      if (dateFilter === 'tomorrow' && apt.date !== tomorrowStr) return false;
+      if (dateFilter === 'week' && (apt.date < todayStr || apt.date > nextWeekStr)) return false;
 
       // Status filter
-      if (statusFilter === 'pending' && rem.status !== 'pendiente' && rem.status !== 'pending') return false;
-      if (statusFilter === 'confirmed' && rem.status !== 'confirmed' && rem.status !== 'confirmado') return false;
+      if (statusFilter === 'pending' && apt.reminderSent) return false;
+      if (statusFilter === 'sent' && !apt.reminderSent) return false;
 
-      // Search filter
+      // Professional filter
+      if (selectedProfessional !== 'all') {
+        const prof = (apt.professionalName || apt.professional || '').toLowerCase();
+        if (!prof.includes(selectedProfessional.toLowerCase())) return false;
+      }
+
+      // Search term
       if (searchTerm.trim()) {
         const query = searchTerm.toLowerCase();
-        const matchesName = rem.patient.toLowerCase().includes(query);
-        const matchesPhone = rem.phone.toLowerCase().includes(query);
-        const matchesTreatment = rem.treatment.toLowerCase().includes(query);
-        if (!matchesName && !matchesPhone && !matchesTreatment) return false;
+        const matchesName = (apt.patientName || '').toLowerCase().includes(query);
+        const matchesPhone = (apt.phone || '').includes(query);
+        const matchesProf = (apt.professionalName || apt.professional || '').toLowerCase().includes(query);
+        const matchesDate = (apt.date || '').includes(query);
+        if (!matchesName && !matchesPhone && !matchesProf && !matchesDate) return false;
       }
 
       return true;
+    }).sort((a, b) => {
+      // Sort by date then time
+      const dateCmp = (a.date || '').localeCompare(b.date || '');
+      if (dateCmp !== 0) return dateCmp;
+      return (a.time || '').localeCompare(b.time || '');
     });
-  }, [processedReminders, dateFilter, statusFilter, searchTerm]);
+  }, [processedAppointments, dateFilter, statusFilter, selectedProfessional, searchTerm, todayStr, tomorrowStr, nextWeekStr]);
 
-  // Statistics
-  const stats = useMemo(() => {
-    const todayCount = processedReminders.filter(r => r.isToday).length;
-    const tomorrowCount = processedReminders.filter(r => r.isTomorrow).length;
-    const pendingCount = processedReminders.filter(r => r.status === 'pendiente' || r.status === 'pending').length;
-    return { todayCount, tomorrowCount, pendingCount, total: processedReminders.length };
-  }, [processedReminders]);
+  // Metrics
+  const metrics = useMemo(() => {
+    const todayCount = processedAppointments.filter(a => a.isToday).length;
+    const tomorrowCount = processedAppointments.filter(a => a.isTomorrow).length;
+    const pendingCount = processedAppointments.filter(a => a.isFuture && !a.reminderSent).length;
+    const sentCount = processedAppointments.filter(a => a.isFuture && a.reminderSent).length;
 
-  // Open modal for appointment customization
-  const handleOpenPersonalizeModal = (reminder: any) => {
-    setModalAppointment({
-      ...reminder.rawAppointment,
-      patientName: reminder.patientFullName || reminder.patient,
-      patientFirstName: reminder.patientFirstName,
-      patientLastName: reminder.patientLastName,
-      patientPhone: reminder.phone,
-      time: reminder.time,
-      type: reminder.treatment,
-      customMessage: customMessages[reminder.id] || reminder.message
-    });
-    setIsReminderModalOpen(true);
-  };
+    return { todayCount, tomorrowCount, pendingCount, sentCount };
+  }, [processedAppointments]);
 
-  // Clean phone number helper
-  const cleanPhone = (phoneStr: string) => {
-    let cleaned = phoneStr.replace(/\D/g, '');
-    if (cleaned.length === 10 && !cleaned.startsWith('54')) {
-      cleaned = '549' + cleaned;
-    } else if (cleaned.length === 11 && cleaned.startsWith('0')) {
-      cleaned = '549' + cleaned.substring(1);
+  // Toggle Reminder Status directly
+  const handleToggleStatus = async (apt: any) => {
+    try {
+      await updateDoc(doc(db, 'appointments', apt.id), {
+        reminderSent: !apt.reminderSent,
+        reminderSentAt: !apt.reminderSent ? serverTimestamp() : null
+      });
+      showToast(!apt.reminderSent ? 'Marcado como recordatorio enviado' : 'Marcado como pendiente');
+    } catch (err) {
+      console.error('Error updating appointment reminder status:', err);
     }
-    return cleaned;
   };
 
-  // Direct quick send handler
-  const handleQuickSend = (reminder: any) => {
-    if (!reminder.phone) {
-      // If phone is missing, open personalization modal so user can input phone!
-      handleOpenPersonalizeModal(reminder);
-      showToast('Por favor ingrese el número de teléfono del paciente.', 'info');
+  // Quick 1-click WhatsApp trigger with fixed prefix +54 9, DDMMAAAA date and clinic address
+  const handleQuickWhatsApp = (apt: any) => {
+    const cleanPhone = getWhatsAppNumber(apt.phone);
+
+    if (!cleanPhone || cleanPhone === '549') {
+      setActiveModalAppointment(apt);
       return;
     }
 
-    if (settings.botEnabled) {
-      handleSendViaApi(reminder);
-    } else {
-      handleSendManual(reminder);
-    }
-  };
+    const formattedDate = formatDateDDMMAAAA(apt.date);
+    const message = template
+      .replace(/{nombre}/g, apt.patientFirstName)
+      .replace(/{fecha}/g, formattedDate)
+      .replace(/{hora}/g, apt.time || 'su horario')
+      .replace(/{profesional}/g, apt.professionalName || apt.professional || 'su profesional')
+      .replace(/{clinica}/g, clinicName)
+      .replace(/{direccion}/g, clinicAddress)
+      .replace(/{tratamiento}/g, apt.treatment || 'su consulta');
 
-  const handleSendManual = (reminder: any) => {
-    const phone = cleanPhone(reminder.phone);
-    const url = `https://wa.me/${phone}?text=${encodeURIComponent(reminder.message)}`;
+    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
 
-    // Log attempt safely in Firestore
-    if (ownerId) {
-      addDoc(collection(db, 'whatsapp_logs'), {
-        to: reminder.phone,
-        patientName: reminder.patient,
-        appointmentId: reminder.id,
-        message: reminder.message,
-        status: 'success',
-        userId: ownerId,
-        createdAt: serverTimestamp(),
-        method: 'manual'
-      }).catch(err => console.warn('Error saving whatsapp log:', err));
-    }
+    // Mark as sent
+    updateDoc(doc(db, 'appointments', apt.id), {
+      reminderSent: true,
+      reminderSentAt: serverTimestamp(),
+      reminderPhone: cleanPhone
+    }).catch(console.warn);
 
-    const win = window.open(url, '_blank', 'noopener,noreferrer');
-    if (!win) {
-      showToast('Apertura automática bloqueada. Usa "Ajustar Mensaje" para abrir enlace directo.', 'info');
-    } else {
-      showToast(`Abriendo WhatsApp para ${reminder.patient}`, 'success');
-    }
-  };
-
-  const handleSendViaApi = async (reminder: any) => {
-    setSendingId(reminder.id);
-    try {
-      const response = await fetch('/api/whatsapp/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: cleanPhone(reminder.phone),
-          message: reminder.message
-        })
-      });
-
-      const result = await response.json();
-
-      if (ownerId) {
-        await addDoc(collection(db, 'whatsapp_logs'), {
-          to: reminder.phone,
-          patientName: reminder.patient,
-          appointmentId: reminder.id,
-          message: reminder.message,
-          status: response.ok ? 'success' : 'error',
-          error: response.ok ? null : (result.error || 'Unknown error'),
-          userId: ownerId,
-          createdAt: serverTimestamp(),
-          method: 'meta_api'
-        });
-      }
-
-      if (!response.ok) throw new Error(result.error || 'Failed to send message via Meta API');
-      showToast('Mensaje enviado exitosamente vía Meta API', 'success');
-    } catch (error: any) {
-      console.error(error);
-      showToast(`Error al enviar: ${error.message}. Abriendo modo manual.`, 'error');
-      handleSendManual(reminder);
-    } finally {
-      setSendingId(null);
-    }
-  };
-
-  // Handle inline message changes
-  const handleInlineMessageChange = (appointmentId: string, newText: string) => {
-    setCustomMessages(prev => ({
-      ...prev,
-      [appointmentId]: newText
-    }));
-  };
-
-  // Reset custom message for an appointment
-  const handleResetCustomMessage = (appointmentId: string) => {
-    setCustomMessages(prev => {
-      const next = { ...prev };
-      delete next[appointmentId];
-      return next;
-    });
-    setEditingCardId(null);
-    showToast('Mensaje restaurado a la plantilla predeterminada.', 'info');
-  };
-
-  // Copy message text to clipboard
-  const handleCopyMessage = async (id: string, text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedId(id);
-      showToast('Mensaje copiado al portapapeles', 'success');
-      setTimeout(() => setCopiedId(null), 2500);
-    } catch {
-      showToast('No se pudo copiar automáticamente', 'error');
-    }
-  };
-
-  // Save settings in Firestore
-  const handleSaveSettings = async () => {
-    if (!ownerId) return;
-
-    try {
-      await setDoc(doc(db, 'reminder_settings', ownerId), {
-        ...settings,
-        userId: ownerId,
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-      setIsSettingsOpen(false);
-      showToast('Configuración de recordatorios guardada con éxito', 'success');
-    } catch (error) {
-      console.error('Error saving settings:', error);
-      handleFirestoreError(error, OperationType.WRITE, 'reminder_settings');
-    }
-  };
-
-  const toggleRule = (index: number) => {
-    const newRules = [...settings.rules];
-    newRules[index].active = !newRules[index].active;
-    setSettings({ ...settings, rules: newRules });
+    showToast(`WhatsApp abierto para ${apt.patientFirstName}`);
   };
 
   return (
     <div className="space-y-6">
-      {/* Toast notification banner */}
-      {toast && (
-        <div className={cn(
-          "fixed bottom-6 right-6 z-50 p-4 rounded-xl shadow-lg border text-xs font-semibold flex items-center gap-3 transition-all animate-in slide-in-from-bottom-3",
-          toast.type === 'success' && "bg-emerald-50 text-emerald-900 border-emerald-300 shadow-emerald-500/10",
-          toast.type === 'error' && "bg-red-50 text-red-900 border-red-300 shadow-red-500/10",
-          toast.type === 'info' && "bg-blue-50 text-blue-900 border-blue-300 shadow-blue-500/10"
-        )}>
-          {toast.type === 'success' ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0" /> : <AlertCircle size={16} className="text-blue-600 shrink-0" />}
-          <span>{toast.message}</span>
+      {/* Toast */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 bg-on-surface text-surface px-4 py-2.5 rounded-xl shadow-lg text-xs font-bold flex items-center gap-2 border border-outline-variant animate-in fade-in slide-in-from-bottom-3">
+          <Check size={14} className="text-secondary" />
+          <span>{toastMessage}</span>
         </div>
       )}
 
-      {/* Page Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="headline-lg text-on-surface">Recordatorios de WhatsApp</h1>
-          <p className="body-md text-on-surface-variant">
-            Ajuste, personalice y envíe recordatorios con 1 clic a sus pacientes.
+          <h1 className="text-2xl font-black text-on-surface tracking-tight flex items-center gap-2.5">
+            <MessageSquare className="text-primary" size={26} />
+            Recordatorios de Turnos
+          </h1>
+          <p className="text-xs text-on-surface-variant mt-1">
+            Envío manual de recordatorios con 1 clic directo a WhatsApp Web o móvil con mensaje personalizado.
           </p>
         </div>
-        <div className="flex gap-2">
-          <button 
+
+        <div className="flex items-center gap-2">
+          <button
             type="button"
-            onClick={() => setIsSettingsOpen(true)}
-            className="px-3.5 py-2 bg-white border border-outline-variant text-[11px] font-bold text-on-surface-variant rounded-xl flex items-center gap-2 hover:bg-surface transition-all uppercase tracking-wider shadow-xs"
+            onClick={() => setShowSettings(!showSettings)}
+            className={cn(
+              "px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer",
+              showSettings 
+                ? "bg-primary text-white border-primary" 
+                : "border-outline-variant bg-surface hover:bg-surface-bright text-on-surface"
+            )}
           >
             <Settings size={14} />
-            Plantilla y Configuración
+            <span>Configurar Plantilla y Clínica</span>
           </button>
         </div>
       </div>
 
-      {/* Overview Statistics Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div 
-          onClick={() => setDateFilter('today')}
-          className={cn(
-            "p-3.5 rounded-xl border transition-all cursor-pointer",
-            dateFilter === 'today'
-              ? "bg-primary/10 border-primary text-primary font-bold shadow-xs"
-              : "bg-white border-outline-variant hover:border-primary/50 text-on-surface"
-          )}
-        >
-          <div className="text-[10px] font-bold uppercase tracking-wider opacity-70">Turnos Hoy</div>
-          <div className="text-xl font-black mt-0.5">{stats.todayCount}</div>
-        </div>
-
-        <div 
-          onClick={() => setDateFilter('tomorrow')}
-          className={cn(
-            "p-3.5 rounded-xl border transition-all cursor-pointer",
-            dateFilter === 'tomorrow'
-              ? "bg-primary/10 border-primary text-primary font-bold shadow-xs"
-              : "bg-white border-outline-variant hover:border-primary/50 text-on-surface"
-          )}
-        >
-          <div className="text-[10px] font-bold uppercase tracking-wider opacity-70">Turnos Mañana</div>
-          <div className="text-xl font-black mt-0.5">{stats.tomorrowCount}</div>
-        </div>
-
-        <div 
-          onClick={() => setDateFilter('all')}
-          className={cn(
-            "p-3.5 rounded-xl border transition-all cursor-pointer",
-            dateFilter === 'all'
-              ? "bg-primary/10 border-primary text-primary font-bold shadow-xs"
-              : "bg-white border-outline-variant hover:border-primary/50 text-on-surface"
-          )}
-        >
-          <div className="text-[10px] font-bold uppercase tracking-wider opacity-70">Total en Cola</div>
-          <div className="text-xl font-black mt-0.5">{stats.total}</div>
-        </div>
-
-        <div className="p-3.5 bg-white rounded-xl border border-outline-variant">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant opacity-70">Modo WhatsApp</div>
-          <div className="flex items-center gap-1.5 mt-1">
-            <span className={cn(
-              "w-2 h-2 rounded-full",
-              settings.botEnabled ? "bg-emerald-500 animate-pulse" : "bg-amber-500"
-            )}></span>
-            <span className="text-xs font-bold text-on-surface">
-              {settings.botEnabled ? 'Bot Meta Activo' : 'Manual (wa.me)'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Column: Reminders Queue */}
-        <div className="lg:col-span-2 space-y-4">
-          <div className="bg-white rounded-xl border border-outline-variant shadow-sm overflow-hidden">
-            {/* Filter and Search Bar */}
-            <div className="p-4 border-b border-outline-variant bg-surface-bright space-y-3">
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
-                  {[
-                    { id: 'today', label: 'Hoy' },
-                    { id: 'tomorrow', label: 'Mañana' },
-                    { id: 'week', label: 'Próx. 7 días' },
-                    { id: 'all', label: 'Todos' }
-                  ].map(tab => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setDateFilter(tab.id as any)}
-                      className={cn(
-                        "px-3 py-1.5 rounded-lg text-xs font-bold transition-all uppercase tracking-wider shrink-0",
-                        dateFilter === tab.id
-                          ? "bg-primary text-white shadow-xs"
-                          : "bg-surface hover:bg-surface-dim text-on-surface-variant"
-                      )}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
+      {/* Settings Drawer / Panel */}
+      <AnimatePresence>
+        {showSettings && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="p-5 bg-surface-bright border border-outline-variant rounded-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={16} className="text-secondary" />
+                  <h3 className="text-sm font-bold text-on-surface">Configuración de Mensaje y Clínica</h3>
                 </div>
+                <span className="text-[11px] text-on-surface-variant font-medium">
+                  Se autocompleta con los datos de cada paciente y sede
+                </span>
+              </div>
 
-                <div className="relative min-w-[200px]">
-                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
+              {/* Clinic Name and Address inputs */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest flex items-center gap-1.5">
+                    <Building size={13} /> Nombre de la Clínica
+                  </label>
                   <input
                     type="text"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Buscar por paciente o teléfono..."
-                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-outline-variant rounded-lg outline-none focus:border-primary transition-all"
+                    value={clinicName}
+                    onChange={(e) => setClinicName(e.target.value)}
+                    placeholder="Ej: Clínica Odontológica Dental"
+                    className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-xl text-xs text-on-surface outline-none focus:border-primary font-medium"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest flex items-center gap-1.5">
+                    <MapPin size={13} /> Dirección de la Clínica
+                  </label>
+                  <input
+                    type="text"
+                    value={clinicAddress}
+                    onChange={(e) => setClinicAddress(e.target.value)}
+                    placeholder="Ej: Av. Libertador 1234, CABA"
+                    className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-xl text-xs text-on-surface outline-none focus:border-primary font-medium"
                   />
                 </div>
               </div>
-            </div>
 
-            {/* Reminders List */}
-            <div className="divide-y divide-surface">
-              {filteredReminders.map((msg) => {
-                const isEditingThis = editingCardId === msg.id;
-
-                return (
-                  <div key={msg.id} className="p-4 hover:bg-surface/30 transition-colors space-y-3">
-                    {/* Header line: Patient name, phone, date & time, status */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 bg-emerald-500/10 text-emerald-600 rounded-full flex items-center justify-center font-bold text-sm shrink-0">
-                          <MessageSquare size={16} />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <h4 className="text-sm font-bold text-on-surface">{msg.patient}</h4>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-surface-dim text-on-surface-variant">
-                              {msg.treatment}
-                            </span>
-                            {msg.isCustomized && (
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 flex items-center gap-1">
-                                <Sparkles size={10} />
-                                Personalizado
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-3 text-[11px] text-on-surface-variant mt-0.5 font-medium">
-                            <span className="font-bold text-primary flex items-center gap-1">
-                              <Calendar size={11} />
-                              {msg.date} • {msg.time} hs
-                            </span>
-                            {msg.phone ? (
-                              <span className="flex items-center gap-1">
-                                <Phone size={11} />
-                                {msg.phone}
-                              </span>
-                            ) : (
-                              <span className="text-amber-600 font-bold flex items-center gap-1">
-                                <AlertCircle size={11} />
-                                Sin teléfono registrado
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Status indicator */}
-                      <div className={cn(
-                        "flex items-center gap-1 text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded self-start sm:self-center",
-                        msg.status === 'confirmed' || msg.status === 'confirmado' 
-                          ? 'bg-emerald-50 text-emerald-700' 
-                          : 'bg-surface-dim text-on-surface-variant'
-                      )}>
-                        {(msg.status === 'confirmed' || msg.status === 'confirmado') && <CheckCircle2 size={12} />}
-                        {(msg.status === 'pending' || msg.status === 'pendiente') && <Clock size={12} />}
-                        {msg.status}
-                      </div>
-                    </div>
-
-                    {/* Message Box: View or Inline Edit */}
-                    {isEditingThis ? (
-                      <div className="space-y-2 bg-surface-bright p-3 rounded-xl border border-primary/30">
-                        <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-wider text-primary">
-                          <span>Editando Mensaje Directo</span>
-                          {msg.isCustomized && (
-                            <button
-                              type="button"
-                              onClick={() => handleResetCustomMessage(msg.id)}
-                              className="text-on-surface-variant hover:text-primary flex items-center gap-1"
-                            >
-                              <RotateCcw size={10} />
-                              Restablecer
-                            </button>
-                          )}
-                        </div>
-                        <textarea
-                          rows={3}
-                          value={msg.message}
-                          onChange={(e) => handleInlineMessageChange(msg.id, e.target.value)}
-                          className="w-full p-2.5 bg-white border border-outline-variant rounded-lg text-xs outline-none focus:border-primary transition-all resize-y"
-                          placeholder="Ajuste el mensaje aquí..."
-                        />
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setEditingCardId(null)}
-                            className="px-3 py-1 bg-white border border-outline-variant rounded-lg text-xs font-bold text-on-surface-variant hover:bg-surface transition-colors"
-                          >
-                            Listo
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-start gap-2 bg-surface-bright p-2.5 rounded-xl border border-outline-variant/50">
-                        <p className="text-xs text-on-surface-variant italic leading-relaxed flex-1 break-words">
-                          "{msg.message}"
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Action buttons */}
-                    <div className="flex items-center justify-between gap-2 pt-1">
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setEditingCardId(isEditingThis ? null : msg.id)}
-                          className={cn(
-                            "px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors border",
-                            isEditingThis
-                              ? "bg-primary text-white border-primary"
-                              : "bg-surface hover:bg-surface-bright text-on-surface-variant border-outline-variant"
-                          )}
-                          title="Editar texto directamente en la tarjeta"
-                        >
-                          <Edit3 size={12} />
-                          <span>{isEditingThis ? 'Ocultar Edición' : 'Ajustar Mensaje'}</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleOpenPersonalizeModal(msg)}
-                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 bg-surface hover:bg-surface-bright text-primary border border-outline-variant transition-colors"
-                          title="Abrir ventana de personalización completa con plantillas rápidas y vista previa de WhatsApp"
-                        >
-                          <Sparkles size={12} />
-                          <span>Personalizar & Enviar</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleCopyMessage(msg.id, msg.message)}
-                          className="p-1.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface transition-colors"
-                          title="Copiar texto del mensaje"
-                        >
-                          {copiedId === msg.id ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
-                        </button>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleQuickSend(msg)}
-                          disabled={sendingId === msg.id}
-                          className={cn(
-                            "px-3.5 py-1.5 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95",
-                            !msg.phone 
-                              ? "bg-amber-600 hover:bg-amber-700" 
-                              : "bg-[#25D366] hover:bg-[#1EBE5D]"
-                          )}
-                          title={!msg.phone ? "Sin teléfono: abrir para ingresar número" : "Enviar por WhatsApp"}
-                        >
-                          {sendingId === msg.id ? (
-                            <Clock size={14} className="animate-spin" />
-                          ) : (
-                            <Send size={13} />
-                          )}
-                          <span>{!msg.phone ? 'Ingresar Teléfono' : 'Enviar WhatsApp'}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {filteredReminders.length === 0 && !loading && (
-                <div className="p-12 text-center text-on-surface-variant">
-                  <CalendarClock size={40} className="mx-auto mb-3 opacity-20" />
-                  <p className="text-sm font-bold uppercase tracking-widest opacity-60">
-                    No hay recordatorios para los filtros seleccionados
-                  </p>
-                  <p className="text-xs opacity-50 mt-1">
-                    Pruebe seleccionando "Todos" o revisando la agenda.
-                  </p>
+              {/* Template editor */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                    Plantilla del Mensaje
+                  </label>
+                  <span className="text-[10px] text-primary font-medium">
+                    Formato de fecha: <b>DDMMAAAA (DD/MM/AAAA)</b>
+                  </span>
                 </div>
-              )}
+                <textarea
+                  rows={3}
+                  value={template}
+                  onChange={(e) => setTemplate(e.target.value)}
+                  className="w-full p-3 bg-surface border border-outline-variant rounded-xl text-xs text-on-surface outline-none focus:border-primary transition-all resize-none leading-relaxed"
+                  placeholder="Ej: Hola {nombre}, te recordamos tu turno el {fecha} a las {hora} con {profesional} en {clinica}, ubicada en {direccion}..."
+                />
+
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-on-surface-variant">
+                  <span className="font-semibold text-on-surface text-[10px] uppercase tracking-wider">Insertar variable:</span>
+                  {[
+                    { tag: '{nombre}', label: 'Nombre' },
+                    { tag: '{fecha}', label: 'Fecha (DDMMAAAA)' },
+                    { tag: '{hora}', label: 'Hora' },
+                    { tag: '{profesional}', label: 'Profesional' },
+                    { tag: '{clinica}', label: 'Clínica' },
+                    { tag: '{direccion}', label: 'Dirección' },
+                    { tag: '{tratamiento}', label: 'Tratamiento' }
+                  ].map(({ tag, label }) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setTemplate(prev => `${prev} ${tag}`)}
+                      className="px-2 py-0.5 rounded-md bg-surface border border-outline-variant hover:border-primary text-on-surface text-[10px] font-mono cursor-pointer transition-colors"
+                      title={`Insertar ${label}`}
+                    >
+                      + {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Live Preview of message */}
+              <div className="p-3 bg-surface border border-outline-variant rounded-xl space-y-1.5">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">
+                  <Eye size={12} className="text-secondary" />
+                  <span>Vista previa en vivo (ejemplo con fecha DDMMAAAA):</span>
+                </div>
+                <p className="text-xs text-on-surface bg-surface-bright p-2.5 rounded-lg border border-outline-variant/60 leading-relaxed font-sans italic">
+                  {template
+                    .replace(/{nombre}/g, 'María')
+                    .replace(/{fecha}/g, formatDateDDMMAAAA(todayStr))
+                    .replace(/{hora}/g, '14:30')
+                    .replace(/{profesional}/g, 'Dra. López')
+                    .replace(/{clinica}/g, clinicName || 'Nuestra Clínica')
+                    .replace(/{direccion}/g, clinicAddress || 'Av. Libertador 1234')
+                    .replace(/{tratamiento}/g, 'Control y Limpieza')}
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-outline-variant">
+                <button
+                  type="button"
+                  onClick={() => setShowSettings(false)}
+                  className="px-3 py-1.5 rounded-xl border border-outline-variant text-xs text-on-surface hover:bg-surface transition-colors cursor-pointer"
+                >
+                  Cerrar
+                </button>
+                <button
+                  type="button"
+                  disabled={isSavingSettings}
+                  onClick={handleSaveSettings}
+                  className="px-4 py-1.5 rounded-xl bg-primary text-white text-xs font-bold hover:bg-primary/90 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  <Check size={13} />
+                  <span>{isSavingSettings ? 'Guardando...' : 'Guardar Configuración'}</span>
+                </button>
+              </div>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Metrics Row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+        <div className="p-4 bg-surface border border-outline-variant rounded-2xl shadow-xs">
+          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turnos Hoy</p>
+          <div className="flex items-baseline justify-between mt-1">
+            <p className="text-2xl font-black text-on-surface">{metrics.todayCount}</p>
+            <Calendar size={16} className="text-primary opacity-60" />
           </div>
         </div>
 
-        {/* Sidebar: Bot Status & Rules */}
-        <div className="space-y-6">
-          <div className="bg-white p-6 rounded-xl border border-primary/20 bg-primary/5 shadow-sm relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-16 h-16 bg-primary/5 rounded-bl-full pointer-events-none"></div>
-            <div className="flex items-center gap-3 mb-4 relative z-10">
-              <MessageSquare className={cn(settings.botEnabled ? "text-primary" : "text-on-surface-variant")} size={18} />
-              <h3 className="text-sm font-bold text-on-surface">Bot de WhatsApp</h3>
-              <div className="ml-auto flex items-center gap-1.5">
-                <div className={cn("w-2 h-2 rounded-full", settings.botEnabled ? "bg-primary animate-pulse" : "bg-on-surface-variant/30")}></div>
-                <span className={cn("text-[10px] font-black uppercase", settings.botEnabled ? "text-primary" : "text-on-surface-variant/50")}>
-                  {settings.botEnabled ? 'ACTIVO' : 'INACTIVO'}
-                </span>
-              </div>
-            </div>
-            <div className="space-y-4 relative z-10">
-              <p className="text-[11px] text-on-surface-variant leading-relaxed">
-                {settings.botEnabled 
-                  ? "El bot está habilitado para envíos automáticos usando la API de Meta." 
-                  : "Modo manual activo: los recordatorios se abren con 1 clic en WhatsApp Web / Móvil con el mensaje pre-cargado."}
-              </p>
-              <button 
-                type="button"
-                onClick={() => setSettings({ ...settings, botEnabled: !settings.botEnabled })}
-                className={cn(
-                  "w-full py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-widest transition-all",
-                  settings.botEnabled ? "bg-white border border-primary text-primary hover:bg-surface" : "bg-primary text-white hover:bg-primary/90"
-                )}
-              >
-                {settings.botEnabled ? "Desactivar Envío Automático" : "Activar Envío Automático"}
-              </button>
-            </div>
+        <div className="p-4 bg-surface border border-outline-variant rounded-2xl shadow-xs">
+          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Turnos Mañana</p>
+          <div className="flex items-baseline justify-between mt-1">
+            <p className="text-2xl font-black text-on-surface">{metrics.tomorrowCount}</p>
+            <Clock size={16} className="text-secondary opacity-60" />
           </div>
+        </div>
 
-          <div className="bg-white p-5 rounded-xl border border-outline-variant shadow-sm space-y-4">
-            <div className="flex justify-between items-center">
-              <h3 className="text-sm font-bold text-on-surface">Reglas de Envío</h3>
-              <button
-                type="button"
-                onClick={() => setIsSettingsOpen(true)}
-                className="text-[10px] font-bold text-primary uppercase hover:underline"
-              >
-                Editar
-              </button>
-            </div>
-            <div className="space-y-3">
-              {(settings.rules || []).map((rule: any, idx: number) => (
-                <div key={rule.label} className="flex items-center justify-between">
-                  <span className="text-[12px] font-medium text-on-surface-variant">{rule.label}</span>
-                  <div 
-                    onClick={() => toggleRule(idx)}
-                    className={cn(
-                      "w-8 h-4 rounded-full relative transition-colors cursor-pointer",
-                      rule.active ? "bg-primary" : "bg-surface-dim"
-                    )}
-                  >
-                    <div className={cn(
-                      "absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all",
-                      rule.active ? "right-0.5" : "left-0.5"
-                    )}></div>
-                  </div>
-                </div>
-              ))}
-            </div>
+        <div className="p-4 bg-surface border border-outline-variant rounded-2xl shadow-xs">
+          <p className="text-[10px] font-black uppercase tracking-widest text-amber-600 dark:text-amber-400">Pendientes de Envío</p>
+          <div className="flex items-baseline justify-between mt-1">
+            <p className="text-2xl font-black text-amber-600 dark:text-amber-400">{metrics.pendingCount}</p>
+            <AlertCircle size={16} className="text-amber-500 opacity-60" />
+          </div>
+        </div>
+
+        <div className="p-4 bg-surface border border-outline-variant rounded-2xl shadow-xs">
+          <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-400">Recordatorios Enviados</p>
+          <div className="flex items-baseline justify-between mt-1">
+            <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{metrics.sentCount}</p>
+            <CheckCircle2 size={16} className="text-emerald-500 opacity-60" />
           </div>
         </div>
       </div>
 
-      {/* Settings Modal */}
-      <Modal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        title="Configuración de Recordatorios"
-        className="max-w-lg"
-      >
-        <div className="space-y-5">
-          <div className="space-y-4">
-            {/* Bot toggle */}
-            <div className="flex items-center justify-between p-4 bg-surface-bright rounded-xl border border-outline-variant">
-              <div>
-                <h4 className="text-sm font-bold text-on-surface">Meta WhatsApp API</h4>
-                <p className="text-[11px] text-on-surface-variant">Envío automático en segundo plano</p>
-              </div>
-              <button 
-                type="button"
-                onClick={() => setSettings({ ...settings, botEnabled: !settings.botEnabled })}
-                className="text-primary"
-              >
-                {settings.botEnabled ? <ToggleRight size={28} /> : <ToggleLeft size={28} className="text-on-surface-variant/30" />}
-              </button>
-            </div>
-
-            {/* Clinic Info for Variables */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest pl-1">
-                  Nombre de la Clínica ({`{clinica}`})
-                </label>
-                <input
-                  type="text"
-                  value={settings.clinicName || ''}
-                  onChange={(e) => setSettings({ ...settings, clinicName: e.target.value })}
-                  placeholder="Ej: Clínica Dental San Lucas"
-                  className="w-full mt-1 px-3 py-2 bg-white border border-outline-variant rounded-xl text-xs outline-none focus:border-primary transition-all"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest pl-1">
-                  Dirección ({`{direccion}`})
-                </label>
-                <input
-                  type="text"
-                  value={settings.clinicAddress || ''}
-                  onChange={(e) => setSettings({ ...settings, clinicAddress: e.target.value })}
-                  placeholder="Ej: Av. Santa Fe 1234, CABA"
-                  className="w-full mt-1 px-3 py-2 bg-white border border-outline-variant rounded-xl text-xs outline-none focus:border-primary transition-all"
-                />
-              </div>
-            </div>
-
-            {/* Template Editor */}
-            <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest pl-1">
-                  Plantilla Predeterminada
-                </label>
-                <div className="group relative">
-                  <Info size={12} className="text-primary cursor-help" />
-                  <div className="absolute bottom-full right-0 mb-2 w-56 p-2.5 bg-on-surface text-surface text-[10px] rounded-lg opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-xl pointer-events-none">
-                    Variables dinámicas disponibles:<br/>
-                    <b>{`{nombre}`}</b>, <b>{`{fecha}`}</b>, <b>{`{hora}`}</b>, <b>{`{tratamiento}`}</b>, <b>{`{clinica}`}</b>, <b>{`{direccion}`}</b>
-                  </div>
-                </div>
-              </div>
-
-              <textarea 
-                rows={4}
-                value={settings.template}
-                onChange={(e) => setSettings({ ...settings, template: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-white border border-outline-variant rounded-xl text-xs outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all resize-y"
-                placeholder="Hola {nombre}, te recordamos tu turno..."
-              />
-
-              {/* Variable insertion buttons */}
-              <div className="flex gap-1 flex-wrap">
-                {[
-                  { tag: '{nombre}', hint: 'Solo nombre (ej: Juan)' },
-                  { tag: '{nombre_completo}', hint: 'Nombre y apellido' },
-                  { tag: '{fecha}', hint: 'Fecha' },
-                  { tag: '{hora}', hint: 'Hora' },
-                  { tag: '{tratamiento}', hint: 'Tratamiento' },
-                  { tag: '{clinica}', hint: 'Nombre clínica' },
-                  { tag: '{direccion}', hint: 'Dirección' }
-                ].map(item => (
-                  <button 
-                    key={item.tag}
-                    type="button"
-                    title={item.hint}
-                    onClick={() => setSettings({ ...settings, template: settings.template + ' ' + item.tag })}
-                    className="px-2 py-0.5 bg-surface text-[10px] font-mono font-bold rounded border border-outline-variant hover:border-primary transition-colors"
-                  >
-                    {item.tag}
-                  </button>
-                ))}
-              </div>
-            </div>
+      {/* Filter and Search Bar */}
+      <div className="p-4 bg-surface border border-outline-variant rounded-2xl space-y-3 shadow-xs">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          {/* Search Input */}
+          <div className="relative flex-1">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Buscar por paciente, teléfono o profesional..."
+              className="w-full pl-9 pr-4 py-2 bg-surface-bright border border-outline-variant rounded-xl text-xs text-on-surface outline-none focus:border-primary transition-all"
+            />
           </div>
 
-          <div className="flex gap-3 pt-2">
-            <button 
-              type="button"
-              onClick={() => setIsSettingsOpen(false)}
-              className="flex-1 px-4 py-2.5 bg-surface border border-outline-variant rounded-xl text-[11px] font-bold hover:bg-outline-variant transition-colors uppercase tracking-widest"
-            >
-              Cancelar
-            </button>
-            <button 
-              type="button"
-              onClick={handleSaveSettings}
-              className="flex-1 px-4 py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold hover:bg-primary/90 transition-all flex items-center justify-center gap-2 uppercase tracking-widest shadow-xs"
-            >
-              <Save size={14} />
-              Guardar Configuración
-            </button>
+          {/* Quick Date Chips */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+            {[
+              { id: 'today', label: 'Hoy' },
+              { id: 'tomorrow', label: 'Mañana' },
+              { id: 'week', label: 'Próximos 7 días' },
+              { id: 'all', label: 'Todos' }
+            ].map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                onClick={() => setDateFilter(d.id as any)}
+                className={cn(
+                  "px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer",
+                  dateFilter === d.id
+                    ? "bg-primary text-white shadow-xs"
+                    : "bg-surface-bright text-on-surface-variant hover:text-on-surface hover:bg-outline-variant/30"
+                )}
+              >
+                {d.label}
+              </button>
+            ))}
           </div>
         </div>
-      </Modal>
 
-      {/* Individual WhatsApp Message Customization Modal */}
-      {isReminderModalOpen && modalAppointment && (
-        <WhatsAppReminderModal
-          isOpen={isReminderModalOpen}
-          onClose={() => {
-            setIsReminderModalOpen(false);
-            setModalAppointment(null);
-          }}
-          appointment={modalAppointment}
-          defaultTemplate={settings.template}
-          clinicInfo={{
-            name: settings.clinicName,
-            address: settings.clinicAddress
-          }}
-          botEnabled={settings.botEnabled}
-          onMessageSent={(appointmentId, sentMessage, method) => {
-            setCustomMessages(prev => ({
-              ...prev,
-              [appointmentId]: sentMessage
-            }));
-            showToast(`Recordatorio enviado vía WhatsApp (${method === 'meta_api' ? 'API' : 'Web/Móvil'})`, 'success');
+        {/* Secondary Filters */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-outline-variant/60 text-xs">
+          {/* Status Segment */}
+          <div className="flex items-center gap-1">
+            <span className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mr-1">Estado:</span>
+            {[
+              { id: 'all', label: 'Todos' },
+              { id: 'pending', label: 'Pendientes' },
+              { id: 'sent', label: 'Enviados' }
+            ].map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => setStatusFilter(s.id as any)}
+                className={cn(
+                  "px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer",
+                  statusFilter === s.id
+                    ? "bg-secondary text-white font-bold"
+                    : "text-on-surface-variant hover:text-on-surface hover:bg-surface-bright"
+                )}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Professional Selector */}
+          {staff.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Profesional:</span>
+              <select
+                value={selectedProfessional}
+                onChange={(e) => setSelectedProfessional(e.target.value)}
+                className="px-2.5 py-1 bg-surface-bright border border-outline-variant rounded-lg text-xs text-on-surface outline-none focus:border-primary"
+              >
+                <option value="all">Todos los profesionales</option>
+                {staff.map(s => (
+                  <option key={s.id} value={s.name}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Appointments List */}
+      <div className="space-y-3">
+        {loading ? (
+          <div className="p-12 text-center text-on-surface-variant">
+            <RefreshCw size={24} className="animate-spin mx-auto mb-2 text-primary" />
+            <p className="text-xs">Cargando turnos y recordatorios...</p>
+          </div>
+        ) : filteredAppointments.length === 0 ? (
+          <div className="p-12 text-center bg-surface border border-outline-variant rounded-2xl">
+            <MessageSquare size={32} className="mx-auto mb-2 text-on-surface-variant/40" />
+            <p className="text-sm font-bold text-on-surface">No hay turnos para los filtros seleccionados</p>
+            <p className="text-xs text-on-surface-variant mt-1">Pruebe cambiando la fecha o el estado del recordatorio.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2.5">
+            {filteredAppointments.map((apt) => {
+              const isSent = Boolean(apt.reminderSent);
+              const hasPhone = Boolean(apt.phone);
+
+              return (
+                <div
+                  key={apt.id}
+                  className="p-4 bg-surface border border-outline-variant rounded-2xl hover:border-primary/40 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs"
+                >
+                  {/* Left: Patient & Appointment Details */}
+                  <div className="flex items-start sm:items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold text-sm shrink-0 mt-0.5 sm:mt-0">
+                      {(apt.patientFirstName?.[0] || 'P').toUpperCase()}
+                    </div>
+
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-sm text-on-surface truncate">
+                          {apt.patientName}
+                        </span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-surface-bright border border-outline-variant text-on-surface-variant font-mono">
+                          Saluda: {apt.patientFirstName}
+                        </span>
+                        {apt.isOverturn && (
+                          <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-300 flex items-center gap-1">
+                            <Zap size={11} className="text-purple-600 fill-purple-600" />
+                            Sobre Turno
+                          </span>
+                        )}
+                        {isSent ? (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                            <CheckCircle2 size={11} />
+                            Enviado
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                            <Clock size={11} />
+                            Pendiente
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-on-surface-variant">
+                        <span className="flex items-center gap-1 font-medium">
+                          <Calendar size={12} className="text-primary" />
+                          {formatDateDDMMAAAA(apt.date)}
+                        </span>
+                        <span>•</span>
+                        <span className="flex items-center gap-1 font-semibold text-on-surface">
+                          <Clock size={12} className="text-secondary" />
+                          {apt.time || 'Horario a confirmar'}
+                        </span>
+                        <span>•</span>
+                        <span>{apt.professionalName || apt.professional || 'Profesional'}</span>
+                        {apt.treatment && (
+                          <>
+                            <span>•</span>
+                            <span className="truncate max-w-[140px] text-[11px] opacity-80">{apt.treatment}</span>
+                          </>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 text-xs">
+                        {hasPhone ? (
+                          <span className="font-mono text-[11px] text-on-surface-variant flex items-center gap-1">
+                            <Phone size={11} /> {formatArgentinePhoneWithPrefix(apt.phone)}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                            <AlertCircle size={11} /> Sin teléfono guardado
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right: Actions */}
+                  <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                    {/* Toggle Sent/Pending button */}
+                    <button
+                      type="button"
+                      onClick={() => handleToggleStatus(apt)}
+                      title={isSent ? "Marcar como pendiente" : "Marcar como enviado"}
+                      className={cn(
+                        "p-2 rounded-xl border text-xs font-medium transition-colors cursor-pointer",
+                        isSent 
+                          ? "border-outline-variant text-on-surface-variant hover:bg-surface-bright" 
+                          : "border-outline-variant text-on-surface-variant hover:text-emerald-600 hover:border-emerald-300"
+                      )}
+                    >
+                      {isSent ? <CheckCircle2 size={15} className="text-emerald-600" /> : <Clock size={15} />}
+                    </button>
+
+                    {/* Quick 1-click WhatsApp button */}
+                    {hasPhone && (
+                      <button
+                        type="button"
+                        onClick={() => handleQuickWhatsApp(apt)}
+                        title="Abrir WhatsApp Web/Móvil con mensaje directo"
+                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                      >
+                        <Send size={13} />
+                        <span className="hidden sm:inline">1-Clic WhatsApp</span>
+                      </button>
+                    )}
+
+                    {/* Open Detailed Customization Modal */}
+                    <button
+                      type="button"
+                      onClick={() => setActiveModalAppointment(apt)}
+                      className="px-3.5 py-2 bg-primary text-white hover:bg-primary/90 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                    >
+                      <MessageSquare size={13} />
+                      <span>Personalizar</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Reminder Modal */}
+      {activeModalAppointment && (
+        <ReminderModal
+          isOpen={Boolean(activeModalAppointment)}
+          onClose={() => setActiveModalAppointment(null)}
+          appointment={activeModalAppointment}
+          defaultTemplate={template}
+          clinicName={clinicName}
+          clinicAddress={clinicAddress}
+          onReminderSent={(aptId) => {
+            showToast('Recordatorio abierto en WhatsApp con éxito');
+            // Update local state if needed
+            setAppointments(prev => prev.map(a => a.id === aptId ? { ...a, reminderSent: true } : a));
           }}
         />
       )}

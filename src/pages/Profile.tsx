@@ -23,12 +23,16 @@ import {
   KeyRound,
   Eye,
   EyeOff,
-  Key
+  Key,
+  Building,
+  MapPin
 } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { doc, onSnapshot, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { PhoneInputArgentina } from '../components/PhoneInputArgentina';
+import { formatArgentinePhoneWithPrefix } from '../lib/phoneUtils';
 import { 
   sendEmailVerification, 
   updatePassword, 
@@ -65,6 +69,8 @@ export function Profile() {
     licenseNumber: authProfile?.licenseNumber || '',
     specialty: authProfile?.specialty || 'Cirujano Dentista',
     phone: authProfile?.phone || '',
+    clinicName: (authProfile as any)?.clinicName || '',
+    clinicAddress: (authProfile as any)?.clinicAddress || (authProfile as any)?.address || '',
     photoURL: authProfile?.photoURL || user?.photoURL || '',
     role: authProfile?.role || 'medico',
     status: authProfile?.status || 'Activo',
@@ -222,6 +228,8 @@ export function Profile() {
           licenseNumber: data.licenseNumber || '',
           specialty: data.specialty || 'Cirujano Dentista',
           phone: data.phone || '',
+          clinicName: data.clinicName || prev.clinicName || '',
+          clinicAddress: data.clinicAddress || data.address || prev.clinicAddress || '',
           photoURL: data.photoURL || user.photoURL || prev.photoURL,
           role: data.role || 'medico',
           status: data.status || 'Activo',
@@ -298,6 +306,9 @@ export function Profile() {
         name: profile.displayName.trim() || user.displayName || 'Profesional',
         email: user.email,
         phone: profile.phone || '',
+        clinicName: profile.clinicName.trim() || '',
+        clinicAddress: profile.clinicAddress.trim() || '',
+        address: profile.clinicAddress.trim() || '',
         photoURL: profile.photoURL || '',
         updatedAt: serverTimestamp()
       };
@@ -317,6 +328,16 @@ export function Profile() {
       }
 
       await setDoc(doc(db, 'users', user.uid), payload, { merge: true });
+
+      try {
+        await setDoc(doc(db, 'reminder_settings', user.uid), {
+          clinicName: profile.clinicName.trim() || '',
+          clinicAddress: profile.clinicAddress.trim() || '',
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      } catch (err) {
+        console.warn('Reminder settings sync skipped:', err);
+      }
 
       try {
         const staffRef = doc(db, 'staff', user.uid);
@@ -571,16 +592,46 @@ export function Profile() {
                 </div>
 
                 <div className="space-y-1.5">
+                  <label className="text-[11px] font-black uppercase tracking-widest text-on-surface-variant flex items-center justify-between">
+                    <span className="flex items-center gap-1.5"><Phone size={13} /> Teléfono de Contacto</span>
+                    <span className="text-[10px] text-primary font-semibold">Prefijo fijo +54 9</span>
+                  </label>
+                  <PhoneInputArgentina 
+                    value={profile.phone}
+                    onChange={(val) => setProfile({ ...profile, phone: val })}
+                    placeholder="Área + Número"
+                    showHelperText
+                  />
+                </div>
+
+                {/* Datos de la Clínica / Sede */}
+                <div className="space-y-1.5">
                   <label className="text-[11px] font-black uppercase tracking-widest text-on-surface-variant flex items-center gap-1.5">
-                    <Phone size={13} /> Teléfono de Contacto
+                    <Building size={13} /> Nombre de la Clínica
                   </label>
                   <input 
                     type="text" 
-                    value={profile.phone}
-                    onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
-                    placeholder="Ej. +54 9 11 1234-5678"
+                    value={profile.clinicName}
+                    onChange={(e) => setProfile({ ...profile, clinicName: e.target.value })}
+                    placeholder="Ej. Clínica Dental Sonrisas"
                     className="w-full px-4 py-2.5 bg-surface border border-outline-variant rounded-xl text-sm font-semibold focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all" 
                   />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-black uppercase tracking-widest text-on-surface-variant flex items-center gap-1.5">
+                    <MapPin size={13} /> Dirección de la Clínica
+                  </label>
+                  <input 
+                    type="text" 
+                    value={profile.clinicAddress}
+                    onChange={(e) => setProfile({ ...profile, clinicAddress: e.target.value })}
+                    placeholder="Ej. Av. Libertador 1234, CABA"
+                    className="w-full px-4 py-2.5 bg-surface border border-outline-variant rounded-xl text-sm font-semibold focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all" 
+                  />
+                  <p className="text-[11px] text-on-surface-variant/70">
+                    Se inserta automáticamente en la variable &#123;direccion&#125; de los recordatorios de WhatsApp.
+                  </p>
                 </div>
 
                 {!isStaff && (

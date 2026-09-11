@@ -3,7 +3,8 @@ import {
   Users, Shield, LayoutDashboard, Settings, Mail, Plus, 
   Trash2, Save, UserCheck, UserMinus, Clock, Activity,
   ChevronRight, Search, Filter, MoreVertical, CreditCard,
-  Smartphone, Check, Database, RefreshCw
+  Check, Database, RefreshCw, Lock, Unlock, AlertTriangle,
+  AlertCircle, CheckCircle2, Calendar
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -12,7 +13,7 @@ import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../lib/firebase';
-import { doc, deleteDoc, serverTimestamp, collection, getDocs, setDoc } from 'firebase/firestore';
+import { doc, deleteDoc, serverTimestamp, collection, getDocs, setDoc, updateDoc } from 'firebase/firestore';
 import { seedAllCollections } from '../lib/dbSeeder';
 
 export function SystemAdmin() {
@@ -21,6 +22,7 @@ export function SystemAdmin() {
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [paymentFilter, setPaymentFilter] = useState<'all' | 'al_dia' | 'incumplido' | 'bloqueado'>('all');
   const [activeAdminTab, setActiveAdminTab] = useState<'users' | 'plans'>('users');
   
   // Plans states
@@ -32,7 +34,6 @@ export function SystemAdmin() {
     name: '',
     usersLimit: 1,
     secretariesLimit: 1,
-    whatsappCredit: 100,
     price: 19
   });
   
@@ -45,7 +46,8 @@ export function SystemAdmin() {
     password: '',
     role: 'medico',
     status: 'Activo',
-    activePlanId: 'plus'
+    activePlanId: 'plus',
+    paymentStatus: 'al_dia'
   });
 
   useEffect(() => {
@@ -83,9 +85,9 @@ export function SystemAdmin() {
       if (list.length === 0) {
         // Seeding database with default values if none exist yet
         const defaultPlans = [
-          { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, whatsappCredit: 100, price: 19 },
-          { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, whatsappCredit: 500, price: 39 },
-          { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, whatsappCredit: 2000, price: 79 }
+          { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, price: 19 },
+          { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, price: 39 },
+          { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, price: 79 }
         ];
 
         for (const p of defaultPlans) {
@@ -93,7 +95,6 @@ export function SystemAdmin() {
             name: p.name,
             usersLimit: p.usersLimit,
             secretariesLimit: p.secretariesLimit,
-            whatsappCredit: p.whatsappCredit,
             price: p.price,
             updatedAt: serverTimestamp()
           });
@@ -136,7 +137,6 @@ export function SystemAdmin() {
       name: plan.name || '',
       usersLimit: Number(plan.usersLimit) || 1,
       secretariesLimit: Number(plan.secretariesLimit) || 1,
-      whatsappCredit: Number(plan.whatsappCredit) || 0,
       price: Number(plan.price) || 0
     });
     setIsPlanModalOpen(true);
@@ -149,7 +149,6 @@ export function SystemAdmin() {
         name: planForm.name,
         usersLimit: Number(planForm.usersLimit),
         secretariesLimit: Number(planForm.secretariesLimit),
-        whatsappCredit: Number(planForm.whatsappCredit),
         price: Number(planForm.price),
         updatedAt: serverTimestamp()
       }, { merge: true });
@@ -170,6 +169,7 @@ export function SystemAdmin() {
 
     try {
       const targetId = selectedProf?.id || doc(collection(db, 'users')).id;
+      const isBlocked = form.status === 'Bloqueado' || form.status === 'Inactivo';
 
       // Use the exact same /api/staff/manage service endpoint
       const res = await fetch('/api/staff/manage', {
@@ -205,6 +205,8 @@ export function SystemAdmin() {
         email: form.email,
         role: form.role,
         status: form.status,
+        isBlocked: isBlocked,
+        paymentStatus: form.paymentStatus || 'al_dia',
         activePlanId: form.activePlanId || 'plus',
         planId: form.activePlanId || 'plus',
         updatedAt: serverTimestamp()
@@ -215,6 +217,54 @@ export function SystemAdmin() {
       fetchProfessionals();
     } catch (error: any) {
       showToast(error.message, 'error');
+    }
+  };
+
+  const handleToggleBlockStatus = async (user: any) => {
+    const isCurrentlyBlocked = user.status === 'Inactivo' || user.status === 'Bloqueado' || user.isBlocked === true;
+    const newStatus = isCurrentlyBlocked ? 'Activo' : 'Bloqueado';
+    const newIsBlocked = !isCurrentlyBlocked;
+
+    try {
+      await updateDoc(doc(db, 'users', user.id), {
+        status: newStatus,
+        isBlocked: newIsBlocked,
+        updatedAt: serverTimestamp()
+      });
+      showToast(
+        isCurrentlyBlocked 
+          ? `Usuario ${user.name || user.email} reactivado exitosamente` 
+          : `Usuario ${user.name || user.email} bloqueado exitosamente`,
+        isCurrentlyBlocked ? 'success' : 'info'
+      );
+      fetchProfessionals();
+    } catch (error: any) {
+      showToast('Error al actualizar estado: ' + error.message, 'error');
+    }
+  };
+
+  const handleTogglePaymentStatus = async (user: any) => {
+    const isCurrentlyDefault = user.paymentStatus === 'incumplido';
+    const newPaymentStatus = isCurrentlyDefault ? 'al_dia' : 'incumplido';
+
+    try {
+      const updateData: any = {
+        paymentStatus: newPaymentStatus,
+        updatedAt: serverTimestamp()
+      };
+      
+      // If user is marked as incumpliendo and isn't blocked, we can also offer immediate block or track state
+      await updateDoc(doc(db, 'users', user.id), updateData);
+      
+      showToast(
+        isCurrentlyDefault 
+          ? `Pago de ${user.name || user.email} regularizado (Al día)` 
+          : `Usuario ${user.name || user.email} marcado como INCUMPLIENDO PAGO (Vto. 15)`,
+        isCurrentlyDefault ? 'success' : 'error'
+      );
+      fetchProfessionals();
+    } catch (error: any) {
+      showToast('Error al actualizar estado de pago: ' + error.message, 'error');
     }
   };
 
@@ -229,16 +279,50 @@ export function SystemAdmin() {
     }
   };
 
-  const filteredProfs = professionals.filter(p => 
-    p.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.email?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredProfs = professionals.filter(p => {
+    const matchesSearch = 
+      p.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      p.email?.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    if (!matchesSearch) return false;
+
+    if (paymentFilter === 'al_dia') {
+      return p.paymentStatus !== 'incumplido';
+    }
+    if (paymentFilter === 'incumplido') {
+      return p.paymentStatus === 'incumplido';
+    }
+    if (paymentFilter === 'bloqueado') {
+      return p.status === 'Bloqueado' || p.status === 'Inactivo' || p.isBlocked === true;
+    }
+    return true;
+  });
 
   const stats = [
-    { label: 'Usuarios Activos', value: professionals.filter(p => p.status === 'active' || p.status === 'Activo').length, icon: UserCheck, color: 'text-tertiary bg-tertiary/10' },
-    { label: 'Usuarios Inactivos', value: professionals.filter(p => p.status !== 'active' && p.status !== 'Activo').length, icon: UserMinus, color: 'text-error bg-error/10' },
-    { label: 'Total Registros', value: professionals.length, icon: Users, color: 'text-primary bg-primary/10' },
-    { label: 'Tiempo Promedio Uso', value: '2.4hs', icon: Clock, color: 'text-secondary bg-secondary/10' },
+    { 
+      label: 'Usuarios Activos', 
+      value: professionals.filter(p => (p.status === 'active' || p.status === 'Activo') && !p.isBlocked).length, 
+      icon: UserCheck, 
+      color: 'text-tertiary bg-tertiary/10' 
+    },
+    { 
+      label: 'Bloqueados / Inactivos', 
+      value: professionals.filter(p => p.status === 'Bloqueado' || p.status === 'Inactivo' || p.status === 'inactive' || p.isBlocked).length, 
+      icon: Lock, 
+      color: 'text-error bg-error/10' 
+    },
+    { 
+      label: 'Pagos al Día (Vto. 15)', 
+      value: professionals.filter(p => p.paymentStatus !== 'incumplido').length, 
+      icon: CheckCircle2, 
+      color: 'text-primary bg-primary/10' 
+    },
+    { 
+      label: 'Incumpliendo Pago', 
+      value: professionals.filter(p => p.paymentStatus === 'incumplido').length, 
+      icon: AlertTriangle, 
+      color: 'text-error bg-error/10' 
+    },
   ];
 
   const chartData = [
@@ -444,96 +528,214 @@ export function SystemAdmin() {
             </div>
 
             <div className="bg-white rounded-xl border border-outline-variant shadow-sm overflow-hidden">
-              <div className="p-4 sm:px-6 sm:py-4 border-b border-outline-variant flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3 sm:gap-4">
-                <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Gestión de Usuarios</h3>
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                  <div className="relative flex-1 md:w-64">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/40" size={16} />
-                    <input 
-                      type="text"
-                      placeholder="Buscar..."
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2 bg-surface-bright border border-outline-variant rounded-lg text-sm outline-none focus:border-primary transition-all font-sans"
-                    />
+              <div className="p-4 sm:px-6 sm:py-4 border-b border-outline-variant flex flex-col gap-4">
+                <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3 sm:gap-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Gestión de Usuarios</h3>
+                    <p className="text-[11px] text-on-surface-variant font-sans">
+                      Supervisión de cuentas, control de cumplimiento de pagos (vencimientos 15) y bloqueo/reactivación.
+                    </p>
                   </div>
-                  <button 
-                    onClick={() => {
-                      setSelectedProf(null);
-                      setForm({ name: '', email: '', password: '', role: 'medico', status: 'Activo', activePlanId: 'plus' });
-                      setIsModalOpen(true);
-                    }}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-primary text-white text-[11px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans whitespace-nowrap cursor-pointer"
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
+                    <div className="relative flex-1 md:w-64">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/40" size={16} />
+                      <input 
+                        type="text"
+                        placeholder="Buscar por nombre o email..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 bg-surface-bright border border-outline-variant rounded-lg text-sm outline-none focus:border-primary transition-all font-sans"
+                      />
+                    </div>
+                    <button 
+                      onClick={() => {
+                        setSelectedProf(null);
+                        setForm({ 
+                          name: '', 
+                          email: '', 
+                          password: '', 
+                          role: 'medico', 
+                          status: 'Activo', 
+                          activePlanId: 'plus',
+                          paymentStatus: 'al_dia'
+                        });
+                        setIsModalOpen(true);
+                      }}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-primary text-white text-[11px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans whitespace-nowrap cursor-pointer shadow-sm"
+                    >
+                      <Plus size={14} />
+                      Añadir Usuario
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filter Pills */}
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 font-sans">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0 mr-1">Filtrar:</span>
+                  <button
+                    onClick={() => setPaymentFilter('all')}
+                    className={cn(
+                      "px-3 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer",
+                      paymentFilter === 'all'
+                        ? "bg-primary text-white"
+                        : "bg-surface text-on-surface-variant hover:bg-outline-variant"
+                    )}
                   >
-                    <Plus size={14} />
-                    Añadir Usuario
+                    Todos ({professionals.length})
+                  </button>
+                  <button
+                    onClick={() => setPaymentFilter('al_dia')}
+                    className={cn(
+                      "px-3 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5",
+                      paymentFilter === 'al_dia'
+                        ? "bg-tertiary text-white"
+                        : "bg-surface text-on-surface-variant hover:bg-outline-variant"
+                    )}
+                  >
+                    <CheckCircle2 size={13} />
+                    Al Día ({professionals.filter(p => p.paymentStatus !== 'incumplido').length})
+                  </button>
+                  <button
+                    onClick={() => setPaymentFilter('incumplido')}
+                    className={cn(
+                      "px-3 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5",
+                      paymentFilter === 'incumplido'
+                        ? "bg-error text-white"
+                        : "bg-error/10 text-error hover:bg-error/20"
+                    )}
+                  >
+                    <AlertTriangle size={13} />
+                    Incumpliendo Pago ({professionals.filter(p => p.paymentStatus === 'incumplido').length})
+                  </button>
+                  <button
+                    onClick={() => setPaymentFilter('bloqueado')}
+                    className={cn(
+                      "px-3 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5",
+                      paymentFilter === 'bloqueado'
+                        ? "bg-slate-700 text-white"
+                        : "bg-surface text-on-surface-variant hover:bg-outline-variant"
+                    )}
+                  >
+                    <Lock size={13} />
+                    Bloqueados ({professionals.filter(p => p.status === 'Bloqueado' || p.status === 'Inactivo' || p.isBlocked).length})
                   </button>
                 </div>
               </div>
 
               {/* Mobile Cards View */}
               <div className="block md:hidden divide-y divide-outline-variant/40 font-sans">
-                {filteredProfs.map((p) => (
-                  <div key={p.id} className="p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-primary-container text-primary flex items-center justify-center font-bold text-sm shrink-0">
-                          {p.name?.charAt(0) || p.email?.charAt(0)}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-bold text-on-surface truncate">{p.name || 'Sin nombre'}</p>
-                          <p className="text-xs text-on-surface-variant truncate">{p.email}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button 
-                          onClick={() => {
-                            setSelectedProf(p);
-                            setForm({
-                              name: p.name || '',
-                              email: p.email || '',
-                              password: '',
-                              role: p.role || 'medico',
-                              status: p.status || 'Activo',
-                              activePlanId: p.activePlanId || 'plus'
-                            });
-                            setIsModalOpen(true);
-                          }}
-                          className="p-2 hover:bg-surface rounded-lg text-on-surface-variant transition-colors"
-                          title="Configurar"
-                        >
-                          <Settings size={17} />
-                        </button>
-                        <button 
-                          onClick={() => handleDeleteProf(p.id)}
-                          className="p-2 hover:bg-error-container/20 rounded-lg text-error transition-colors"
-                          title="Eliminar"
-                        >
-                          <Trash2 size={17} />
-                        </button>
-                      </div>
-                    </div>
+                {filteredProfs.map((p) => {
+                  const isBlocked = p.status === 'Bloqueado' || p.status === 'Inactivo' || p.isBlocked === true;
+                  const isPaymentDefault = p.paymentStatus === 'incumplido';
 
-                    <div className="flex items-center justify-between pt-2 border-t border-outline-variant/30 text-xs">
-                      <div className="flex items-center gap-2">
+                  return (
+                    <div key={p.id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={cn(
+                            "w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shrink-0",
+                            isBlocked ? "bg-error/10 text-error" : "bg-primary-container text-primary"
+                          )}>
+                            {p.name?.charAt(0) || p.email?.charAt(0)}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold text-on-surface truncate">{p.name || 'Sin nombre'}</p>
+                            <p className="text-xs text-on-surface-variant truncate">{p.email}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button 
+                            onClick={() => {
+                              setSelectedProf(p);
+                              setForm({
+                                name: p.name || '',
+                                email: p.email || '',
+                                password: '',
+                                role: p.role || 'medico',
+                                status: p.status || 'Activo',
+                                activePlanId: p.activePlanId || 'plus',
+                                paymentStatus: p.paymentStatus || 'al_dia'
+                              });
+                              setIsModalOpen(true);
+                            }}
+                            className="p-2 hover:bg-surface rounded-lg text-on-surface-variant transition-colors cursor-pointer"
+                            title="Configurar"
+                          >
+                            <Settings size={17} />
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteProf(p.id)}
+                            className="p-2 hover:bg-error-container/20 rounded-lg text-error transition-colors cursor-pointer"
+                            title="Eliminar"
+                          >
+                            <Trash2 size={17} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Badges row */}
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
                         <span className="text-[10px] font-bold px-2 py-0.5 bg-surface rounded-full text-on-surface-variant uppercase tracking-tighter">
                           {p.role === 'medico' ? 'Profesional' : p.role === 'secretary' ? 'Secretaria' : 'Admin'}
                         </span>
-                        <div className="flex items-center gap-1.5">
-                          <div className={cn(
-                            "w-1.5 h-1.5 rounded-full",
-                            (p.status === 'Activo' || p.status === 'active') ? "bg-tertiary" : "bg-error"
-                          )} />
-                          <span className="text-[11px] font-medium text-on-surface">{p.status || 'Activo'}</span>
-                        </div>
+
+                        {/* Account Access Status */}
+                        <span className={cn(
+                          "inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter",
+                          isBlocked 
+                            ? "bg-error/10 text-error border border-error/20" 
+                            : "bg-tertiary/10 text-tertiary border border-tertiary/20"
+                        )}>
+                          {isBlocked ? <Lock size={10} /> : <Unlock size={10} />}
+                          {isBlocked ? "Bloqueado" : "Activo"}
+                        </span>
+
+                        {/* Payment Status Badge */}
+                        <span className={cn(
+                          "inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter",
+                          isPaymentDefault
+                            ? "bg-error text-white"
+                            : "bg-tertiary/15 text-tertiary"
+                        )}>
+                          {isPaymentDefault ? <AlertTriangle size={10} /> : <CheckCircle2 size={10} />}
+                          {isPaymentDefault ? "Incumpliendo Pago" : "Al Día (Vto. 15)"}
+                        </span>
                       </div>
-                      <span className="text-[10px] text-on-surface-variant">Acceso reciente</span>
+
+                      {/* Action buttons */}
+                      <div className="flex items-center gap-2 pt-2 border-t border-outline-variant/30 text-xs">
+                        <button
+                          onClick={() => handleToggleBlockStatus(p)}
+                          className={cn(
+                            "flex-1 py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer",
+                            isBlocked
+                              ? "bg-tertiary/10 text-tertiary border border-tertiary/20 hover:bg-tertiary/20"
+                              : "bg-error/10 text-error border border-error/20 hover:bg-error/20"
+                          )}
+                        >
+                          {isBlocked ? <Unlock size={13} /> : <Lock size={13} />}
+                          {isBlocked ? "Reactivar Usuario" : "Bloquear Acceso"}
+                        </button>
+
+                        <button
+                          onClick={() => handleTogglePaymentStatus(p)}
+                          className={cn(
+                            "py-1.5 px-3 rounded-lg text-xs font-bold border transition-all cursor-pointer whitespace-nowrap",
+                            isPaymentDefault
+                              ? "border-tertiary/30 bg-tertiary/5 text-tertiary hover:bg-tertiary/15"
+                              : "border-error/30 bg-error/5 text-error hover:bg-error/15"
+                          )}
+                          title={isPaymentDefault ? "Regularizar pago" : "Marcar incumplimiento"}
+                        >
+                          {isPaymentDefault ? "Marcar Al Día" : "Marcar Incumplido"}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {filteredProfs.length === 0 && (
                   <div className="p-8 text-center text-on-surface-variant text-xs font-medium">
-                    No se encontraron profesionales registrados.
+                    No se encontraron usuarios que coincidan con la búsqueda o filtro seleccionado.
                   </div>
                 )}
               </div>
@@ -545,75 +747,139 @@ export function SystemAdmin() {
                     <tr>
                       <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Usuario</th>
                       <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Rol</th>
-                      <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Estado</th>
-                      <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Ult. Acceso</th>
+                      <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Estado Cuenta</th>
+                      <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Estado de Pago</th>
                       <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest text-right">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-surface">
-                    {filteredProfs.map((p) => (
-                      <tr key={p.id} className="hover:bg-surface/30 transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-xl bg-primary-container text-primary flex items-center justify-center font-bold text-sm">
-                              {p.name?.charAt(0) || p.email?.charAt(0)}
+                    {filteredProfs.map((p) => {
+                      const isBlocked = p.status === 'Bloqueado' || p.status === 'Inactivo' || p.isBlocked === true;
+                      const isPaymentDefault = p.paymentStatus === 'incumplido';
+
+                      return (
+                        <tr key={p.id} className={cn(
+                          "transition-colors",
+                          isBlocked ? "bg-error/5 hover:bg-error/10" : "hover:bg-surface/30"
+                        )}>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className={cn(
+                                "w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm",
+                                isBlocked ? "bg-error/20 text-error" : "bg-primary-container text-primary"
+                              )}>
+                                {p.name?.charAt(0) || p.email?.charAt(0)}
+                              </div>
+                              <div>
+                                <p className="text-[13px] font-bold text-on-surface">{p.name || 'Sin nombre'}</p>
+                                <p className="text-[11px] text-on-surface-variant">{p.email}</p>
+                              </div>
                             </div>
-                            <div>
-                              <p className="text-[13px] font-bold text-on-surface">{p.name || 'Sin nombre'}</p>
-                              <p className="text-[11px] text-on-surface-variant">{p.email}</p>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="text-[10px] font-bold px-2 py-0.5 bg-surface rounded-full text-on-surface-variant uppercase tracking-tighter">
+                              {p.role === 'medico' ? 'Profesional' : p.role === 'secretary' ? 'Secretaria' : 'Admin'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-2">
+                              <div className={cn(
+                                "w-2 h-2 rounded-full",
+                                isBlocked ? "bg-error animate-pulse" : "bg-tertiary"
+                              )} />
+                              <span className={cn(
+                                "text-[11px] font-bold",
+                                isBlocked ? "text-error" : "text-on-surface"
+                              )}>
+                                {isBlocked ? 'Bloqueado' : 'Activo'}
+                              </span>
                             </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className="text-[10px] font-bold px-2 py-0.5 bg-surface rounded-full text-on-surface-variant uppercase tracking-tighter">
-                            {p.role === 'medico' ? 'Profesional' : p.role === 'secretary' ? 'Secretaria' : 'Admin'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <div className={cn(
-                              "w-1.5 h-1.5 rounded-full",
-                              (p.status === 'Activo' || p.status === 'active') ? "bg-tertiary" : "bg-error"
-                            )} />
-                            <span className="text-[11px] font-medium text-on-surface">{p.status || 'Activo'}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <p className="text-[11px] text-on-surface-variant">Hoy, 10:45 AM</p>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <div className="flex justify-end gap-2">
-                            <button 
-                              onClick={() => {
-                                setSelectedProf(p);
-                                setForm({
-                                  name: p.name || '',
-                                  email: p.email || '',
-                                  password: '',
-                                  role: p.role || 'medico',
-                                  status: p.status || 'Activo',
-                                  activePlanId: p.activePlanId || 'plus'
-                                });
-                                setIsModalOpen(true);
-                              }}
-                              className="p-1.5 hover:bg-surface rounded-lg text-on-surface-variant transition-colors cursor-pointer"
-                            >
-                              <Settings size={16} />
-                            </button>
-                            <button 
-                              onClick={() => handleDeleteProf(p.id)}
-                              className="p-1.5 hover:bg-error-container/20 rounded-lg text-error transition-colors cursor-pointer"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="px-6 py-4">
+                            {isPaymentDefault ? (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-error/10 text-error border border-error/20 w-fit">
+                                  <AlertTriangle size={12} />
+                                  Incumpliendo Pago
+                                </span>
+                                <span className="text-[10px] text-error font-medium pl-1">Vto. 15 impago</span>
+                              </div>
+                            ) : (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-tertiary/10 text-tertiary border border-tertiary/20 w-fit">
+                                  <CheckCircle2 size={12} />
+                                  Al Día (Vto. 15)
+                                </span>
+                                <span className="text-[10px] text-on-surface-variant pl-1">Sin deuda</span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              {/* One-Click Block / Reactivate Toggle */}
+                              <button
+                                onClick={() => handleToggleBlockStatus(p)}
+                                className={cn(
+                                  "inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all cursor-pointer",
+                                  isBlocked
+                                    ? "bg-tertiary/10 text-tertiary border-tertiary/30 hover:bg-tertiary/20"
+                                    : "bg-error/10 text-error border-error/30 hover:bg-error/20"
+                                )}
+                                title={isBlocked ? "Reactivar acceso del usuario" : "Bloquear acceso del usuario"}
+                              >
+                                {isBlocked ? <Unlock size={13} /> : <Lock size={13} />}
+                                <span>{isBlocked ? "Reactivar" : "Bloquear"}</span>
+                              </button>
+
+                              {/* Toggle Payment Status Button */}
+                              <button
+                                onClick={() => handleTogglePaymentStatus(p)}
+                                className={cn(
+                                  "p-1.5 rounded-lg border transition-colors cursor-pointer",
+                                  isPaymentDefault
+                                    ? "bg-tertiary/10 border-tertiary/30 text-tertiary hover:bg-tertiary/20"
+                                    : "bg-surface border-outline-variant text-on-surface-variant hover:text-error hover:border-error/30 hover:bg-error/5"
+                                )}
+                                title={isPaymentDefault ? "Regularizar pago (Marcar Al Día)" : "Marcar incumplimiento de pago (Vto. 15)"}
+                              >
+                                {isPaymentDefault ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+                              </button>
+
+                              <button 
+                                onClick={() => {
+                                  setSelectedProf(p);
+                                  setForm({
+                                    name: p.name || '',
+                                    email: p.email || '',
+                                    password: '',
+                                    role: p.role || 'medico',
+                                    status: p.status || 'Activo',
+                                    activePlanId: p.activePlanId || 'plus',
+                                    paymentStatus: p.paymentStatus || 'al_dia'
+                                  });
+                                  setIsModalOpen(true);
+                                }}
+                                className="p-1.5 hover:bg-surface rounded-lg text-on-surface-variant transition-colors cursor-pointer"
+                                title="Configurar Usuario"
+                              >
+                                <Settings size={16} />
+                              </button>
+                              <button 
+                                onClick={() => handleDeleteProf(p.id)}
+                                className="p-1.5 hover:bg-error-container/20 rounded-lg text-error transition-colors cursor-pointer"
+                                title="Eliminar"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {filteredProfs.length === 0 && (
                       <tr>
                         <td colSpan={5} className="px-6 py-12 text-center text-on-surface-variant">
-                          No se encontraron profesionales registrados.
+                          No se encontraron usuarios que coincidan con la búsqueda o filtro seleccionado.
                         </td>
                       </tr>
                     )}
@@ -634,7 +900,7 @@ export function SystemAdmin() {
             <div className="flex justify-between items-center">
               <div>
                 <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Tipos de Planes de la Plataforma</h3>
-                <p className="text-[11px] text-on-surface-variant">Configure los límites operacionales, cantidad de secretarias, mensajería de WhatsApp e importes mensuales de cada plan.</p>
+                <p className="text-[11px] text-on-surface-variant">Configure los límites operacionales, cantidad de secretarias e importes mensuales de cada plan.</p>
               </div>
               {plansLoading && (
                 <div className="text-xs text-primary font-bold animate-pulse">Cargando planes...</div>
@@ -698,16 +964,6 @@ export function SystemAdmin() {
                           <div>
                             <p className="text-[10px] font-bold uppercase tracking-tight text-on-surface-variant">Secretarias por Usuario</p>
                             <p className="text-xs font-bold text-on-surface">{p.secretariesLimit || 1} {p.secretariesLimit === 1 ? 'Secretaria' : 'Secretarias'}</p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-surface flex items-center justify-center text-on-surface-variant">
-                            <Smartphone size={16} />
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-bold uppercase tracking-tight text-on-surface-variant">Crédito de WhatsApp</p>
-                            <p className="text-xs font-bold text-on-surface">{p.whatsappCredit || 0} mensajes/mes incluidos</p>
                           </div>
                         </div>
 
@@ -799,29 +1055,49 @@ export function SystemAdmin() {
               </select>
             </div>
             <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Estado</label>
+              <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Estado de Acceso</label>
               <select 
                 value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value })}
-                className="w-full px-4 py-2 bg-white border border-outline-variant rounded-xl text-sm outline-none"
+                className="w-full px-4 py-2 bg-white border border-outline-variant rounded-xl text-sm outline-none font-bold"
               >
-                <option value="Activo">Activo</option>
+                <option value="Activo">Activo (Habilitado)</option>
+                <option value="Bloqueado">Bloqueado (Acceso Denegado)</option>
                 <option value="Inactivo">Inactivo</option>
               </select>
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Plan Asociado</label>
-            <select 
-              value={form.activePlanId}
-              onChange={(e) => setForm({ ...form, activePlanId: e.target.value })}
-              className="w-full px-4 py-2 bg-white border border-outline-variant rounded-xl text-sm outline-none focus:border-primary transition-all"
-            >
-              {plans.map((p) => (
-                <option key={p.id} value={p.id}>Plan {p.name} (${p.price || 0}/mes)</option>
-              ))}
-            </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">
+                Estado de Pago (Vto. 15)
+              </label>
+              <select 
+                value={form.paymentStatus}
+                onChange={(e) => setForm({ ...form, paymentStatus: e.target.value })}
+                className={cn(
+                  "w-full px-4 py-2 bg-white border rounded-xl text-sm outline-none font-bold transition-colors",
+                  form.paymentStatus === 'incumplido' ? "border-error text-error bg-error/5" : "border-outline-variant text-tertiary"
+                )}
+              >
+                <option value="al_dia">Al Día (Sin Deuda)</option>
+                <option value="incumplido">Incumpliendo con el Pago (Mora)</option>
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Plan Asociado</label>
+              <select 
+                value={form.activePlanId}
+                onChange={(e) => setForm({ ...form, activePlanId: e.target.value })}
+                className="w-full px-4 py-2 bg-white border border-outline-variant rounded-xl text-sm outline-none focus:border-primary transition-all"
+              >
+                {plans.map((p) => (
+                  <option key={p.id} value={p.id}>Plan {p.name} (${p.price || 0}/mes)</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="flex gap-3 pt-4">
@@ -888,27 +1164,15 @@ export function SystemAdmin() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">WhatsApps Incl.</label>
-              <input 
-                type="number"
-                min="0"
-                value={planForm.whatsappCredit}
-                onChange={(e) => setPlanForm({ ...planForm, whatsappCredit: Number(e.target.value) })}
-                className="w-full px-4 py-2 bg-white border border-outline-variant rounded-xl text-sm outline-none focus:border-primary transition-all"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest font-bold text-primary">Importe / mes ($)</label>
-              <input 
-                type="number"
-                min="0"
-                value={planForm.price}
-                onChange={(e) => setPlanForm({ ...planForm, price: Number(e.target.value) })}
-                className="w-full px-4 py-2 bg-white border border-primary/30 rounded-xl text-sm outline-none focus:border-primary transition-all"
-              />
-            </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest font-bold text-primary">Importe / mes ($)</label>
+            <input 
+              type="number"
+              min="0"
+              value={planForm.price}
+              onChange={(e) => setPlanForm({ ...planForm, price: Number(e.target.value) })}
+              className="w-full px-4 py-2 bg-white border border-primary/30 rounded-xl text-sm outline-none focus:border-primary transition-all"
+            />
           </div>
 
           <div className="flex gap-3 pt-4">

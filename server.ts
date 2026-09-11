@@ -84,9 +84,9 @@ async function startServer() {
 
       // 1. Initialize Plans collection
       const defaultPlans = [
-        { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, whatsappCredit: 100, price: 19 },
-        { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, whatsappCredit: 500, price: 39 },
-        { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, whatsappCredit: 2000, price: 79 }
+        { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, price: 19 },
+        { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, price: 39 },
+        { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, price: 79 }
       ];
 
       for (const p of defaultPlans) {
@@ -94,7 +94,6 @@ async function startServer() {
           name: p.name,
           usersLimit: p.usersLimit,
           secretariesLimit: p.secretariesLimit,
-          whatsappCredit: p.whatsappCredit,
           price: p.price,
           updatedAt: new Date().toISOString()
         }, { merge: true });
@@ -127,8 +126,7 @@ async function startServer() {
         "stocks",
         "profiles",
         "reminder_settings",
-        "staff",
-        "whatsapp_logs"
+        "staff"
       ];
 
       for (const colName of collectionsToCheck) {
@@ -327,56 +325,6 @@ async function startServer() {
     } catch (error: any) {
       console.error("User Management Error:", error);
       res.status(500).json({ error: error.message });
-    }
-  });
-
-  // WhatsApp Send Message
-  app.post("/api/whatsapp/send", async (req, res) => {
-    const { to, message } = req.body;
-    
-    if (!to || !message) {
-      return res.status(400).json({ error: "Missing 'to' or 'message' in request body" });
-    }
-
-    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-
-    if (!accessToken || !phoneNumberId) {
-      console.warn("WhatsApp API credentials not configured in environment.");
-      return res.status(503).json({ error: "WhatsApp integration not configured" });
-    }
-
-    try {
-      // Clean phone number: remove non-digits
-      const cleanPhone = to.replace(/\D/g, "");
-      
-      const response = await axios.post(
-        `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
-        {
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: cleanPhone,
-          type: "text",
-          text: {
-            preview_url: false,
-            body: message
-          }
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-
-      res.json({ success: true, data: response.data });
-    } catch (error: any) {
-      console.error("WhatsApp API Error:", error.response?.data || error.message);
-      res.status(500).json({ 
-        error: "Failed to send WhatsApp message", 
-        details: error.response?.data || error.message 
-      });
     }
   });
 

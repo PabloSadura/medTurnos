@@ -10,16 +10,15 @@ export async function seedAllCollections() {
   try {
     // 1. PLANS
     const plansData = [
-      { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, whatsappCredit: 100, price: 19 },
-      { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, whatsappCredit: 500, price: 39 },
-      { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, whatsappCredit: 2000, price: 79 }
+      { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, price: 19 },
+      { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, price: 39 },
+      { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, price: 79 }
     ];
     for (const p of plansData) {
       await setDoc(doc(db, 'plans', p.id), {
         name: p.name,
         usersLimit: p.usersLimit,
         secretariesLimit: p.secretariesLimit,
-        whatsappCredit: p.whatsappCredit,
         price: p.price,
         updatedAt: serverTimestamp()
       }, { merge: true });
@@ -36,7 +35,6 @@ export async function seedAllCollections() {
       specialty: 'Dirección Médica y Gestión',
       phone: '+54 9 11 1234-5678',
       activePlanId: 'premium',
-      whatsappCredit: 2000,
       schedule: {
         workingDays: [1, 2, 3, 4, 5],
         morningStart: '08:00',
@@ -58,7 +56,6 @@ export async function seedAllCollections() {
       specialty: 'Odontología General',
       phone: '+54 9 11 2345-6789',
       activePlanId: 'plus',
-      whatsappCredit: 500,
       schedule: {
         workingDays: [1, 2, 3, 4, 5],
         morningStart: '08:30',
@@ -268,23 +265,11 @@ export async function seedAllCollections() {
       email: 'secretaria@demo.com',
       role: 'Secretary',
       status: 'Activo',
-      permissions: ['dashboard', 'agenda', 'patients', 'reminders'],
+      permissions: ['dashboard', 'agenda', 'patients'],
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     }, { merge: true });
     results['staff'] = 1;
-
-    // 9. WHATSAPP LOGS
-    await setDoc(doc(db, 'whatsapp_logs', 'log_demo_01'), {
-      userId: currentUserId,
-      to: '+54 9 11 9876-5432',
-      patientName: 'Lucía Fernández',
-      message: `Hola Lucía Fernández, te recordamos tu turno el Hoy a las 10:00. ¡Te esperamos!`,
-      status: 'success',
-      method: 'manual',
-      createdAt: serverTimestamp()
-    }, { merge: true });
-    results['whatsapp_logs'] = 1;
 
     return { success: true, results };
   } catch (error: any) {

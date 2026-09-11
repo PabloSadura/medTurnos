@@ -21,7 +21,8 @@ import {
   Percent,
   DollarSign,
   Package,
-  Sparkles
+  Sparkles,
+  Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -1634,6 +1635,12 @@ export function Dashboard() {
                     {apt.patientName || 'Paciente sin nombre'}
                   </h4>
                   <div className="flex items-center gap-1.5">
+                    {apt.isOverturn && (
+                      <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-900 border border-purple-200 text-[8px] font-black uppercase tracking-wider flex items-center gap-0.5">
+                        <Zap size={8} className="fill-purple-700 text-purple-700" />
+                        Sobre Turno
+                      </span>
+                    )}
                     <span className="text-[10px] font-black px-2 py-0.5 bg-primary/10 text-primary rounded-md">
                       {apt.time || '09:00'}
                     </span>

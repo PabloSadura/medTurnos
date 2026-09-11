@@ -109,8 +109,10 @@ export interface Appointment {
   phone?: string;
   date: string;
   time: string;
+  endTime?: string;
   startTime?: any;
   duration?: number;
+  isOverturn?: boolean;
   status: 'pendiente' | 'confirmed' | 'confirmado' | 'in-session' | 'finished' | 'cancelled' | 'cancelado' | 'ausente';
   type: string;
   treatment?: string;

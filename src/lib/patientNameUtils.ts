@@ -73,7 +73,7 @@ export function splitFullName(fullName: string): { firstName: string; lastName: 
 }
 
 /**
- * Returns only the patient's first name for warm, natural greetings in WhatsApp reminders.
+ * Returns only the patient's first name for greetings and notifications.
  * Accepts a patient object, appointment object, or string.
  * e.g., "Juan Pérez" -> "Juan"
  * e.g., { firstName: "Valeria", lastName: "Gómez" } -> "Valeria"

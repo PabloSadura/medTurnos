@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock, Stethoscope, Package, Sparkles, MessageCircle, Phone } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock, Stethoscope, Package, Sparkles, Phone, MessageCircle, Zap, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
-import { WhatsAppReminderModal } from '../components/WhatsAppReminderModal';
 import { ClinicalHistoryModal } from '../components/ClinicalHistoryModal';
+import { ReminderModal } from '../components/ReminderModal';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch, getDoc } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
@@ -13,13 +13,25 @@ import { useAuth } from '../contexts/AuthContext';
 import { consumePackageSession } from '../lib/packageUtils';
 import { PatientPackage } from '../types';
 import { splitFullName, getPatientFirstName, formatPatientFullName, comparePatientsByLastName, formatPatientLastNameFirst, getPatientLastName } from '../lib/patientNameUtils';
+import { PhoneInputArgentina } from '../components/PhoneInputArgentina';
+import { formatArgentinePhoneWithPrefix } from '../lib/phoneUtils';
+import { 
+  calculateEndTime, 
+  checkScheduleCollision, 
+  checkIsOutsideWorkingHours, 
+  minutesToTime, 
+  timeToMinutes,
+  getDayOccupiedSlots,
+  getSuggestedAvailableSlots,
+  DayOccupiedSlot
+} from '../lib/agendaUtils';
 
 const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
 export function Agenda() {
   const navigate = useNavigate();
   const { showToast } = useToast();
-  const { ownerId } = useAuth();
+  const { ownerId, profile } = useAuth();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(new Date());
   const [appointments, setAppointments] = useState<any[]>([]);
@@ -46,12 +58,12 @@ export function Agenda() {
   }, [isNewAppointmentOpen]);
 
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
+  const [reminderModalApt, setReminderModalApt] = useState<any | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isClinicalHistoryOpen, setIsClinicalHistoryOpen] = useState(false);
   const [clinicalHistoryAppointment, setClinicalHistoryAppointment] = useState<any>(null);
   const [clinicalHistoryPatient, setClinicalHistoryPatient] = useState<any>(null);
-  const [whatsappModalApt, setWhatsappModalApt] = useState<any | null>(null);
   const [editAptData, setEditAptData] = useState<{
     id: string;
     patientId: string;
@@ -61,6 +73,8 @@ export function Agenda() {
     type: string;
     notes: string;
     duration?: number;
+    isOverturn?: boolean;
+    manualOverturn?: boolean;
     status?: string;
   }>({
     id: '',
@@ -69,9 +83,14 @@ export function Agenda() {
     date: '',
     time: '09:00',
     type: 'Check-up General',
-    notes: ''
+    notes: '',
+    duration: 30,
+    isOverturn: false,
+    manualOverturn: false
   });
   const [searchTerm, setSearchTerm] = useState('');
+  const [isPatientDropdownOpen, setIsPatientDropdownOpen] = useState(false);
+  const patientSearchRef = useRef<HTMLDivElement>(null);
   const [isCreatingNewPatient, setIsCreatingNewPatient] = useState(false);
   const [selectedPatientStats, setSelectedPatientStats] = useState<{ attendance: number, absences: number } | null>(null);
 
@@ -102,6 +121,9 @@ export function Agenda() {
     time: string;
     type: string;
     notes: string;
+    duration?: number;
+    isOverturn?: boolean;
+    manualOverturn?: boolean;
     isPackageSession?: boolean;
     patientPackageId?: string;
     packageName?: string;
@@ -114,10 +136,77 @@ export function Agenda() {
     time: '09:00',
     type: 'Check-up General',
     notes: '',
+    duration: 30,
+    isOverturn: false,
+    manualOverturn: false,
     isPackageSession: false,
     patientPackageId: '',
     packageName: ''
   });
+
+  // Duration calculations - completely automatic based on selected treatment
+  const effectiveNewAptDuration = useMemo(() => {
+    const matched = treatments.find(t => t.name === newApt.type);
+    if (matched?.duration && Number(matched.duration) > 0) {
+      return Number(matched.duration);
+    }
+    return newApt.duration && newApt.duration > 0 ? Number(newApt.duration) : 30;
+  }, [newApt.type, newApt.duration, treatments]);
+
+  // Calculate outside working hours with duration awareness
+  const newAptOutsideCheck = useMemo(() => {
+    return checkIsOutsideWorkingHours(newApt.date, newApt.time, workingHours, effectiveNewAptDuration);
+  }, [newApt.date, newApt.time, workingHours, effectiveNewAptDuration]);
+
+  const newAptCollision = useMemo(() => {
+    return checkScheduleCollision(newApt.date, newApt.time, effectiveNewAptDuration, appointments);
+  }, [newApt.date, newApt.time, effectiveNewAptDuration, appointments]);
+
+  const isNewAptOverturn = useMemo(() => {
+    if (newApt.manualOverturn) return Boolean(newApt.isOverturn);
+    return newAptOutsideCheck.isOutside || Boolean(newApt.isOverturn);
+  }, [newApt.manualOverturn, newApt.isOverturn, newAptOutsideCheck.isOutside]);
+
+  // Occupied slots and suggested available free slots for new appointment date
+  const newAptOccupiedSlots = useMemo(() => {
+    return getDayOccupiedSlots(newApt.date, appointments);
+  }, [newApt.date, appointments]);
+
+  const newAptSuggestedSlots = useMemo(() => {
+    return getSuggestedAvailableSlots(newApt.date, effectiveNewAptDuration, appointments, workingHours);
+  }, [newApt.date, effectiveNewAptDuration, appointments, workingHours]);
+
+  // Duration calculations for edit appointment - completely automatic based on selected treatment
+  const effectiveEditAptDuration = useMemo(() => {
+    const matched = treatments.find(t => t.name === editAptData.type);
+    if (matched?.duration && Number(matched.duration) > 0) {
+      return Number(matched.duration);
+    }
+    return editAptData.duration && editAptData.duration > 0 ? Number(editAptData.duration) : 30;
+  }, [editAptData.type, editAptData.duration, treatments]);
+
+  // Calculate outside working hours with duration awareness for edited appointment
+  const editAptOutsideCheck = useMemo(() => {
+    return checkIsOutsideWorkingHours(editAptData.date, editAptData.time, workingHours, effectiveEditAptDuration);
+  }, [editAptData.date, editAptData.time, workingHours, effectiveEditAptDuration]);
+
+  const editAptCollision = useMemo(() => {
+    return checkScheduleCollision(editAptData.date, editAptData.time, effectiveEditAptDuration, appointments, editAptData.id);
+  }, [editAptData.date, editAptData.time, effectiveEditAptDuration, appointments, editAptData.id]);
+
+  const isEditAptOverturn = useMemo(() => {
+    if (editAptData.manualOverturn) return Boolean(editAptData.isOverturn);
+    return editAptOutsideCheck.isOutside || Boolean(editAptData.isOverturn);
+  }, [editAptData.manualOverturn, editAptData.isOverturn, editAptOutsideCheck.isOutside]);
+
+  // Occupied slots and suggested available free slots for edit appointment date
+  const editAptOccupiedSlots = useMemo(() => {
+    return getDayOccupiedSlots(editAptData.date, appointments, editAptData.id);
+  }, [editAptData.date, appointments, editAptData.id]);
+
+  const editAptSuggestedSlots = useMemo(() => {
+    return getSuggestedAvailableSlots(editAptData.date, effectiveEditAptDuration, appointments, workingHours, editAptData.id);
+  }, [editAptData.date, effectiveEditAptDuration, appointments, workingHours, editAptData.id]);
 
   useEffect(() => {
     if (newApt.patientId && !isCreatingNewPatient) {
@@ -156,6 +245,47 @@ export function Agenda() {
       setPatientPackages([]);
     }
   }, [newApt.patientId, isCreatingNewPatient, appointments, ownerId]);
+
+  // Click outside listener for patient search dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (patientSearchRef.current && !patientSearchRef.current.contains(event.target as Node)) {
+        setIsPatientDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Helper to open new appointment with full clean state
+  const handleOpenNewAppointment = (targetDate?: string, targetTime?: string) => {
+    const matchedTreatment = treatments[0];
+    const initialDuration = matchedTreatment?.duration ? Number(matchedTreatment.duration) : 30;
+    setNewApt({
+      patientId: '',
+      patientName: '',
+      patientFirstName: '',
+      patientLastName: '',
+      date: targetDate || formatLocalDate(selectedDate || new Date()),
+      time: targetTime || '09:00',
+      type: matchedTreatment?.name || 'Check-up General',
+      notes: '',
+      duration: initialDuration,
+      isOverturn: false,
+      manualOverturn: false,
+      isPackageSession: false,
+      patientPackageId: '',
+      packageName: ''
+    });
+    setSearchTerm('');
+    setIsCreatingNewPatient(false);
+    setSelectedPatientStats(null);
+    setPatientPackages([]);
+    setIsPatientDropdownOpen(false);
+    setIsNewAppointmentOpen(true);
+  };
 
   useEffect(() => {
     if (!ownerId) return;
@@ -221,6 +351,10 @@ export function Agenda() {
       if (isCreatingNewPatient) {
         const fn = newPatientData.firstName.trim();
         const ln = newPatientData.lastName.trim();
+        if (!fn && !ln && !newPatientData.name.trim()) {
+          showToast('Por favor ingrese el nombre del paciente a crear.', 'error');
+          return;
+        }
         const fullName = formatPatientFullName(fn, ln, newPatientData.name);
 
         const patientRef = await addDoc(collection(db, 'patients'), {
@@ -239,12 +373,38 @@ export function Agenda() {
         patientName = fullName;
         patientFirstName = fn || getPatientFirstName(fullName);
         patientLastName = ln;
+      } else {
+        // If not creating new, check if patientId is selected or match via searchTerm
+        if (!patientId) {
+          const trimmedSearch = searchTerm.trim().toLowerCase();
+          if (trimmedSearch) {
+            const matched = patients.find(p => 
+              p.name?.toLowerCase().trim() === trimmedSearch ||
+              `${p.lastName || ''} ${p.firstName || ''}`.toLowerCase().trim() === trimmedSearch ||
+              p.idNumber?.trim() === trimmedSearch
+            );
+            if (matched) {
+              patientId = matched.id;
+              patientName = matched.name;
+              patientFirstName = matched.firstName || getPatientFirstName(matched.name);
+              patientLastName = matched.lastName || '';
+            }
+          }
+        }
+
+        if (!patientId) {
+          showToast('Por favor, selecciona un paciente de la lista o crea uno nuevo.', 'error');
+          return;
+        }
       }
 
       const patient = isCreatingNewPatient 
         ? { id: patientId, name: patientName, firstName: patientFirstName, lastName: patientLastName, phone: newPatientData.phone } 
         : patients.find(p => p.id === patientId);
-      if (!patient) return;
+      if (!patient) {
+        showToast('Paciente no encontrado. Por favor, selecciona un paciente válido.', 'error');
+        return;
+      }
 
       if (!isCreatingNewPatient) {
         patientFirstName = patient.firstName || newApt.patientFirstName || getPatientFirstName(patient.name || patientName);
@@ -258,34 +418,22 @@ export function Agenda() {
       const [hours, minutes] = newApt.time.split(':').map(Number);
       const appointmentDate = new Date(year, month - 1, day, hours, minutes);
 
-      // Validate working hours
-      if (workingHours) {
-        const standardDay = appointmentDate.getDay(); // 0 is Sun, 1 is Mon...
-        const mappedDay = standardDay === 0 ? 7 : standardDay; // 1-7
-        
-        const workingDays = workingHours.workingDays || workingHours.days || [];
-        if (!workingDays.includes(mappedDay)) {
-          showToast('El profesional no atiende los días ' + days[mappedDay - 1] + '.', 'error');
-          return;
-        }
+      const matchedTreatment = treatments.find(t => t.name === newApt.type);
+      const finalDuration = effectiveNewAptDuration;
 
-        const timeString = newApt.time; // "HH:mm"
-        const isMorning = workingHours.morningActive !== false && timeString >= workingHours.morningStart && timeString <= workingHours.morningEnd;
-        const isAfternoon = workingHours.afternoonActive !== false && timeString >= workingHours.afternoonStart && timeString <= workingHours.afternoonEnd;
-
-        if (!isMorning && !isAfternoon) {
-          let errorMsg = `La hora seleccionada (${timeString}) no coincide con los horarios de atención activos:`;
-          if (workingHours.morningActive !== false) errorMsg += `\nMañana: ${workingHours.morningStart} - ${workingHours.morningEnd}`;
-          if (workingHours.afternoonActive !== false) errorMsg += `\nTarde: ${workingHours.afternoonStart} - ${workingHours.afternoonEnd}`;
-          if (workingHours.morningActive === false && workingHours.afternoonActive === false) errorMsg = "El profesional no tiene turnos activos configurados.";
-          
-          showToast(errorMsg, 'error');
-          return;
-        }
+      // 1. Strict Overlap / Collision Prevention: Block if another appointment or treatment is already occupying the slot
+      const collision = checkScheduleCollision(newApt.date, newApt.time, finalDuration, appointments);
+      if (collision.hasConflict) {
+        showToast(collision.message || 'No se pueden agendar 2 turnos en el mismo horario.', 'error');
+        return;
       }
 
+      // 2. Sobre Turno Detection: outside working hours qualifies as Sobre Turno
+      const outsideCheck = checkIsOutsideWorkingHours(newApt.date, newApt.time, workingHours, finalDuration);
+      const isOverturn = Boolean(newApt.manualOverturn ? newApt.isOverturn : (newApt.isOverturn || outsideCheck.isOutside));
+      const endTime = calculateEndTime(newApt.time, finalDuration);
+
       const isPkg = Boolean(newApt.isPackageSession && newApt.patientPackageId);
-      const matchedTreatment = treatments.find(t => t.name === newApt.type);
       const treatmentPrice = isPkg ? 0 : (matchedTreatment?.cost ? Number(matchedTreatment.cost) : 0);
 
       const patientPhone = isCreatingNewPatient ? newPatientData.phone : (patient?.phone || '');
@@ -307,7 +455,10 @@ export function Agenda() {
         packageName: isPkg ? (newApt.packageName || null) : null,
         userId: ownerId,
         status: 'pendiente',
-        duration: matchedTreatment?.duration ? Number(matchedTreatment.duration) : 30, // Default duration
+        duration: finalDuration,
+        endTime,
+        isOverturn,
+        isOverturnTag: isOverturn ? 'Sobre Turno' : null,
         attendance: attendanceCount,
         startTime: appointmentDate, // Save as JS Date, Firestore converts to Timestamp
         createdAt: serverTimestamp(),
@@ -317,9 +468,9 @@ export function Agenda() {
       setIsNewAppointmentOpen(false);
       setIsCreatingNewPatient(false);
       setNewPatientData({ firstName: '', lastName: '', name: '', phone: '', idNumber: '', birthDate: '' });
-      setNewApt({ ...newApt, patientId: '', patientName: '', patientFirstName: '', patientLastName: '', notes: '', isPackageSession: false, patientPackageId: '', packageName: '' });
+      setNewApt({ ...newApt, patientId: '', patientName: '', patientFirstName: '', patientLastName: '', notes: '', isPackageSession: false, patientPackageId: '', packageName: '', isOverturn: false, manualOverturn: false });
       setSearchTerm('');
-      showToast('Turno agendado correctamente');
+      showToast(isOverturn ? '⚡ Turno guardado con etiqueta SOBRE TURNO' : 'Turno agendado correctamente', 'success');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'appointments');
     }
@@ -335,6 +486,12 @@ export function Agenda() {
     setClinicalHistoryAppointment(apt);
     setClinicalHistoryPatient(patient);
     setIsClinicalHistoryOpen(true);
+  };
+
+  const getAppointmentPatientPhone = (apt: any) => {
+    if (!apt) return '';
+    const patient = patients.find(p => p.id === apt.patientId);
+    return patient?.phone || apt.patientPhone || apt.phone || '';
   };
 
   const handleUpdateStatus = async (status: string) => {
@@ -452,15 +609,19 @@ export function Agenda() {
 
   const handleOpenEditAppointment = (apt: any, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    const matched = treatments.find(t => t.name === (apt.type || apt.treatment));
+    const initialDuration = Number(apt.duration) || (matched?.duration ? Number(matched.duration) : 30);
     setEditAptData({
       id: apt.id,
       patientId: apt.patientId || '',
       patientName: apt.patientName || '',
       date: apt.date || formatLocalDate(new Date()),
       time: apt.time || '09:00',
-      type: apt.type || 'Check-up General',
+      type: apt.type || apt.treatment || 'Check-up General',
       notes: apt.notes || '',
-      duration: apt.duration || 30,
+      duration: initialDuration,
+      isOverturn: Boolean(apt.isOverturn),
+      manualOverturn: false,
       status: apt.status || 'pendiente'
     });
     setIsDetailModalOpen(false);
@@ -475,54 +636,57 @@ export function Agenda() {
       const [hours, minutes] = editAptData.time.split(':').map(Number);
       const appointmentDate = new Date(year, month - 1, day, hours, minutes);
 
-      // Validate working hours if configured
-      if (workingHours) {
-        const standardDay = appointmentDate.getDay();
-        const mappedDay = standardDay === 0 ? 7 : standardDay;
-        const workingDays = workingHours.workingDays || workingHours.days || [];
-        
-        if (workingDays.length > 0 && !workingDays.includes(mappedDay)) {
-          showToast(`El profesional no atiende los días ${days[mappedDay - 1]}.`, 'error');
-          return;
-        }
+      const matchedTreatment = treatments.find(t => t.name === editAptData.type);
+      const finalDuration = effectiveEditAptDuration;
 
-        const timeString = editAptData.time;
-        const isMorning = workingHours.morningActive !== false && timeString >= workingHours.morningStart && timeString <= workingHours.morningEnd;
-        const isAfternoon = workingHours.afternoonActive !== false && timeString >= workingHours.afternoonStart && timeString <= workingHours.afternoonEnd;
-
-        if (!isMorning && !isAfternoon) {
-          showToast(`La hora seleccionada (${timeString}) está fuera de los horarios de atención activos.`, 'error');
-          return;
-        }
+      // 1. Strict Overlap / Collision Prevention: Block if another appointment or treatment is already occupying the slot
+      const collision = checkScheduleCollision(editAptData.date, editAptData.time, finalDuration, appointments, editAptData.id);
+      if (collision.hasConflict) {
+        showToast(collision.message || 'No se pueden agendar 2 turnos en el mismo horario.', 'error');
+        return;
       }
+
+      // 2. Sobre Turno Detection: outside working hours qualifies as Sobre Turno
+      const outsideCheck = checkIsOutsideWorkingHours(editAptData.date, editAptData.time, workingHours, finalDuration);
+      const isOverturn = Boolean(editAptData.manualOverturn ? editAptData.isOverturn : (editAptData.isOverturn || outsideCheck.isOutside));
+      const endTime = calculateEndTime(editAptData.time, finalDuration);
 
       await updateDoc(doc(db, 'appointments', editAptData.id), {
         date: editAptData.date,
         time: editAptData.time,
+        endTime,
+        duration: finalDuration,
+        isOverturn,
+        isOverturnTag: isOverturn ? 'Sobre Turno' : null,
         type: editAptData.type,
+        treatment: editAptData.type,
+        treatmentId: matchedTreatment?.id || '',
         notes: editAptData.notes || '',
         startTime: appointmentDate,
         updatedAt: serverTimestamp()
       });
 
       setIsEditModalOpen(false);
-      showToast('Fecha y hora del turno actualizadas correctamente');
+      showToast(isOverturn ? '⚡ Turno actualizado con etiqueta SOBRE TURNO' : 'Fecha y hora del turno actualizadas correctamente', 'success');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `appointments/${editAptData.id}`);
     }
   };
 
-  const filteredPatients = patients
-    .filter(p => {
-      const term = searchTerm.toLowerCase();
-      return (
-        p.name?.toLowerCase().includes(term) ||
-        p.firstName?.toLowerCase().includes(term) ||
-        p.lastName?.toLowerCase().includes(term) ||
-        p.idNumber?.toLowerCase().includes(term)
-      );
-    })
-    .sort(comparePatientsByLastName);
+  const filteredPatients = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return [...patients].sort(comparePatientsByLastName);
+    return patients
+      .filter(p => {
+        return (
+          p.name?.toLowerCase().includes(term) ||
+          p.firstName?.toLowerCase().includes(term) ||
+          p.lastName?.toLowerCase().includes(term) ||
+          p.idNumber?.toLowerCase().includes(term)
+        );
+      })
+      .sort(comparePatientsByLastName);
+  }, [patients, searchTerm]);
 
   const getCalendarDays = () => {
     const year = viewDate.getFullYear();
@@ -561,20 +725,6 @@ export function Agenda() {
     if (apt?.patientPhone) return apt.patientPhone;
     const patient = patients.find(p => p.id === apt?.patientId);
     return patient?.phone || '';
-  };
-
-  const handleSendWhatsAppReminder = (apt: any, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    
-    const phone = getPatientPhone(apt);
-    const patient = patients.find(p => p.id === apt?.patientId);
-    setWhatsappModalApt({
-      ...apt,
-      patientPhone: phone || apt?.patientPhone || apt?.phone || '',
-      patientFirstName: apt?.patientFirstName || patient?.firstName || getPatientFirstName(apt?.patientName || patient?.name),
-      patientLastName: apt?.patientLastName || patient?.lastName || '',
-      patientName: apt?.patientName || patient?.name || 'Paciente'
-    });
   };
 
   const changeMonth = (offset: number) => {
@@ -646,7 +796,7 @@ export function Agenda() {
             ))}
           </div>
           <button 
-            onClick={() => setIsNewAppointmentOpen(true)}
+            onClick={() => handleOpenNewAppointment()}
             className="px-3 sm:px-4 py-2 bg-primary text-white rounded-xl text-xs font-bold flex items-center gap-1.5 sm:gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-xs uppercase tracking-wider shrink-0"
           >
             <Plus size={15} />
@@ -806,14 +956,23 @@ export function Agenda() {
                               key={apt.id} 
                               className={cn(
                                 "w-full px-1.5 py-0.5 rounded text-[10px] font-bold truncate border flex items-center gap-1",
-                                apt.status === 'pendiente' ? "bg-amber-100/50 text-amber-700 border-amber-200" :
-                                apt.status === 'confirmed' ? "bg-primary-container/30 text-primary border-primary/20" :
-                                apt.status === 'in-session' ? "bg-tertiary-container/30 text-tertiary border-tertiary/20" :
-                                apt.status === 'finished' ? "bg-secondary-container/30 text-secondary border-secondary/20" :
-                                "bg-surface-dim text-on-surface-variant border-outline-variant"
+                                apt.isOverturn && "ring-1 ring-purple-400 bg-purple-50/80 text-purple-900 border-purple-200",
+                                !apt.isOverturn && (
+                                  apt.status === 'pendiente' ? "bg-amber-100/50 text-amber-700 border-amber-200" :
+                                  apt.status === 'confirmed' ? "bg-primary-container/30 text-primary border-primary/20" :
+                                  apt.status === 'in-session' ? "bg-tertiary-container/30 text-tertiary border-tertiary/20" :
+                                  apt.status === 'finished' ? "bg-secondary-container/30 text-secondary border-secondary/20" :
+                                  "bg-surface-dim text-on-surface-variant border-outline-variant"
+                                )
                               )}
                             >
                               <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-current" />
+                              {apt.isOverturn && (
+                                <span className="px-1 py-0.2 rounded bg-purple-200 text-purple-900 text-[8px] font-black uppercase shrink-0 flex items-center gap-0.5">
+                                  <Zap size={7} className="fill-purple-700 text-purple-700" />
+                                  Sobre Turno
+                                </span>
+                              )}
                               {apt.isPackageSession && <Package size={9} className="shrink-0 text-emerald-600" />}
                               <span className="truncate">{apt.patientName}</span>
                             </div>
@@ -863,12 +1022,15 @@ export function Agenda() {
                           .map((apt) => {
                             const [h, m] = apt.time.split(':').map(Number);
                             if (h < startHour || h > hours[hours.length - 1]) return null;
+                            const duration = apt.duration || 30;
+                            const calculatedEnd = apt.endTime || calculateEndTime(apt.time, duration);
                             return (
                               <div
                                 key={apt.id}
                                 onClick={() => handleAppointmentClick(apt)}
                                 className={cn(
-                                  "absolute left-1 right-1 p-2 rounded-lg border-l-4 shadow-sm cursor-pointer z-10 transition-all hover:scale-[1.02] overflow-hidden",
+                                  "absolute left-1 right-1 p-1.5 sm:p-2 rounded-lg border-l-4 shadow-sm cursor-pointer z-10 transition-all hover:scale-[1.02] overflow-hidden",
+                                  apt.isOverturn ? "ring-2 ring-purple-400 bg-purple-50/95 border-l-purple-600 text-purple-950" :
                                   apt.status === 'pendiente' ? "bg-amber-50 border-amber-400 text-amber-700" :
                                   apt.status === 'confirmed' ? "bg-primary-container/20 border-primary text-primary" : 
                                   apt.status === 'in-session' ? "bg-tertiary-container/20 border-tertiary text-tertiary" : 
@@ -877,11 +1039,21 @@ export function Agenda() {
                                 )}
                                 style={{
                                   top: `${((h - startHour) * 60 + m)}px`,
-                                  height: `${(apt.duration || 30) - 2}px`
+                                  height: `${Math.max(28, duration - 2)}px`
                                 }}
                               >
-                                <p className="text-[11px] font-black truncate">{apt.patientName}</p>
-                                <p className="text-[9px] font-bold opacity-70 uppercase truncate">{apt.time}</p>
+                                <div className="flex items-center justify-between gap-1">
+                                  <p className="text-[11px] font-black truncate">{apt.patientName}</p>
+                                  {apt.isOverturn && (
+                                    <span className="px-1.5 py-0.5 rounded bg-purple-200 text-purple-900 text-[8px] font-black uppercase shrink-0 flex items-center gap-0.5 border border-purple-300">
+                                      <Zap size={7} className="fill-purple-700 text-purple-700" />
+                                      Sobre Turno
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[9px] font-bold opacity-75 uppercase truncate">
+                                  {apt.time} - {calculatedEnd} ({duration}m)
+                                </p>
                               </div>
                             );
                           })
@@ -909,6 +1081,8 @@ export function Agenda() {
                   {selectedDateAppointments.map((apt) => {
                     const [h, m] = apt.time.split(':').map(Number);
                     if (h < startHour || h > hours[hours.length - 1]) return null;
+                    const duration = apt.duration || 30;
+                    const calculatedEnd = apt.endTime || calculateEndTime(apt.time, duration);
                     return (
                       <motion.div
                         key={apt.id}
@@ -917,6 +1091,7 @@ export function Agenda() {
                         onClick={() => handleAppointmentClick(apt)}
                         className={cn(
                           "absolute left-2 right-2 sm:left-4 sm:right-8 p-2.5 sm:p-4 rounded-xl border-l-[4px] sm:border-l-[6px] shadow-md cursor-pointer z-10 flex flex-col justify-center gap-1 transition-all hover:translate-x-1",
+                          apt.isOverturn ? "ring-2 ring-purple-400 bg-purple-50/95 border-l-purple-600 text-purple-950 shadow-purple-900/10" :
                           apt.status === 'pendiente' ? "bg-amber-50 border-amber-400 text-amber-700 shadow-amber-950/5" :
                           apt.status === 'confirmed' ? "bg-primary-container/30 border-primary text-primary" : 
                           apt.status === 'in-session' ? "bg-tertiary-container/30 border-tertiary text-tertiary shadow-tertiary/10" : 
@@ -925,11 +1100,21 @@ export function Agenda() {
                         )}
                         style={{
                           top: `${((h - startHour) * 100 + (m / 60) * 100)}px`,
-                          height: `${((apt.duration || 30) / 60) * 100 - 4}px`
+                          height: `${Math.max(48, ((duration) / 60) * 100 - 4)}px`
                         }}
                       >
                         <div className="flex justify-between items-center gap-1">
-                          <span className="text-[10px] sm:text-[12px] font-black uppercase tracking-wider opacity-70 truncate">{apt.time} - {apt.type}</span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] sm:text-[12px] font-black uppercase tracking-wider opacity-80 truncate">
+                              {apt.time} - {calculatedEnd} hs ({duration}m) • {apt.type || apt.treatment}
+                            </span>
+                            {apt.isOverturn && (
+                              <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-purple-200 text-purple-900 border border-purple-300 flex items-center gap-1 shrink-0">
+                                <Zap size={10} className="text-purple-600 fill-purple-600" />
+                                Sobre Turno
+                              </span>
+                            )}
+                          </div>
                           <span className="text-[9px] sm:text-[10px] font-black bg-white/70 px-1.5 py-0.5 rounded capitalize shrink-0">{apt.status}</span>
                         </div>
                         <h4 className="text-[13px] sm:text-[16px] font-black tracking-tight truncate">{apt.patientName}</h4>
@@ -973,13 +1158,7 @@ export function Agenda() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => {
-                    setNewApt(prev => ({
-                      ...prev,
-                      date: formatLocalDate(selectedDate)
-                    }));
-                    setIsNewAppointmentOpen(true);
-                  }}
+                  onClick={() => handleOpenNewAppointment(formatLocalDate(selectedDate))}
                   className="px-3.5 py-2 bg-primary text-white rounded-xl text-xs font-bold flex items-center gap-1.5 hover:bg-primary/90 active:scale-95 transition-all shadow-sm uppercase tracking-wider"
                 >
                   <Plus size={14} />
@@ -997,13 +1176,7 @@ export function Agenda() {
                 </p>
                 <button
                   type="button"
-                  onClick={() => {
-                    setNewApt(prev => ({
-                      ...prev,
-                      date: formatLocalDate(selectedDate)
-                    }));
-                    setIsNewAppointmentOpen(true);
-                  }}
+                  onClick={() => handleOpenNewAppointment(formatLocalDate(selectedDate))}
                   className="mt-4 px-4 py-2 bg-white text-primary border border-primary/30 hover:bg-primary/5 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-xs"
                 >
                   <Plus size={14} />
@@ -1031,14 +1204,20 @@ export function Agenda() {
                       <div>
                         {/* Header: Hora & Estado */}
                         <div className="flex items-center justify-between gap-2 mb-2.5">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="text-xs font-black text-primary bg-primary/10 px-2.5 py-1 rounded-lg border border-primary/20 flex items-center gap-1">
                               <Clock size={12} />
-                              {apt.time} hs
+                              {apt.time} - {apt.endTime || calculateEndTime(apt.time, apt.duration || 30)} hs
                             </span>
                             <span className="text-[11px] font-semibold text-on-surface-variant">
                               ({apt.duration || 30} min)
                             </span>
+                            {apt.isOverturn && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-300 flex items-center gap-1 shadow-xs">
+                                <Zap size={11} className="text-purple-600 fill-purple-600" />
+                                Sobre Turno
+                              </span>
+                            )}
                           </div>
 
                           <span className={cn(
@@ -1066,7 +1245,7 @@ export function Agenda() {
                           <div className="flex items-center gap-1.5 text-xs text-on-surface-variant">
                             <Phone size={12} className={phone ? "text-emerald-600" : "text-on-surface-variant/50"} />
                             {phone ? (
-                              <span className="font-semibold text-on-surface">{phone}</span>
+                              <span className="font-semibold text-on-surface font-mono">{formatArgentinePhoneWithPrefix(phone)}</span>
                             ) : (
                               <span className="text-on-surface-variant/60 italic text-[11px]">Sin teléfono registrado</span>
                             )}
@@ -1092,24 +1271,24 @@ export function Agenda() {
                         )}
                       </div>
 
-                      {/* Barra de Acciones con Botón de WhatsApp */}
+                      {/* Barra de Acciones */}
                       <div className="pt-3 border-t border-outline-variant/60 flex items-center justify-between gap-2 mt-2">
-                        {/* Botón WhatsApp */}
                         <button
                           type="button"
-                          onClick={(e) => handleSendWhatsAppReminder(apt, e)}
-                          title={phone ? `Enviar recordatorio por WhatsApp a ${apt.patientName}` : 'Paciente sin teléfono registrado'}
-                          className={cn(
-                            "px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs active:scale-95 cursor-pointer",
-                            phone 
-                              ? "bg-emerald-600 hover:bg-emerald-700 text-white" 
-                              : "bg-emerald-50 text-emerald-700/60 border border-emerald-200 hover:bg-emerald-100"
-                          )}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const phone = getAppointmentPatientPhone(apt);
+                            setReminderModalApt({
+                              ...apt,
+                              patientPhone: phone
+                            });
+                          }}
+                          title="Enviar recordatorio manual por WhatsApp"
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
                         >
-                          <MessageCircle size={14} className="shrink-0" />
-                          <span>Recordatorio WhatsApp</span>
+                          <MessageCircle size={13} />
+                          <span>Recordatorio</span>
                         </button>
-
                         <div className="flex items-center gap-1">
                           {apt.status === 'in-session' && (
                             <button
@@ -1176,18 +1355,15 @@ export function Agenda() {
                     )}
                   >
                     <div className="flex justify-between items-start mb-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[13px] font-black text-primary bg-primary/5 px-2 py-0.5 rounded border border-primary/10">
-                          {apt.time}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[12px] font-black text-primary bg-primary/5 px-2 py-0.5 rounded border border-primary/10">
+                          {apt.time} - {apt.endTime || calculateEndTime(apt.time, apt.duration || 30)}
                         </span>
-                        <button
-                          type="button"
-                          onClick={(e) => handleSendWhatsAppReminder(apt, e)}
-                          title="Enviar recordatorio por WhatsApp"
-                          className="p-1 rounded-md text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
-                        >
-                          <MessageCircle size={13} />
-                        </button>
+                        {apt.isOverturn && (
+                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-300 flex items-center gap-0.5">
+                            <Zap size={9} className="text-purple-600 fill-purple-600" /> ST
+                          </span>
+                        )}
                         <button
                           type="button"
                           onClick={(e) => handleOpenEditAppointment(apt, e)}
@@ -1225,7 +1401,7 @@ export function Agenda() {
                     No hay turnos agendados<br />para este día
                   </p>
                   <button 
-                    onClick={() => setIsNewAppointmentOpen(true)}
+                    onClick={() => handleOpenNewAppointment(formatLocalDate(selectedDate))}
                     className="mt-6 text-[10px] font-black text-primary uppercase underline tracking-widest"
                   >
                     Agendar Primero
@@ -1236,7 +1412,7 @@ export function Agenda() {
             
             <div className="p-4 border-t border-outline-variant bg-surface-dim shrink-0">
               <button 
-                onClick={() => setIsNewAppointmentOpen(true)}
+                onClick={() => handleOpenNewAppointment(formatLocalDate(selectedDate))}
                 className="w-full py-3 bg-primary text-white rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:shadow-primary/40 active:scale-95 transition-all"
               >
                 <Clock size={16} />
@@ -1258,10 +1434,18 @@ export function Agenda() {
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Paciente</label>
               <button 
                 type="button"
-                onClick={() => setIsCreatingNewPatient(!isCreatingNewPatient)}
-                className="text-[10px] text-primary font-bold uppercase underline tracking-tighter"
+                onClick={() => {
+                  const nextState = !isCreatingNewPatient;
+                  setIsCreatingNewPatient(nextState);
+                  if (nextState) {
+                    setIsPatientDropdownOpen(false);
+                  } else {
+                    setIsPatientDropdownOpen(true);
+                  }
+                }}
+                className="text-[10px] text-primary font-bold uppercase underline tracking-tighter cursor-pointer"
               >
-                {isCreatingNewPatient ? 'Buscar Existente' : 'Nuevo Paciente'}
+                {isCreatingNewPatient ? 'Buscar Existente' : '+ Nuevo Paciente'}
               </button>
             </div>
             
@@ -1310,20 +1494,11 @@ export function Agenda() {
                   </div>
                 </div>
 
-                <div className="flex items-start gap-1.5 px-2.5 py-1.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 rounded-md text-[11px] text-emerald-900 dark:text-emerald-200">
-                  <span className="font-semibold shrink-0">💬 Recordatorio:</span>
-                  <span>
-                    El mensaje de WhatsApp saludará solo con el <b>Nombre</b> (ej: <i>"Hola {newPatientData.firstName || 'Nombre'}..."</i>).
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <input 
-                    type="text" 
-                    placeholder="Teléfono"
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <PhoneInputArgentina
                     value={newPatientData.phone}
-                    onChange={(e) => setNewPatientData({ ...newPatientData, phone: e.target.value })}
-                    className="w-full px-3 py-1.5 bg-white border border-outline-variant rounded text-[13px] outline-none focus:ring-1 focus:ring-primary"
+                    onChange={(val) => setNewPatientData({ ...newPatientData, phone: val })}
+                    placeholder="Área + Número"
                   />
                   <input 
                     type="text" 
@@ -1344,60 +1519,114 @@ export function Agenda() {
                 </div>
               </div>
             ) : (
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant" />
-                <input 
-                  type="text" 
-                  placeholder="Buscar paciente por nombre..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]"
-                />
-                {searchTerm && !newApt.patientId && (
-                  <div className="absolute top-full left-0 right-0 z-50 bg-white border border-outline-variant rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
-                    {filteredPatients.map(p => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => {
-                          setNewApt({
-                            ...newApt,
-                            patientId: p.id,
-                            patientName: p.name,
-                            patientFirstName: p.firstName || getPatientFirstName(p.name),
-                            patientLastName: p.lastName || ''
-                          });
-                          setSearchTerm(p.name);
-                        }}
-                        className="w-full px-4 py-2 text-left text-[12px] hover:bg-surface transition-colors border-b last:border-0 border-outline-variant flex items-center justify-between"
-                      >
-                        <div>
-                          <span className="font-bold text-on-surface">
-                            {p.lastName || getPatientLastName(p) ? (
-                              <>
-                                <span className="font-extrabold">{p.lastName || getPatientLastName(p)}</span>
-                                {(p.firstName || getPatientFirstName(p)) && (
-                                  <span className="font-normal text-on-surface-variant">, {p.firstName || getPatientFirstName(p)}</span>
-                                )}
-                              </>
-                            ) : (
-                              p.name
-                            )}
-                          </span>
-                          {p.idNumber && (
-                            <span className="ml-2 font-mono text-[11px] text-on-surface-variant">
-                              DNI: {p.idNumber}
-                            </span>
-                          )}
+              <div className="relative" ref={patientSearchRef}>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant pointer-events-none" />
+                  <input 
+                    type="text" 
+                    placeholder="Buscar paciente por nombre o DNI..."
+                    value={searchTerm}
+                    onFocus={() => setIsPatientDropdownOpen(true)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSearchTerm(val);
+                      setIsPatientDropdownOpen(true);
+                      if (newApt.patientId) {
+                        setNewApt(prev => ({
+                          ...prev,
+                          patientId: '',
+                          patientName: '',
+                          patientFirstName: '',
+                          patientLastName: ''
+                        }));
+                        setSelectedPatientStats(null);
+                        setPatientPackages([]);
+                      }
+                    }}
+                    className={cn(
+                      "w-full pl-9 pr-9 py-2 bg-surface border rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px] transition-all",
+                      newApt.patientId ? "border-primary font-bold text-on-surface bg-primary/5" : "border-outline-variant"
+                    )}
+                  />
+                  {(searchTerm || newApt.patientId) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchTerm('');
+                        setNewApt(prev => ({
+                          ...prev,
+                          patientId: '',
+                          patientName: '',
+                          patientFirstName: '',
+                          patientLastName: ''
+                        }));
+                        setSelectedPatientStats(null);
+                        setPatientPackages([]);
+                        setIsPatientDropdownOpen(true);
+                      }}
+                      title="Borrar paciente seleccionado"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-on-surface-variant hover:text-on-surface hover:bg-surface-bright rounded-full transition-colors cursor-pointer"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                {isPatientDropdownOpen && !newApt.patientId && (
+                  <div className="absolute top-full left-0 right-0 z-50 bg-white border border-outline-variant rounded-xl shadow-xl mt-1.5 max-h-52 overflow-y-auto divide-y divide-outline-variant">
+                    {filteredPatients.length > 0 ? (
+                      <>
+                        <div className="px-3 py-1.5 bg-surface-bright text-[10px] font-black uppercase tracking-wider text-on-surface-variant flex items-center justify-between sticky top-0 z-10 border-b border-outline-variant">
+                          <span>Pacientes ({filteredPatients.length})</span>
+                          <span className="font-medium text-[9px] opacity-70">Seleccione uno de la lista</span>
                         </div>
-                        <span className="text-[10px] text-on-surface-variant bg-surface px-1.5 py-0.5 rounded border border-outline-variant">
-                          Seleccionar
-                        </span>
-                      </button>
-                    ))}
-                    {filteredPatients.length === 0 && (
+                        {filteredPatients.slice(0, 30).map(p => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => {
+                              setNewApt(prev => ({
+                                ...prev,
+                                patientId: p.id,
+                                patientName: p.name,
+                                patientFirstName: p.firstName || getPatientFirstName(p.name),
+                                patientLastName: p.lastName || ''
+                              }));
+                              setSearchTerm(p.name);
+                              setIsPatientDropdownOpen(false);
+                            }}
+                            className="w-full px-3.5 py-2.5 text-left text-[12px] hover:bg-primary/5 active:bg-primary/10 transition-colors flex items-center justify-between group cursor-pointer"
+                          >
+                            <div className="truncate pr-2">
+                              <span className="font-bold text-on-surface group-hover:text-primary transition-colors">
+                                {p.lastName || getPatientLastName(p) ? (
+                                  <>
+                                    <span className="font-extrabold">{p.lastName || getPatientLastName(p)}</span>
+                                    {(p.firstName || getPatientFirstName(p)) && (
+                                      <span className="font-normal text-on-surface-variant">, {p.firstName || getPatientFirstName(p)}</span>
+                                    )}
+                                  </>
+                                ) : (
+                                  p.name
+                                )}
+                              </span>
+                              {p.idNumber && (
+                                <span className="ml-2 font-mono text-[11px] text-on-surface-variant bg-surface px-1.5 py-0.5 rounded border border-outline-variant">
+                                  DNI: {p.idNumber}
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded opacity-80 group-hover:opacity-100 transition-opacity shrink-0">
+                              Seleccionar
+                            </span>
+                          </button>
+                        ))}
+                      </>
+                    ) : (
                       <div className="p-4 text-center">
-                        <p className="text-[11px] text-on-surface-variant mb-2">No se encontró el paciente</p>
+                        <p className="text-[11px] text-on-surface-variant mb-2 font-medium">
+                          No se encontró ningún paciente {searchTerm ? `con "${searchTerm}"` : 'registrado'}
+                        </p>
                         <button 
                           type="button"
                           onClick={() => {
@@ -1409,13 +1638,45 @@ export function Agenda() {
                               lastName: parsed.lastName,
                               name: searchTerm
                             });
+                            setIsPatientDropdownOpen(false);
                           }}
-                          className="text-[11px] text-primary font-bold underline uppercase"
+                          className="text-xs text-primary font-bold hover:underline uppercase inline-flex items-center gap-1 cursor-pointer"
                         >
-                          Crear "{searchTerm}"
+                          <Plus size={13} />
+                          Crear nuevo paciente {searchTerm ? `"${searchTerm}"` : ''}
                         </button>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {newApt.patientId && (
+                  <div className="mt-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-xs animate-in fade-in slide-in-from-top-1">
+                    <div className="flex items-center gap-2 truncate">
+                      <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                      <span className="text-emerald-950 truncate">
+                        Paciente: <strong className="font-bold">{newApt.patientName}</strong>
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchTerm('');
+                        setNewApt(prev => ({
+                          ...prev,
+                          patientId: '',
+                          patientName: '',
+                          patientFirstName: '',
+                          patientLastName: ''
+                        }));
+                        setSelectedPatientStats(null);
+                        setPatientPackages([]);
+                        setIsPatientDropdownOpen(true);
+                      }}
+                      className="text-[11px] text-emerald-800 hover:text-emerald-950 font-bold underline shrink-0 ml-2 cursor-pointer"
+                    >
+                      Cambiar
+                    </button>
                   </div>
                 )}
               </div>
@@ -1445,7 +1706,6 @@ export function Agenda() {
                 </div>
               </div>
             )}
-            {!isCreatingNewPatient && <input type="hidden" required value={newApt.patientId} />}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
@@ -1457,44 +1717,187 @@ export function Agenda() {
                 className={cn(
                   "w-full px-3 py-2 bg-surface border rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]",
                   workingHours && newApt.date && !(workingHours.workingDays || workingHours.days || []).includes(new Date(newApt.date + 'T00:00:00').getDay() === 0 ? 7 : new Date(newApt.date + 'T00:00:00').getDay()) 
-                    ? "border-error focus:ring-error/20" 
+                    ? "border-amber-400 focus:ring-amber-500/20" 
                     : "border-outline-variant"
                 )}
                 value={newApt.date}
                 onChange={(e) => setNewApt({ ...newApt, date: e.target.value })}
               />
               {workingHours && newApt.date && !(workingHours.workingDays || workingHours.days || []).includes(new Date(newApt.date + 'T00:00:00').getDay() === 0 ? 7 : new Date(newApt.date + 'T00:00:00').getDay()) && (
-                <p className="text-[9px] text-error font-bold flex items-center gap-1">
-                  <AlertTriangle size={10} /> No laborable
+                <p className="text-[10px] text-purple-700 font-bold flex items-center gap-1">
+                  <Zap size={10} className="fill-purple-700" /> Día no habitual (Sobre Turno)
                 </p>
               )}
             </div>
             <div className="space-y-2">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Hora</label>
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Hora de Inicio</label>
               <input 
                 type="time" 
                 required
                 className={cn(
                   "w-full px-3 py-2 bg-surface border rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]",
-                  workingHours && newApt.time && !(
-                    (workingHours.morningActive !== false && newApt.time >= workingHours.morningStart && newApt.time <= workingHours.morningEnd) ||
-                    (workingHours.afternoonActive !== false && newApt.time >= workingHours.afternoonStart && newApt.time <= workingHours.afternoonEnd)
-                  )
-                    ? "border-error focus:ring-error/20" 
-                    : "border-outline-variant"
+                  newAptCollision.hasConflict ? "border-red-500 ring-1 ring-red-500/30" : "border-outline-variant"
                 )}
                 value={newApt.time}
                 onChange={(e) => setNewApt({ ...newApt, time: e.target.value })}
               />
-              {workingHours && (
-                <div className="text-[8px] text-on-surface-variant flex flex-col gap-0.5 mt-1 opacity-70">
-                  {workingHours.morningActive !== false && <span className="flex items-center gap-1"><Clock size={8} /> Mañana: {workingHours.morningStart} - {workingHours.morningEnd}</span>}
-                  {workingHours.afternoonActive !== false && <span className="flex items-center gap-1"><Clock size={8} /> Tarde: {workingHours.afternoonStart} - {workingHours.afternoonEnd}</span>}
-                  {workingHours.morningActive === false && workingHours.afternoonActive === false && <span className="text-error">Sin turnos activos</span>}
-                </div>
-              )}
+              <div className="text-[10px] text-on-surface-variant font-bold flex items-center justify-between">
+                <span>Finaliza: <strong className="text-primary">{calculateEndTime(newApt.time, effectiveNewAptDuration)} hs</strong></span>
+                <span className="text-on-surface-variant/70">({effectiveNewAptDuration} min)</span>
+              </div>
             </div>
           </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Tratamiento</label>
+              {newApt.type && (
+                <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-md">
+                  Duración requerida: {effectiveNewAptDuration} min
+                </span>
+              )}
+            </div>
+            <select 
+              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]"
+              value={newApt.type}
+              onChange={(e) => {
+                const selected = e.target.value;
+                const matched = treatments.find(t => t.name === selected);
+                setNewApt(prev => ({
+                  ...prev,
+                  type: selected,
+                  duration: matched?.duration ? Number(matched.duration) : (prev.duration || 30)
+                }));
+              }}
+            >
+              <option value="">Seleccione tratamiento...</option>
+              {treatments.map(t => (
+                <option key={t.id} value={t.name}>
+                  {t.name} ({t.duration || 30} min) {t.cost ? `— $${Number(t.cost).toLocaleString()}` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* ALERTA DE SUPERPOSICIÓN / COLISIÓN DE TURNOS */}
+          {newAptCollision.hasConflict && (
+            <div className="p-3.5 bg-red-50 border-2 border-red-300 rounded-xl space-y-1.5 text-red-950 animate-pulse">
+              <div className="flex items-center gap-2 font-black text-red-700 text-xs">
+                <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                <span>HORARIO BLOQUEADO — SUPERPOSICIÓN DE TURNOS</span>
+              </div>
+              <p className="text-[12px] font-semibold text-red-900 leading-snug">
+                {newAptCollision.message}
+              </p>
+              <p className="text-[10px] text-red-700 font-bold uppercase tracking-wider">
+                No se pueden agendar 2 turnos en el mismo horario. Cada tratamiento requiere su tiempo completo.
+              </p>
+            </div>
+          )}
+
+          {/* SUGERENCIAS DE HORARIOS LIBRES */}
+          {newAptCollision.hasConflict && newAptSuggestedSlots.length > 0 && (
+            <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black text-emerald-900 uppercase tracking-wider flex items-center gap-1.5">
+                  <CheckCircle2 size={13} className="text-emerald-600" />
+                  Horarios disponibles sin superposición ({effectiveNewAptDuration} min):
+                </span>
+                <span className="text-[10px] text-emerald-700 font-bold">Clic para seleccionar</span>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {newAptSuggestedSlots.slice(0, 8).map(slot => (
+                  <button
+                    key={slot.time}
+                    type="button"
+                    onClick={() => setNewApt(prev => ({ ...prev, time: slot.time }))}
+                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs flex items-center gap-1"
+                  >
+                    <span>{slot.time} hs</span>
+                    {slot.isOverturn && <span className="text-[9px] text-purple-700 font-black">⚡ ST</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* LISTADO DE TURNOS BLOQUEADOS EN EL DÍA */}
+          {newAptOccupiedSlots.length > 0 && (
+            <div className="p-2.5 bg-surface-bright rounded-xl border border-outline-variant space-y-1.5">
+              <div className="flex items-center justify-between text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">
+                <span className="flex items-center gap-1.5">
+                  <CalendarClock size={13} className="text-primary" />
+                  Turnos agendados en esta fecha ({newAptOccupiedSlots.length})
+                </span>
+                <span className="text-[10px] font-medium opacity-70">Horarios bloqueados</span>
+              </div>
+              <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
+                {newAptOccupiedSlots.map((slot) => {
+                  const isConflictSlot = newAptCollision.hasConflict && newAptCollision.conflictingAppointment?.id === slot.id;
+                  return (
+                    <div
+                      key={slot.id}
+                      className={cn(
+                        "px-2.5 py-1 rounded-lg text-[11px] flex items-center justify-between border",
+                        isConflictSlot
+                          ? "bg-red-100/90 border-red-300 text-red-950 font-bold"
+                          : "bg-white border-outline-variant text-on-surface"
+                      )}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <span className={cn("font-mono font-bold", isConflictSlot ? "text-red-700" : "text-primary")}>
+                          {slot.time} - {slot.endTime} hs
+                        </span>
+                        <span className="truncate">{slot.patientName}</span>
+                        <span className="text-[10px] text-on-surface-variant font-medium">({slot.treatment})</span>
+                      </div>
+                      {slot.isOverturn && (
+                        <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.2 rounded bg-purple-100 text-purple-900 shrink-0">
+                          Sobre Turno
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* AVISO DE SOBRE TURNO (FUERA DE HORARIO HABITUAL) */}
+          {newAptOutsideCheck.isOutside && (
+            <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl space-y-1 text-purple-950">
+              <div className="flex items-center justify-between">
+                <span className="font-black flex items-center gap-1.5 text-purple-900 uppercase tracking-wide text-[11px]">
+                  <Zap size={14} className="text-purple-600 fill-purple-600 shrink-0" />
+                  Turno fuera de horario habitual
+                </span>
+                <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-purple-200 text-purple-900 border border-purple-300">
+                  Sobre Turno
+                </span>
+              </div>
+              <p className="text-[11px] text-purple-800">
+                {newAptOutsideCheck.reason}. Se registrará con la etiqueta oficial de <strong>SOBRE TURNO</strong>.
+              </p>
+            </div>
+          )}
+
+          {/* Toggle manual de Sobre Turno */}
+          <label className="flex items-center gap-2.5 p-2.5 bg-purple-50/50 hover:bg-purple-50 rounded-xl border border-purple-200 cursor-pointer select-none text-xs font-bold text-purple-950 transition-colors">
+            <input
+              type="checkbox"
+              checked={isNewAptOverturn}
+              onChange={(e) => setNewApt(prev => ({
+                ...prev,
+                isOverturn: e.target.checked,
+                manualOverturn: true
+              }))}
+              className="rounded border-purple-300 text-purple-600 focus:ring-purple-500 w-4 h-4 cursor-pointer"
+            />
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Zap size={13} className="text-purple-600 fill-purple-600" />
+              <span>Marcar como <strong>Sobre Turno</strong> (Turno de excepción extraordinario)</span>
+            </div>
+          </label>
 
           {/* Selector de Sesión de Paquete si el paciente cuenta con paquetes activos */}
           {!isCreatingNewPatient && patientPackages.some(p => p.status === 'active' && (p.remainingSessions || 0) > 0) && (
@@ -1555,23 +1958,9 @@ export function Agenda() {
           )}
 
           <div className="space-y-2">
-            <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Tratamiento</label>
-            <select 
-              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px]"
-              value={newApt.type}
-              onChange={(e) => setNewApt({ ...newApt, type: e.target.value })}
-            >
-              <option value="">Seleccione...</option>
-              {treatments.map(t => (
-                <option key={t.id} value={t.name}>{t.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="space-y-2">
             <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Notas</label>
             <textarea 
-              rows={3}
+              rows={2}
               placeholder="Agregar observaciones..."
               className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary outline-none text-[13px] resize-none"
               value={newApt.notes}
@@ -1583,16 +1972,35 @@ export function Agenda() {
             <button 
               type="button"
               onClick={() => setIsNewAppointmentOpen(false)}
-              className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors"
+              className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-wider"
             >
               CANCELAR
             </button>
             <button 
               type="submit"
-              disabled={!isCreatingNewPatient && !newApt.patientId}
-              className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors disabled:opacity-50"
+              disabled={(!isCreatingNewPatient && !newApt.patientId) || newAptCollision.hasConflict}
+              className={cn(
+                "flex-1 px-4 py-2.5 text-white text-[12px] font-bold rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider",
+                newAptCollision.hasConflict
+                  ? "bg-red-600 opacity-60 cursor-not-allowed"
+                  : isNewAptOverturn
+                  ? "bg-purple-700 hover:bg-purple-800"
+                  : "bg-primary hover:bg-primary/90"
+              )}
             >
-              GUARDAR TURNO
+              {newAptCollision.hasConflict ? (
+                <>
+                  <AlertTriangle size={14} />
+                  HORARIO OCUPADO
+                </>
+              ) : isNewAptOverturn ? (
+                <>
+                  <Zap size={14} className="fill-white" />
+                  GUARDAR SOBRE TURNO
+                </>
+              ) : (
+                'GUARDAR TURNO'
+              )}
             </button>
           </div>
         </form>
@@ -1623,24 +2031,33 @@ export function Agenda() {
               </div>
             </div>
 
-            {/* Fecha y Hora con botón de edición y WhatsApp */}
+            {/* Fecha y Hora con botón de edición */}
             <div className="p-4 bg-surface-bright rounded-xl border border-outline-variant flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center font-bold shrink-0">
                   <CalendarClock size={18} />
                 </div>
                 <div>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Fecha y Hora</p>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Fecha y Horario Bloqueado</p>
                   <p className="text-[13px] font-bold text-on-surface">
-                    {selectedAppointment.date} a las {selectedAppointment.time} hs
+                    {selectedAppointment.date} de {selectedAppointment.time} a {selectedAppointment.endTime || calculateEndTime(selectedAppointment.time, selectedAppointment.duration || 30)} hs
+                  </p>
+                  <p className="text-[11px] font-semibold text-on-surface-variant">
+                    Duración: {selectedAppointment.duration || 30} minutos
                   </p>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => handleSendWhatsAppReminder(selectedAppointment)}
-                  className="px-3 py-2 bg-emerald-600 text-white hover:bg-emerald-700 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm"
+                  onClick={() => {
+                    const phone = getAppointmentPatientPhone(selectedAppointment);
+                    setReminderModalApt({
+                      ...selectedAppointment,
+                      patientPhone: phone
+                    });
+                  }}
+                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm cursor-pointer"
                 >
                   <MessageCircle size={14} />
                   Recordatorio WhatsApp
@@ -1648,13 +2065,30 @@ export function Agenda() {
                 <button
                   type="button"
                   onClick={() => handleOpenEditAppointment(selectedAppointment)}
-                  className="px-3 py-2 bg-primary text-white hover:bg-primary/90 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm"
+                  className="px-3 py-2 bg-primary text-white hover:bg-primary/90 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm cursor-pointer"
                 >
                   <Edit2 size={13} />
                   Editar Fecha / Hora
                 </button>
               </div>
             </div>
+
+            {selectedAppointment.isOverturn && (
+              <div className="p-3.5 bg-purple-50 rounded-xl border border-purple-200 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-purple-200 text-purple-900 flex items-center justify-center shrink-0">
+                    <Zap size={16} className="fill-purple-700 text-purple-700" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-purple-900">Turno de Excepción</p>
+                    <p className="text-[12px] font-bold text-purple-950">Atención registrada con etiqueta <strong>Sobre Turno</strong> (fuera del horario habitual)</p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-black text-purple-900 bg-white px-2.5 py-1 rounded-md border border-purple-300 shadow-2xs shrink-0">
+                  ⚡ SOBRE TURNO
+                </span>
+              </div>
+            )}
 
             {selectedAppointment.isPackageSession && (
               <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between">
@@ -1802,37 +2236,47 @@ export function Agenda() {
             </div>
             <div>
               <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
-                Nueva Hora
+                Hora de Inicio
               </label>
               <input
                 type="time"
                 required
                 value={editAptData.time}
                 onChange={(e) => setEditAptData({ ...editAptData, time: e.target.value })}
-                className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
+                className={cn(
+                  "w-full px-3 py-2 bg-surface rounded-lg border text-sm font-bold text-on-surface focus:outline-none focus:border-primary",
+                  editAptCollision.hasConflict ? "border-red-500 ring-1 ring-red-500/30" : "border-outline-variant"
+                )}
               />
+              <div className="text-[10px] text-on-surface-variant font-bold flex items-center justify-between mt-1">
+                <span>Finaliza: <strong className="text-primary">{calculateEndTime(editAptData.time, effectiveEditAptDuration)} hs</strong></span>
+                <span className="text-on-surface-variant/70">({effectiveEditAptDuration} min)</span>
+              </div>
             </div>
           </div>
 
-          {workingHours && (
-            <div className="p-3 bg-surface-dim rounded-lg text-[11px] text-on-surface-variant space-y-1">
-              <p className="font-bold flex items-center gap-1.5">
-                <Clock size={12} /> Horarios de atención:
-              </p>
-              <p className="text-[10px]">
-                {workingHours.morningActive !== false && `Mañana: ${workingHours.morningStart || '08:00'} - ${workingHours.morningEnd || '12:00'} `}
-                {workingHours.afternoonActive !== false && `| Tarde: ${workingHours.afternoonStart || '14:00'} - ${workingHours.afternoonEnd || '18:00'}`}
-              </p>
-            </div>
-          )}
-
           <div>
-            <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
-              Tratamiento
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                Tratamiento
+              </label>
+              {editAptData.type && (
+                <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-md">
+                  Duración requerida: {effectiveEditAptDuration} min
+                </span>
+              )}
+            </div>
             <select
               value={editAptData.type}
-              onChange={(e) => setEditAptData({ ...editAptData, type: e.target.value })}
+              onChange={(e) => {
+                const selected = e.target.value;
+                const matched = treatments.find(t => t.name === selected);
+                setEditAptData(prev => ({
+                  ...prev,
+                  type: selected,
+                  duration: matched?.duration ? Number(matched.duration) : (prev.duration || 30)
+                }));
+              }}
               className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
             >
               {treatments.length > 0 ? (
@@ -1844,6 +2288,126 @@ export function Agenda() {
               )}
             </select>
           </div>
+
+          {/* ALERTA DE SUPERPOSICIÓN / COLISIÓN DE TURNOS */}
+          {editAptCollision.hasConflict && (
+            <div className="p-3.5 bg-red-50 border-2 border-red-300 rounded-xl space-y-1.5 text-red-950 animate-pulse">
+              <div className="flex items-center gap-2 font-black text-red-700 text-xs">
+                <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                <span>HORARIO BLOQUEADO — SUPERPOSICIÓN DE TURNOS</span>
+              </div>
+              <p className="text-[12px] font-semibold text-red-900 leading-snug">
+                {editAptCollision.message}
+              </p>
+              <p className="text-[10px] text-red-700 font-bold uppercase tracking-wider">
+                No se pueden agendar 2 turnos en el mismo horario. Cada tratamiento requiere su tiempo completo.
+              </p>
+            </div>
+          )}
+
+          {/* SUGERENCIAS DE HORARIOS LIBRES */}
+          {editAptCollision.hasConflict && editAptSuggestedSlots.length > 0 && (
+            <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black text-emerald-900 uppercase tracking-wider flex items-center gap-1.5">
+                  <CheckCircle2 size={13} className="text-emerald-600" />
+                  Horarios disponibles sin superposición ({effectiveEditAptDuration} min):
+                </span>
+                <span className="text-[10px] text-emerald-700 font-bold">Clic para seleccionar</span>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {editAptSuggestedSlots.slice(0, 8).map(slot => (
+                  <button
+                    key={slot.time}
+                    type="button"
+                    onClick={() => setEditAptData(prev => ({ ...prev, time: slot.time }))}
+                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs flex items-center gap-1"
+                  >
+                    <span>{slot.time} hs</span>
+                    {slot.isOverturn && <span className="text-[9px] text-purple-700 font-black">⚡ ST</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* LISTADO DE TURNOS BLOQUEADOS EN EL DÍA */}
+          {editAptOccupiedSlots.length > 0 && (
+            <div className="p-2.5 bg-surface-bright rounded-xl border border-outline-variant space-y-1.5">
+              <div className="flex items-center justify-between text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">
+                <span className="flex items-center gap-1.5">
+                  <CalendarClock size={13} className="text-primary" />
+                  Turnos agendados en esta fecha ({editAptOccupiedSlots.length})
+                </span>
+                <span className="text-[10px] font-medium opacity-70">Horarios bloqueados</span>
+              </div>
+              <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
+                {editAptOccupiedSlots.map((slot) => {
+                  const isConflictSlot = editAptCollision.hasConflict && editAptCollision.conflictingAppointment?.id === slot.id;
+                  return (
+                    <div
+                      key={slot.id}
+                      className={cn(
+                        "px-2.5 py-1 rounded-lg text-[11px] flex items-center justify-between border",
+                        isConflictSlot
+                          ? "bg-red-100/90 border-red-300 text-red-950 font-bold"
+                          : "bg-white border-outline-variant text-on-surface"
+                      )}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <span className={cn("font-mono font-bold", isConflictSlot ? "text-red-700" : "text-primary")}>
+                          {slot.time} - {slot.endTime} hs
+                        </span>
+                        <span className="truncate">{slot.patientName}</span>
+                        <span className="text-[10px] text-on-surface-variant font-medium">({slot.treatment})</span>
+                      </div>
+                      {slot.isOverturn && (
+                        <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.2 rounded bg-purple-100 text-purple-900 shrink-0">
+                          Sobre Turno
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* AVISO DE SOBRE TURNO (FUERA DE HORARIO HABITUAL) */}
+          {editAptOutsideCheck.isOutside && (
+            <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl space-y-1 text-purple-950">
+              <div className="flex items-center justify-between">
+                <span className="font-black flex items-center gap-1.5 text-purple-900 uppercase tracking-wide text-[11px]">
+                  <Zap size={14} className="text-purple-600 fill-purple-600 shrink-0" />
+                  Reprogramado fuera de horario habitual
+                </span>
+                <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-purple-200 text-purple-900 border border-purple-300">
+                  Sobre Turno
+                </span>
+              </div>
+              <p className="text-[11px] text-purple-800">
+                {editAptOutsideCheck.reason}. Se guardará con la etiqueta oficial de <strong>SOBRE TURNO</strong>.
+              </p>
+            </div>
+          )}
+
+          {/* Toggle manual de Sobre Turno */}
+          <label className="flex items-center gap-2.5 p-2.5 bg-purple-50/50 hover:bg-purple-50 rounded-xl border border-purple-200 cursor-pointer select-none text-xs font-bold text-purple-950 transition-colors">
+            <input
+              type="checkbox"
+              checked={isEditAptOverturn}
+              onChange={(e) => setEditAptData(prev => ({
+                ...prev,
+                isOverturn: e.target.checked,
+                manualOverturn: true
+              }))}
+              className="rounded border-purple-300 text-purple-600 focus:ring-purple-500 w-4 h-4 cursor-pointer"
+            />
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Zap size={13} className="text-purple-600 fill-purple-600" />
+              <span>Marcar como <strong>Sobre Turno</strong> (Turno de excepción extraordinario)</span>
+            </div>
+          </label>
 
           <div>
             <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">
@@ -1868,26 +2432,36 @@ export function Agenda() {
             </button>
             <button
               type="submit"
-              className="flex-1 px-4 py-2 bg-primary text-white text-[12px] font-bold rounded-lg hover:bg-primary/90 shadow-sm transition-colors uppercase tracking-widest flex items-center justify-center gap-2"
+              disabled={editAptCollision.hasConflict}
+              className={cn(
+                "flex-1 px-4 py-2.5 text-white text-[12px] font-bold rounded-lg shadow-sm transition-all uppercase tracking-widest flex items-center justify-center gap-2",
+                editAptCollision.hasConflict
+                  ? "bg-red-600 opacity-60 cursor-not-allowed"
+                  : isEditAptOverturn
+                  ? "bg-purple-700 hover:bg-purple-800"
+                  : "bg-primary hover:bg-primary/90"
+              )}
             >
-              <CheckCircle2 size={16} />
-              Guardar Cambios
+              {editAptCollision.hasConflict ? (
+                <>
+                  <AlertTriangle size={15} />
+                  HORARIO OCUPADO
+                </>
+              ) : isEditAptOverturn ? (
+                <>
+                  <Zap size={15} className="fill-white" />
+                  Guardar Sobre Turno
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={16} />
+                  Guardar Cambios
+                </>
+              )}
             </button>
           </div>
         </form>
       </Modal>
-
-      {/* WhatsApp Customization & Sending Modal */}
-      {whatsappModalApt && (
-        <WhatsAppReminderModal
-          isOpen={Boolean(whatsappModalApt)}
-          onClose={() => setWhatsappModalApt(null)}
-          appointment={whatsappModalApt}
-          onMessageSent={(_aptId, _msg, method) => {
-            showToast(`Recordatorio de WhatsApp procesado con éxito (${method === 'meta_api' ? 'API' : 'Web/Móvil'})`, 'success');
-          }}
-        />
-      )}
 
       {/* Modal Historia Clínica — Flujo Automático In-Session */}
       {clinicalHistoryAppointment && (
@@ -1904,6 +2478,20 @@ export function Agenda() {
           treatments={treatments}
           onSavedAndFinished={() => {
             // Turno finalizado y guardado
+          }}
+        />
+      )}
+
+      {/* Modal Recordatorio WhatsApp Manual */}
+      {reminderModalApt && (
+        <ReminderModal
+          isOpen={Boolean(reminderModalApt)}
+          onClose={() => setReminderModalApt(null)}
+          appointment={reminderModalApt}
+          clinicName={profile?.clinicName || 'nuestra clínica'}
+          clinicAddress={profile?.clinicAddress || profile?.address || 'nuestra sede'}
+          onReminderSent={(aptId) => {
+            showToast('Enlace de WhatsApp generado correctamente');
           }}
         />
       )}

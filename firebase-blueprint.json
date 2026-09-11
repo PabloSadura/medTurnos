@@ -11,8 +11,10 @@
         "patientLastName": { "type": "string" },
         "date": { "type": "string", "format": "date" },
         "time": { "type": "string" },
+        "endTime": { "type": "string" },
         "startTime": { "type": "string", "format": "date-time" },
         "duration": { "type": "number" },
+        "isOverturn": { "type": "boolean" },
         "status": { "type": "string", "enum": ["pendiente", "confirmed", "in-session", "finished", "cancelled"] },
         "type": { "type": "string" },
         "treatmentId": { "type": "string" },
@@ -125,6 +127,11 @@
         "primaryColor": { "type": "string" },
         "darkMode": { "type": "boolean" },
         "photoURL": { "type": "string" },
+        "status": { "type": "string", "enum": ["Activo", "Inactivo", "Bloqueado", "active", "inactive"] },
+        "paymentStatus": { "type": "string", "enum": ["al_dia", "incumplido"] },
+        "isBlocked": { "type": "boolean" },
+        "activePlanId": { "type": "string" },
+        "planId": { "type": "string" },
         "schedule": {
           "type": "object",
           "properties": {

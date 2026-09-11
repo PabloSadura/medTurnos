@@ -2,7 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { useEffect } from 'react';
 import { db, auth } from './lib/firebase';
 import { doc, getDocFromServer } from 'firebase/firestore';
-import { Lock } from 'lucide-react';
+import { Lock, RefreshCw, AlertTriangle } from 'lucide-react';
 
 import { Login } from './pages/Login';
 import { MainLayout } from './components/MainLayout';
@@ -76,25 +76,54 @@ function AppContent() {
     );
   }
 
-  if (user && profile?.status === 'Inactivo') {
+  const isUserBlocked = user && profile?.role !== 'admin' && (
+    profile?.status === 'Inactivo' ||
+    profile?.status === 'Bloqueado' ||
+    profile?.isBlocked === true ||
+    profile?.paymentStatus === 'incumplido'
+  );
+
+  if (isUserBlocked) {
+    const isPaymentIssue = profile?.paymentStatus === 'incumplido';
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface p-4 font-sans">
         <div className="bg-white p-8 rounded-2xl border border-outline-variant shadow-lg max-w-md w-full text-center space-y-6">
-          <div className="w-16 h-16 bg-error-container/20 text-error rounded-full flex items-center justify-center mx-auto">
-            <Lock size={32} />
+          <div className="w-16 h-16 bg-error/10 text-error rounded-full flex items-center justify-center mx-auto">
+            {isPaymentIssue ? <AlertTriangle size={32} /> : <Lock size={32} />}
           </div>
           <div>
-            <h3 className="text-lg font-black text-on-surface mb-2">Acceso Inactivo</h3>
+            <h3 className="text-xl font-black text-on-surface mb-2">
+              {isPaymentIssue ? "Acceso Suspendido por Falta de Pago" : "Acceso Bloqueado"}
+            </h3>
             <p className="text-on-surface-variant text-sm leading-relaxed">
-              Su cuenta de acceso está inactiva temporalmente. Por favor, póngase en contacto con el administrador del sistema para habilitar su ingreso.
+              {isPaymentIssue 
+                ? "Su cuenta registra un pago pendiente del abono mensual. Recordamos que los pagos vencen los días 15 de cada mes. Por favor comuníquese con el administrador para regularizar su abono y reactivar el acceso."
+                : "Su cuenta se encuentra inactiva o bloqueada por el administrador del sistema. Comuníquese con administración para solicitar la reactivación."}
             </p>
           </div>
-          <button 
-            onClick={() => auth.signOut()}
-            className="w-full py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-primary/90 transition-all cursor-pointer"
-          >
-            Cerrar Sesión
-          </button>
+
+          <div className="bg-surface p-4 rounded-xl border border-outline-variant text-xs text-on-surface-variant text-left space-y-1">
+            <p className="font-bold text-on-surface">Detalles de la cuenta:</p>
+            <p>Usuario: <span className="font-semibold text-on-surface">{profile?.name || user?.email}</span></p>
+            <p>Email: <span className="font-semibold text-on-surface">{user?.email}</span></p>
+            <p>Estado de pago: <span className={isPaymentIssue ? "text-error font-bold" : "text-tertiary font-bold"}>{isPaymentIssue ? "Incumpliendo Pago (Vence día 15)" : "Al día"}</span></p>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full py-2.5 bg-surface hover:bg-outline-variant border border-outline-variant text-on-surface rounded-xl text-[11px] font-bold uppercase tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2"
+            >
+              <RefreshCw size={14} />
+              Verificar Estado
+            </button>
+            <button 
+              onClick={() => auth.signOut()}
+              className="w-full py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-primary/90 transition-all cursor-pointer"
+            >
+              Cerrar Sesión
+            </button>
+          </div>
         </div>
       </div>
     );

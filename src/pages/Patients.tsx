@@ -14,6 +14,8 @@ import { PatientEvolutionPhotos } from '../components/PatientEvolutionPhotos';
 import { consumePackageSession } from '../lib/packageUtils';
 import { PatientPackage } from '../types';
 import { splitFullName, formatPatientFullName, getPatientFirstName, getPatientLastName, comparePatientsByLastName, formatPatientLastNameFirst } from '../lib/patientNameUtils';
+import { PhoneInputArgentina } from '../components/PhoneInputArgentina';
+import { formatArgentinePhoneWithPrefix } from '../lib/phoneUtils';
 
 export function Patients() {
   const { showToast } = useToast();
@@ -769,7 +771,7 @@ export function Patients() {
                 <div className="grid grid-cols-2 gap-2 text-xs text-on-surface-variant pt-1 border-t border-outline-variant/40">
                   <div className="flex items-center gap-1.5 truncate">
                     <Phone size={12} className="text-primary/70 shrink-0" />
-                    <span className="truncate">{patient.phone || 'Sin teléfono'}</span>
+                    <span className="truncate font-mono">{formatArgentinePhoneWithPrefix(patient.phone) || 'Sin teléfono'}</span>
                   </div>
                   <div className="flex items-center gap-1.5 truncate">
                     <Calendar size={12} className="text-secondary/70 shrink-0" />
@@ -879,7 +881,7 @@ export function Patients() {
                     <div className="space-y-0.5">
                       <div className="flex items-center gap-2 text-on-surface-variant">
                         <Phone size={12} className="text-primary/60 shrink-0" />
-                        <span className="text-[11px] font-medium">{patient.phone}</span>
+                        <span className="text-[11px] font-medium font-mono">{formatArgentinePhoneWithPrefix(patient.phone) || 'Sin teléfono'}</span>
                       </div>
                       <div className="flex items-center gap-2 text-on-surface-variant">
                         <Mail size={12} className="text-secondary/60 shrink-0" />
@@ -1008,13 +1010,6 @@ export function Patients() {
             </div>
           </div>
 
-          <div className="flex items-start gap-1.5 px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 rounded-lg text-[11px] text-emerald-900 dark:text-emerald-200">
-            <span className="font-semibold shrink-0">💬 Recordatorios WhatsApp:</span>
-            <span>
-              Al enviar recordatorios, el mensaje saludará únicamente con el <b>Nombre</b> (ej: <i>"Hola {formData.firstName || 'Nombre'}..."</i>).
-            </span>
-          </div>
-
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">DNI / Identificación</label>
@@ -1028,13 +1023,14 @@ export function Patients() {
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Teléfono</label>
-              <input 
-                type="tel" 
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest flex items-center justify-between">
+                <span>Teléfono / WhatsApp</span>
+                <span className="text-[10px] text-primary font-semibold">Prefijo fijo +54 9</span>
+              </label>
+              <PhoneInputArgentina
                 value={formData.phone}
-                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
-                placeholder="+54 9 11 1234-5678" 
+                onChange={(val) => setFormData({ ...formData, phone: val })}
+                showHelperText
               />
             </div>
           </div>
