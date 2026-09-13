@@ -252,8 +252,96 @@ export function getDayOccupiedSlots(
   return slots.sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
 }
 
+export interface SuggestedSlot {
+  time: string;
+  endTime: string;
+  isOverturn: boolean;
+  label: string;
+  shift: 'morning' | 'afternoon';
+}
+
+export interface DayWorkingHoursInfo {
+  isWorkingDay: boolean;
+  dayName: string;
+  morningActive: boolean;
+  morningText: string;
+  afternoonActive: boolean;
+  afternoonText: string;
+  scheduleSummary: string;
+}
+
+/**
+ * Returns detailed working hours information for a specific date.
+ */
+export function getWorkingHoursDayInfo(
+  dateStr: string,
+  workingHours?: any
+): DayWorkingHoursInfo {
+  const effectiveHours = workingHours || {
+    workingDays: [1, 2, 3, 4, 5],
+    morningStart: '08:00',
+    morningEnd: '12:00',
+    morningActive: true,
+    afternoonStart: '14:00',
+    afternoonEnd: '18:00',
+    afternoonActive: true
+  };
+
+  if (!dateStr) {
+    return {
+      isWorkingDay: true,
+      dayName: '',
+      morningActive: true,
+      morningText: '08:00 a 12:00 hs',
+      afternoonActive: true,
+      afternoonText: '14:00 a 18:00 hs',
+      scheduleSummary: '08:00 - 12:00 / 14:00 - 18:00 hs'
+    };
+  }
+
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const d = new Date(year, month - 1, day);
+  const jsDay = d.getDay(); // 0 is Sunday, 1 is Monday...
+  const mappedDay = jsDay === 0 ? 7 : jsDay;
+  const dayName = DAYS_NAMES[mappedDay - 1] || '';
+
+  const workingDays = effectiveHours.workingDays || effectiveHours.days || [];
+  const isWorkingDay = workingDays.length === 0 || workingDays.includes(mappedDay);
+
+  const morningActive = effectiveHours.morningActive !== false;
+  const afternoonActive = effectiveHours.afternoonActive !== false;
+
+  const morningText = morningActive && effectiveHours.morningStart && effectiveHours.morningEnd
+    ? `${effectiveHours.morningStart} a ${effectiveHours.morningEnd} hs`
+    : '';
+
+  const afternoonText = afternoonActive && effectiveHours.afternoonStart && effectiveHours.afternoonEnd
+    ? `${effectiveHours.afternoonStart} a ${effectiveHours.afternoonEnd} hs`
+    : '';
+
+  const parts = [];
+  if (morningText) parts.push(`Mañana: ${morningText}`);
+  if (afternoonText) parts.push(`Tarde: ${afternoonText}`);
+
+  return {
+    isWorkingDay,
+    dayName,
+    morningActive,
+    morningText,
+    afternoonActive,
+    afternoonText,
+    scheduleSummary: parts.join(' | ') || 'Sin horario activo'
+  };
+}
+
 /**
  * Suggests available starting time slots for a given date and treatment duration.
+ * Strictly respects working hours:
+ * - Does NOT suggest any slots that would be a Sobre Turno.
+ * - Does NOT suggest slots outside working days.
+ * - Respects lunch break recess.
+ * - Ensures the entire treatment duration fits within morning or afternoon shift.
+ * - Ensures no collision with existing appointments.
  */
 export function getSuggestedAvailableSlots(
   date: string,
@@ -261,25 +349,86 @@ export function getSuggestedAvailableSlots(
   appointments: any[],
   workingHours?: any,
   excludeAppointmentId?: string
-): Array<{ time: string; endTime: string; isOverturn: boolean; label: string }> {
+): SuggestedSlot[] {
   if (!date) return [];
 
   const safeDuration = Number(durationMinutes) > 0 ? Number(durationMinutes) : 30;
-  const suggested: Array<{ time: string; endTime: string; isOverturn: boolean; label: string }> = [];
+  const effectiveHours = workingHours || {
+    workingDays: [1, 2, 3, 4, 5],
+    morningStart: '08:00',
+    morningEnd: '12:00',
+    morningActive: true,
+    afternoonStart: '14:00',
+    afternoonEnd: '18:00',
+    afternoonActive: true
+  };
 
-  // Generate potential slots every 15 minutes between 08:00 and 20:00
-  for (let m = 8 * 60; m <= 20 * 60 - safeDuration; m += 15) {
-    const timeStr = minutesToTime(m);
-    const collision = checkScheduleCollision(date, timeStr, safeDuration, appointments, excludeAppointmentId);
-    if (!collision.hasConflict) {
-      const outside = checkIsOutsideWorkingHours(date, timeStr, workingHours, safeDuration);
-      const endTime = calculateEndTime(timeStr, safeDuration);
-      suggested.push({
-        time: timeStr,
-        endTime,
-        isOverturn: outside.isOutside,
-        label: `${timeStr} - ${endTime} hs`
-      });
+  // Check if date is a working day
+  try {
+    const [year, month, day] = date.split('-').map(Number);
+    const d = new Date(year, month - 1, day);
+    const jsDay = d.getDay();
+    const mappedDay = jsDay === 0 ? 7 : jsDay;
+    const workingDays = effectiveHours.workingDays || effectiveHours.days || [];
+
+    if (workingDays.length > 0 && !workingDays.includes(mappedDay)) {
+      // Non-working day: do not suggest regular slots
+      return [];
+    }
+  } catch (_) {
+    // If parsing fails, proceed with default check
+  }
+
+  const morningActive = effectiveHours.morningActive !== false;
+  const afternoonActive = effectiveHours.afternoonActive !== false;
+
+  const mStartMin = timeToMinutes(effectiveHours.morningStart || '08:00');
+  const mEndMin = timeToMinutes(effectiveHours.morningEnd || '12:00');
+  const aStartMin = timeToMinutes(effectiveHours.afternoonStart || '14:00');
+  const aEndMin = timeToMinutes(effectiveHours.afternoonEnd || '18:00');
+
+  const suggested: SuggestedSlot[] = [];
+  const STEP_MINUTES = 15; // 15-minute resolution for scheduling precision
+
+  // 1. Morning Shift Slots
+  if (morningActive && mEndMin - mStartMin >= safeDuration) {
+    for (let m = mStartMin; m <= mEndMin - safeDuration; m += STEP_MINUTES) {
+      const timeStr = minutesToTime(m);
+      const collision = checkScheduleCollision(date, timeStr, safeDuration, appointments, excludeAppointmentId);
+      if (!collision.hasConflict) {
+        const outside = checkIsOutsideWorkingHours(date, timeStr, effectiveHours, safeDuration);
+        if (!outside.isOutside) {
+          const endTime = calculateEndTime(timeStr, safeDuration);
+          suggested.push({
+            time: timeStr,
+            endTime,
+            isOverturn: false,
+            label: `${timeStr} - ${endTime} hs`,
+            shift: 'morning'
+          });
+        }
+      }
+    }
+  }
+
+  // 2. Afternoon Shift Slots
+  if (afternoonActive && aEndMin - aStartMin >= safeDuration) {
+    for (let m = aStartMin; m <= aEndMin - safeDuration; m += STEP_MINUTES) {
+      const timeStr = minutesToTime(m);
+      const collision = checkScheduleCollision(date, timeStr, safeDuration, appointments, excludeAppointmentId);
+      if (!collision.hasConflict) {
+        const outside = checkIsOutsideWorkingHours(date, timeStr, effectiveHours, safeDuration);
+        if (!outside.isOutside) {
+          const endTime = calculateEndTime(timeStr, safeDuration);
+          suggested.push({
+            time: timeStr,
+            endTime,
+            isOverturn: false,
+            label: `${timeStr} - ${endTime} hs`,
+            shift: 'afternoon'
+          });
+        }
+      }
     }
   }
 

@@ -80,6 +80,41 @@ export interface PatientEvolutionPhoto {
   updatedAt?: any;
 }
 
+export interface EvolutionTreatmentItem {
+  id: string;
+  treatmentId: string;
+  treatmentName: string;
+  price: number;
+  isPackageSession?: boolean;
+  patientPackageId?: string;
+  packageName?: string;
+}
+
+export interface Evolution {
+  id: string;
+  patientId: string;
+  patientName: string;
+  patientIdNumber?: string;
+  userId: string;
+  doctorId?: string;
+  doctor?: string;
+  doctorEmail?: string;
+  appointmentId?: string | null;
+  treatment: string;
+  treatmentId?: string;
+  items?: EvolutionTreatmentItem[];
+  cost: number;
+  paidAmount: number;
+  isPackageSession?: boolean;
+  patientPackageId?: string | null;
+  packageName?: string | null;
+  note: string;
+  date: string;
+  status: string;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
 export interface Patient {
   id: string;
   name: string;
@@ -126,6 +161,7 @@ export interface Appointment {
   isPackageSession?: boolean;
   patientPackageId?: string;
   packageName?: string;
+  treatmentItems?: EvolutionTreatmentItem[];
   createdAt?: any;
   updatedAt?: any;
 }

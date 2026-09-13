@@ -25,6 +25,7 @@ import {
   getSuggestedAvailableSlots,
   DayOccupiedSlot
 } from '../lib/agendaUtils';
+import { SuggestedSlotsPicker } from '../components/SuggestedSlotsPicker';
 
 const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
@@ -263,13 +264,17 @@ export function Agenda() {
   const handleOpenNewAppointment = (targetDate?: string, targetTime?: string) => {
     const matchedTreatment = treatments[0];
     const initialDuration = matchedTreatment?.duration ? Number(matchedTreatment.duration) : 30;
+    const finalDate = targetDate || formatLocalDate(selectedDate || new Date());
+    const availableSlots = getSuggestedAvailableSlots(finalDate, initialDuration, appointments, workingHours);
+    const initialTime = targetTime || (availableSlots.length > 0 ? availableSlots[0].time : '09:00');
+
     setNewApt({
       patientId: '',
       patientName: '',
       patientFirstName: '',
       patientLastName: '',
-      date: targetDate || formatLocalDate(selectedDate || new Date()),
-      time: targetTime || '09:00',
+      date: finalDate,
+      time: initialTime,
       type: matchedTreatment?.name || 'Check-up General',
       notes: '',
       duration: initialDuration,
@@ -1779,6 +1784,17 @@ export function Agenda() {
             </select>
           </div>
 
+          {/* HORARIOS SUGERIDOS DISPONIBLES (SIEMPRE VISIBLE AL AGENDAR) */}
+          <SuggestedSlotsPicker
+            slots={newAptSuggestedSlots}
+            selectedTime={newApt.time}
+            onSelectTime={(time) => setNewApt(prev => ({ ...prev, time }))}
+            duration={effectiveNewAptDuration}
+            treatmentName={newApt.type}
+            dateStr={newApt.date}
+            workingHours={workingHours}
+          />
+
           {/* ALERTA DE SUPERPOSICIÓN / COLISIÓN DE TURNOS */}
           {newAptCollision.hasConflict && (
             <div className="p-3.5 bg-red-50 border-2 border-red-300 rounded-xl space-y-1.5 text-red-950 animate-pulse">
@@ -1790,34 +1806,8 @@ export function Agenda() {
                 {newAptCollision.message}
               </p>
               <p className="text-[10px] text-red-700 font-bold uppercase tracking-wider">
-                No se pueden agendar 2 turnos en el mismo horario. Cada tratamiento requiere su tiempo completo.
+                Seleccione uno de los horarios sugeridos disponibles arriba para evitar la superposición.
               </p>
-            </div>
-          )}
-
-          {/* SUGERENCIAS DE HORARIOS LIBRES */}
-          {newAptCollision.hasConflict && newAptSuggestedSlots.length > 0 && (
-            <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-black text-emerald-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <CheckCircle2 size={13} className="text-emerald-600" />
-                  Horarios disponibles sin superposición ({effectiveNewAptDuration} min):
-                </span>
-                <span className="text-[10px] text-emerald-700 font-bold">Clic para seleccionar</span>
-              </div>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {newAptSuggestedSlots.slice(0, 8).map(slot => (
-                  <button
-                    key={slot.time}
-                    type="button"
-                    onClick={() => setNewApt(prev => ({ ...prev, time: slot.time }))}
-                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs flex items-center gap-1"
-                  >
-                    <span>{slot.time} hs</span>
-                    {slot.isOverturn && <span className="text-[9px] text-purple-700 font-black">⚡ ST</span>}
-                  </button>
-                ))}
-              </div>
             </div>
           )}
 
@@ -2289,6 +2279,17 @@ export function Agenda() {
             </select>
           </div>
 
+          {/* HORARIOS SUGERIDOS DISPONIBLES (SIEMPRE VISIBLE AL EDITAR) */}
+          <SuggestedSlotsPicker
+            slots={editAptSuggestedSlots}
+            selectedTime={editAptData.time}
+            onSelectTime={(time) => setEditAptData(prev => ({ ...prev, time }))}
+            duration={effectiveEditAptDuration}
+            treatmentName={editAptData.type}
+            dateStr={editAptData.date}
+            workingHours={workingHours}
+          />
+
           {/* ALERTA DE SUPERPOSICIÓN / COLISIÓN DE TURNOS */}
           {editAptCollision.hasConflict && (
             <div className="p-3.5 bg-red-50 border-2 border-red-300 rounded-xl space-y-1.5 text-red-950 animate-pulse">
@@ -2300,34 +2301,8 @@ export function Agenda() {
                 {editAptCollision.message}
               </p>
               <p className="text-[10px] text-red-700 font-bold uppercase tracking-wider">
-                No se pueden agendar 2 turnos en el mismo horario. Cada tratamiento requiere su tiempo completo.
+                Seleccione uno de los horarios sugeridos disponibles arriba para evitar la superposición.
               </p>
-            </div>
-          )}
-
-          {/* SUGERENCIAS DE HORARIOS LIBRES */}
-          {editAptCollision.hasConflict && editAptSuggestedSlots.length > 0 && (
-            <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-black text-emerald-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <CheckCircle2 size={13} className="text-emerald-600" />
-                  Horarios disponibles sin superposición ({effectiveEditAptDuration} min):
-                </span>
-                <span className="text-[10px] text-emerald-700 font-bold">Clic para seleccionar</span>
-              </div>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {editAptSuggestedSlots.slice(0, 8).map(slot => (
-                  <button
-                    key={slot.time}
-                    type="button"
-                    onClick={() => setEditAptData(prev => ({ ...prev, time: slot.time }))}
-                    className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs flex items-center gap-1"
-                  >
-                    <span>{slot.time} hs</span>
-                    {slot.isOverturn && <span className="text-[9px] text-purple-700 font-black">⚡ ST</span>}
-                  </button>
-                ))}
-              </div>
             </div>
           )}
 

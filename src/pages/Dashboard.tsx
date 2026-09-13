@@ -387,11 +387,13 @@ export function Dashboard() {
           if (dayCount[dayName]) {
             dayCount[dayName].appointments++;
             dayCount[dayName].finished++;
-            const evPaid = (typeof ev.paidAmount === 'number' && !isNaN(ev.paidAmount))
-              ? ev.paidAmount
-              : (typeof ev.cost === 'number' && !isNaN(ev.cost))
-                ? ev.cost
-                : 0;
+            const evPaid = (Array.isArray(ev.items) && ev.items.length > 0)
+              ? ev.items.reduce((sum: number, it: any) => sum + (it.isPackageSession ? 0 : Number(it.price || it.paidAmount || 0)), 0)
+              : (typeof ev.paidAmount === 'number' && !isNaN(ev.paidAmount))
+                ? ev.paidAmount
+                : (typeof ev.cost === 'number' && !isNaN(ev.cost))
+                  ? ev.cost
+                  : 0;
             dayCount[dayName].appointmentsRevenue += evPaid;
             dayCount[dayName].revenue += evPaid;
           }
@@ -458,11 +460,13 @@ export function Dashboard() {
 
       dayStandaloneEvolutions.forEach(ev => {
         finished++;
-        const evPaid = (typeof ev.paidAmount === 'number' && !isNaN(ev.paidAmount))
-          ? ev.paidAmount
-          : (typeof ev.cost === 'number' && !isNaN(ev.cost))
-            ? ev.cost
-            : 0;
+        const evPaid = (Array.isArray(ev.items) && ev.items.length > 0)
+          ? ev.items.reduce((sum: number, it: any) => sum + (it.isPackageSession ? 0 : Number(it.price || it.paidAmount || 0)), 0)
+          : (typeof ev.paidAmount === 'number' && !isNaN(ev.paidAmount))
+            ? ev.paidAmount
+            : (typeof ev.cost === 'number' && !isNaN(ev.cost))
+              ? ev.cost
+              : 0;
         appointmentsRevenue += evPaid;
       });
 

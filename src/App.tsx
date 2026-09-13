@@ -138,6 +138,7 @@ function AppContent() {
           <Route path="/" element={<HomeRedirect />} />
           <Route path="/agenda" element={<ProtectedRoute permission="agenda"><Agenda /></ProtectedRoute>} />
           <Route path="/patients" element={<ProtectedRoute permission="patients"><Patients /></ProtectedRoute>} />
+          <Route path="/pacientes" element={<Navigate to="/patients" replace />} />
           <Route path="/treatments" element={<ProtectedRoute permission="treatments"><Treatments /></ProtectedRoute>} />
           <Route path="/inventory" element={<ProtectedRoute permission="inventory"><Inventory /></ProtectedRoute>} />
           <Route path="/reminders" element={<ProtectedRoute permission="reminders"><Reminders /></ProtectedRoute>} />

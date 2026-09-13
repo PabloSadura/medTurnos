@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
-import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save, TrendingUp, Stethoscope, CalendarClock, DollarSign, Clock, Link2, Package, Layers, Sparkles, Cloud, Split, Camera, Image, CalendarPlus } from 'lucide-react';
+import { useSearchParams, useNavigate, Link } from 'react-router-dom';
+import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save, TrendingUp, Stethoscope, CalendarClock, DollarSign, Clock, Link2, Package, Layers, Sparkles, Cloud, Split, Camera, Image, CalendarPlus, ArrowLeft, ChevronRight } from 'lucide-react';
 import { cn, calculateAge } from '../lib/utils';
 import { motion } from 'motion/react';
 import { Modal } from '../components/Modal';
@@ -8,6 +8,7 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, where, writeBatch, increment, getDocs } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { PatientDetailView } from '../components/PatientDetailView';
 import { PatientPackagesView } from '../components/PatientPackagesView';
 import { PatientDriveFiles } from '../components/PatientDriveFiles';
 import { PatientEvolutionPhotos } from '../components/PatientEvolutionPhotos';
@@ -20,10 +21,11 @@ import { formatArgentinePhoneWithPrefix } from '../lib/phoneUtils';
 export function Patients() {
   const { showToast } = useToast();
   const { ownerId, user, profile } = useAuth();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [patients, setPatients] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | 'history' | 'add-entry' | null>(null);
+  const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | null>(null);
   const [selectedPatient, setSelectedPatient] = useState<any>(null);
   const [patientDetailTab, setPatientDetailTab] = useState<'evolutions' | 'photos' | 'packages' | 'drive'>('evolutions');
   const [patientPackages, setPatientPackages] = useState<PatientPackage[]>([]);
@@ -37,7 +39,9 @@ export function Patients() {
     absences: 0,
     lastVisit: '-',
     nextApt: '-',
-    totalSpent: 0
+    totalSpent: 0,
+    turnosSpent: 0,
+    packagesSpent: 0
   });
 
   // Doctor is strictly the logged-in user
@@ -133,7 +137,7 @@ export function Patients() {
   }, [searchParams, patients]);
 
   useEffect(() => {
-    if (selectedPatient && activeModal === 'history' && ownerId) {
+    if (selectedPatient && ownerId) {
       // Fetch evolutions
       const q = query(
         collection(db, `patients/${selectedPatient.id}/evolutions`), 
@@ -161,44 +165,7 @@ export function Patients() {
         });
         setPatientAppointments(apps);
 
-        const finished: any[] = apps.filter((a: any) => a.status === 'finished');
-        const attendedCount = finished.length;
-        const total = apps.filter((a: any) => a.status !== 'pendiente').length;
-        const absences = apps.filter((a: any) => a.status === 'cancelado' || a.status === 'ausente').length;
-        
-        // Calculate Total Spent based on actual historical prices paid at the time,
-        // excluding sessions covered by a package (since package price was paid upon package purchase)
-        const appointmentsSpent = finished.reduce((acc: number, app: any) => {
-          if (app.isPackageSession) return acc;
-          const historicalCost = (typeof app.paidAmount === 'number' && !isNaN(app.paidAmount))
-            ? app.paidAmount
-            : (typeof app.cost === 'number' && !isNaN(app.cost))
-              ? app.cost
-              : (typeof app.price === 'number' && !isNaN(app.price))
-                ? app.price
-                : (treatments.find(t => t.name === app.type)?.cost || 0);
-          return acc + historicalCost;
-        }, 0);
-
-        // Find last visit (finished)
-        const sortedFinished = [...finished].sort((a: any, b: any) => (b.date || '').localeCompare(a.date || ''));
-        const lastVisitDate = sortedFinished.length > 0 ? sortedFinished[0].date : '-';
-
-        // Find next visit (pendiente or confirmado)
         const todayStr = new Date().toISOString().split('T')[0];
-        const nextApts = apps.filter((a: any) => (a.status === 'pendiente' || a.status === 'confirmado') && a.date >= todayStr);
-        const sortedNext = [...nextApts].sort((a: any, b: any) => (a.date || '').localeCompare(b.date || ''));
-        const nextVisitDate = sortedNext.length > 0 ? sortedNext[0].date : '-';
-
-        setPatientStats({
-          attendance: (attendedCount + absences) > 0 ? Math.round((attendedCount / (attendedCount + absences)) * 100) : 0,
-          absences: absences,
-          lastVisit: lastVisitDate,
-          nextApt: nextVisitDate,
-          totalSpent: appointmentsSpent
-        });
-
-        // If target appointment was passed via URL or state, or if there is an appointment today, link it
         const targetApt = targetAppointmentId 
           ? apps.find((a: any) => a.id === targetAppointmentId)
           : (apps.find((a: any) => a.date === todayStr) || (apps.length > 0 ? apps[0] : null));
@@ -247,7 +214,70 @@ export function Patients() {
         unsubscribePackages();
       };
     }
-  }, [selectedPatient, activeModal, treatments, targetAppointmentId, ownerId]);
+  }, [selectedPatient, treatments, targetAppointmentId, ownerId]);
+
+  // Dynamically calculate Patient KPIs & Total Spending across all turnos, evolutions, and packages
+  useEffect(() => {
+    if (!selectedPatient) return;
+
+    // 1. Calculate spending on all registered clinical evolutions (including past months and standalone)
+    const evolutionsSpent = evolutions.reduce((acc: number, ev: any) => {
+      if (Array.isArray(ev.items) && ev.items.length > 0) {
+        const itemsTotal = ev.items.reduce((sum: number, it: any) => {
+          if (it.isPackageSession) return sum;
+          return sum + Number(it.price || it.paidAmount || 0);
+        }, 0);
+        return acc + itemsTotal;
+      }
+      if (ev.isPackageSession) return acc;
+      const historicalCost = (typeof ev.paidAmount === 'number' && !isNaN(ev.paidAmount))
+        ? ev.paidAmount
+        : (typeof ev.cost === 'number' && !isNaN(ev.cost))
+          ? ev.cost
+          : (treatments.find(t => t.name === (ev.treatment || ev.type) || t.id === ev.treatmentId)?.cost || 0);
+      return acc + Number(historicalCost || 0);
+    }, 0);
+
+    // 2. Add packages/bonos purchased by the patient
+    const packagesSpent = patientPackages.reduce((acc: number, p: any) => acc + (Number(p.pricePaid) || 0), 0);
+
+    // Turnos dados pendientes o no finalizados NUNCA se suman.
+    // Lo que el paciente gastó es ÚNICAMENTE el total de cada evolución y el paquete adquirido:
+    const totalSpent = evolutionsSpent + packagesSpent;
+
+    // Attended visits (unique dates/IDs between evolutions and finished appointments)
+    const finishedApps = patientAppointments.filter((a: any) => a.status === 'finished');
+    const attendedVisitsSet = new Set([
+      ...finishedApps.map((a: any) => a.date || a.id),
+      ...evolutions.map((e: any) => e.date || e.id)
+    ]);
+    const attendedCount = attendedVisitsSet.size;
+    const absences = patientAppointments.filter((a: any) => a.status === 'cancelado' || a.status === 'ausente').length;
+
+    // Last visit (most recent date between evolutions and finished appointments)
+    const allVisitDates = [
+      ...finishedApps.map((a: any) => a.date),
+      ...evolutions.map((e: any) => e.date)
+    ].filter(Boolean);
+    allVisitDates.sort((a, b) => b.localeCompare(a));
+    const lastVisitDate = allVisitDates.length > 0 ? allVisitDates[0] : '-';
+
+    // Next appointment
+    const todayStr = new Date().toISOString().split('T')[0];
+    const nextApts = patientAppointments.filter((a: any) => (a.status === 'pendiente' || a.status === 'confirmado') && a.date >= todayStr);
+    const sortedNext = [...nextApts].sort((a: any, b: any) => (a.date || '').localeCompare(b.date || ''));
+    const nextVisitDate = sortedNext.length > 0 ? `${sortedNext[0].date} ${sortedNext[0].time || ''}`.trim() : '-';
+
+    setPatientStats({
+      attendance: (attendedCount + absences) > 0 ? Math.round((attendedCount / (attendedCount + absences)) * 100) : 0,
+      absences: absences,
+      lastVisit: lastVisitDate,
+      nextApt: nextVisitDate,
+      totalSpent: totalSpent,
+      turnosSpent: evolutionsSpent,
+      packagesSpent: packagesSpent
+    });
+  }, [selectedPatient, patientAppointments, evolutions, patientPackages, treatments]);
 
   const handleSelectAppointmentForEvolution = (aptId: string) => {
     if (!aptId || aptId === 'manual') {
@@ -291,12 +321,42 @@ export function Patients() {
     }));
   };
 
-  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'history' | 'add-entry' | 'drive' | 'photos', patient?: any, initialAppointmentId?: string) => {
-    setSelectedPatient(patient || null);
-    if (initialAppointmentId) {
-      setTargetAppointmentId(initialAppointmentId);
+  const handleSelectPatient = (patient: any) => {
+    setSelectedPatient(patient);
+    setPatientDetailTab('evolutions');
+    setIsAddingEntry(false);
+    setTargetAppointmentId(null);
+  };
+
+  const handleBackToGeneralList = () => {
+    setSelectedPatient(null);
+    setIsAddingEntry(false);
+    setTargetAppointmentId(null);
+    if (searchParams.get('id')) {
+      navigate('/patients', { replace: true });
     }
+  };
+
+  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'history' | 'add-entry' | 'drive' | 'photos', patient?: any, initialAppointmentId?: string) => {
+    if (type === 'create') {
+      setSelectedPatient(null);
+      setFormData({
+        firstName: '',
+        lastName: '',
+        name: '',
+        idNumber: '',
+        phone: '',
+        email: '',
+        gender: 'Male',
+        birthDate: '',
+        status: 'active'
+      });
+      setActiveModal('create');
+      return;
+    }
+
     if (patient) {
+      setSelectedPatient(patient);
       const parsed = splitFullName(patient.name || '');
       const fn = patient.firstName || parsed.firstName;
       const ln = patient.lastName || parsed.lastName;
@@ -311,35 +371,37 @@ export function Patients() {
         birthDate: patient.birthDate || '',
         status: patient.status || 'active'
       });
-    } else {
-      setFormData({
-        firstName: '',
-        lastName: '',
-        name: '',
-        idNumber: '',
-        phone: '',
-        email: '',
-        gender: 'Male',
-        birthDate: '',
-        status: 'active'
-      });
     }
 
+    if (initialAppointmentId) {
+      setTargetAppointmentId(initialAppointmentId);
+    }
+
+    if (type === 'edit') {
+      setActiveModal('edit');
+      return;
+    }
+
+    if (type === 'delete') {
+      setActiveModal('delete');
+      return;
+    }
+
+    // Inline detail views (no modal)
+    setActiveModal(null);
+
     if (type === 'photos') {
-      setActiveModal('history');
       setPatientDetailTab('photos');
       setIsAddingEntry(false);
       return;
     }
 
     if (type === 'drive') {
-      setActiveModal('history');
       setPatientDetailTab('drive');
       setIsAddingEntry(false);
       return;
     }
 
-    setActiveModal(type === 'add-entry' ? 'history' : type);
     if (type === 'add-entry') {
       setPatientDetailTab('evolutions');
       setIsAddingEntry(true);
@@ -352,7 +414,9 @@ export function Patients() {
         note: '',
         paidAmount: prev.paidAmount || (treatments.length > 0 ? (treatments[0].cost || 0) : 0)
       }));
+      return;
     }
+
     if (type === 'history') {
       setPatientDetailTab('evolutions');
       setIsAddingEntry(false);
@@ -365,6 +429,7 @@ export function Patients() {
         note: '',
         paidAmount: prev.paidAmount || (treatments.length > 0 ? (treatments[0].cost || 0) : 0)
       }));
+      return;
     }
   };
 
@@ -405,6 +470,7 @@ export function Patients() {
     try {
       await deleteDoc(doc(db, 'patients', selectedPatient.id));
       setActiveModal(null);
+      setSelectedPatient(null);
       showToast('Paciente eliminado exitosamente');
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `patients/${selectedPatient.id}`);
@@ -681,30 +747,88 @@ export function Patients() {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h1 className="headline-lg text-on-surface">Gestión de Pacientes</h1>
-          <p className="body-md text-on-surface-variant">Listado completo de pacientes registrados y sus historias clínicas.</p>
+          {selectedPatient ? (
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleBackToGeneralList}
+                className="p-2 bg-white hover:bg-surface border border-outline-variant rounded-lg text-on-surface-variant hover:text-primary transition-all cursor-pointer shadow-2xs group"
+                title="Volver al menú de pacientes general"
+                id="btn-back-header"
+              >
+                <ArrowLeft size={18} className="group-hover:-translate-x-0.5 transition-transform" />
+              </button>
+              <div>
+                <h1 className="headline-lg text-on-surface flex items-center gap-2">
+                  <span>{currentPatient?.name || 'Paciente'}</span>
+                  <span className={cn(
+                    "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider",
+                    currentPatient?.status === 'active' ? "bg-tertiary-container text-on-tertiary-container" : "bg-surface-dim text-on-surface-variant"
+                  )}>
+                    {currentPatient?.status === 'active' ? 'ACTIVO' : 'INACTIVO'}
+                  </span>
+                </h1>
+                <p className="body-md text-on-surface-variant">Ficha clínica y detalle completo del paciente.</p>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <h1 className="headline-lg text-on-surface">Gestión de Pacientes</h1>
+              <p className="body-md text-on-surface-variant">Listado completo de pacientes registrados y sus historias clínicas.</p>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
-          <button 
-            onClick={handleExportPatients}
-            className="px-3 py-1.5 bg-white border border-outline-variant rounded-md text-[11px] font-bold flex items-center gap-2 hover:bg-surface transition-all text-on-surface-variant cursor-pointer active:scale-95"
-            title="Exportar lista ordenada por apellido a CSV"
-          >
-            <Download size={14} />
-            EXPORTAR CSV
-          </button>
-          <button 
-            onClick={() => handleOpenModal('create')}
-            className="px-4 py-2 bg-primary text-white rounded-md text-[12px] font-bold flex items-center gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-sm"
-          >
-            <Plus size={16} />
-            NUEVO PACIENTE
-          </button>
+          {selectedPatient ? (
+            <button
+              type="button"
+              onClick={handleBackToGeneralList}
+              className="px-3.5 py-2 bg-white border border-outline-variant rounded-lg text-xs font-bold text-on-surface-variant hover:text-primary hover:bg-surface transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs group"
+              id="btn-back-top-right"
+            >
+              <ArrowLeft size={14} className="group-hover:-translate-x-0.5 transition-transform" />
+              VOLVER AL MENÚ DE PACIENTES
+            </button>
+          ) : (
+            <>
+              <button 
+                onClick={handleExportPatients}
+                className="px-3 py-1.5 bg-white border border-outline-variant rounded-md text-[11px] font-bold flex items-center gap-2 hover:bg-surface transition-all text-on-surface-variant cursor-pointer active:scale-95"
+                title="Exportar lista ordenada por apellido a CSV"
+              >
+                <Download size={14} />
+                EXPORTAR CSV
+              </button>
+              <button 
+                onClick={() => handleOpenModal('create')}
+                className="px-4 py-2 bg-primary text-white rounded-md text-[12px] font-bold flex items-center gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-sm"
+              >
+                <Plus size={16} />
+                NUEVO PACIENTE
+              </button>
+            </>
+          )}
         </div>
       </div>
 
       <div className="bg-white rounded-xl border border-outline-variant shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-outline-variant flex flex-col md:flex-row items-center justify-between gap-4">
+        {selectedPatient ? (
+          <PatientDetailView
+            patient={currentPatient}
+            ownerId={ownerId}
+            user={user}
+            currentDoctorName={currentDoctorName}
+            treatments={treatments}
+            onBack={handleBackToGeneralList}
+            onEdit={(p) => handleOpenModal('edit', p)}
+            onDelete={(p) => handleOpenModal('delete', p)}
+            targetAppointmentId={targetAppointmentId}
+            initialTab={patientDetailTab}
+            initialAddEntry={isAddingEntry}
+          />
+        ) : (
+          <>
+            <div className="px-6 py-4 border-b border-outline-variant flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="relative w-full md:w-80">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
             <input 
@@ -732,7 +856,8 @@ export function Patients() {
             filteredPatients.map((patient) => (
               <div 
                 key={patient.id}
-                className="p-4 bg-white hover:bg-surface/50 transition-colors flex flex-col gap-3"
+                onClick={() => handleSelectPatient(patient)}
+                className="p-4 bg-white hover:bg-primary/5 transition-colors flex flex-col gap-3 cursor-pointer active:scale-[0.99]"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-3 min-w-0">
@@ -760,12 +885,15 @@ export function Patients() {
                       </p>
                     </div>
                   </div>
-                  <span className={cn(
-                    "px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider shrink-0",
-                    patient.status === 'active' ? "bg-tertiary-container text-on-tertiary-container" : "bg-surface-dim text-on-surface-variant"
-                  )}>
-                    {patient.status === 'active' ? 'ACTIVO' : 'INACTIVO'}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={cn(
+                      "px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider",
+                      patient.status === 'active' ? "bg-tertiary-container text-on-tertiary-container" : "bg-surface-dim text-on-surface-variant"
+                    )}>
+                      {patient.status === 'active' ? 'ACTIVO' : 'INACTIVO'}
+                    </span>
+                    <ChevronRight size={16} className="text-on-surface-variant/40" />
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-xs text-on-surface-variant pt-1 border-t border-outline-variant/40">
@@ -777,46 +905,6 @@ export function Patients() {
                     <Calendar size={12} className="text-secondary/70 shrink-0" />
                     <span className="truncate">Última: {patient.lastVisit}</span>
                   </div>
-                </div>
-
-                <div className="flex items-center gap-2 pt-2 border-t border-outline-variant/40">
-                  <button 
-                    onClick={() => handleOpenModal('history', patient)}
-                    className="flex-1 py-1.5 px-2 bg-primary/10 hover:bg-primary/20 text-primary text-[11px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors"
-                  >
-                    <FileText size={13} />
-                    Historia
-                  </button>
-                  <button 
-                    onClick={() => handleOpenModal('photos', patient)}
-                    className="py-1.5 px-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 text-[11px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors"
-                    title="Fotos Antes y Después"
-                  >
-                    <Camera size={13} />
-                    Fotos
-                  </button>
-                  <button 
-                    onClick={() => handleOpenModal('drive', patient)}
-                    className="py-1.5 px-2.5 bg-tertiary/10 hover:bg-tertiary/20 text-tertiary text-[11px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors"
-                    title="Archivos en Google Drive"
-                  >
-                    <Cloud size={13} />
-                    Drive
-                  </button>
-                  <button 
-                    onClick={() => handleOpenModal('edit', patient)}
-                    className="p-2 hover:bg-surface border border-outline-variant text-on-surface-variant rounded-lg transition-colors"
-                    title="Editar"
-                  >
-                    <Edit2 size={14} />
-                  </button>
-                  <button 
-                    onClick={() => handleOpenModal('delete', patient)}
-                    className="p-2 hover:bg-error-container text-error rounded-lg transition-colors"
-                    title="Eliminar"
-                  >
-                    <Trash2 size={14} />
-                  </button>
                 </div>
               </div>
             ))
@@ -840,7 +928,7 @@ export function Patients() {
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Contacto</th>
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Última Visita</th>
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Estado</th>
-                <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider text-center">Acciones</th>
+                <th className="px-4 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider text-right w-10"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-surface">
@@ -849,7 +937,8 @@ export function Patients() {
                   key={patient.id}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="hover:bg-surface/50 transition-colors group cursor-pointer"
+                  onClick={() => handleSelectPatient(patient)}
+                  className="hover:bg-primary/5 transition-colors group cursor-pointer"
                 >
                   <td className="px-6 py-3">
                     <div className="flex items-center gap-3">
@@ -857,14 +946,14 @@ export function Patients() {
                         {(getPatientLastName(patient) || patient.name || 'P').charAt(0).toUpperCase()}
                       </div>
                       <div className="min-w-0">
-                        <p className="text-[13px] font-bold text-on-surface truncate">
+                        <p className="text-[13px] font-bold text-on-surface truncate group-hover:text-primary transition-colors">
                           {(() => {
                             const ln = patient.lastName || getPatientLastName(patient);
                             const fn = patient.firstName || getPatientFirstName(patient);
                             if (ln) {
                               return (
                                 <>
-                                  <span className="font-extrabold text-on-surface">{ln}</span>
+                                  <span className="font-extrabold text-on-surface group-hover:text-primary">{ln}</span>
                                   {fn && fn !== 'Paciente' && <span className="font-medium text-on-surface-variant">, {fn}</span>}
                                 </>
                               );
@@ -903,44 +992,8 @@ export function Patients() {
                       {patient.status === 'active' ? 'ACTIVO' : 'INACTIVO'}
                     </span>
                   </td>
-                  <td className="px-6 py-3">
-                    <div className="flex items-center justify-center gap-1">
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); handleOpenModal('history', patient); }}
-                        className="p-1.5 hover:bg-primary-container text-primary rounded transition-all" 
-                        title="Historia Clínica"
-                      >
-                        <FileText size={14} />
-                      </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); handleOpenModal('photos', patient); }}
-                        className="p-1.5 hover:bg-emerald-50 text-emerald-600 rounded transition-all" 
-                        title="Fotos Antes y Después (Evolución)"
-                      >
-                        <Camera size={14} />
-                      </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); handleOpenModal('drive', patient); }}
-                        className="p-1.5 hover:bg-tertiary/20 text-tertiary rounded transition-all" 
-                        title="Archivos en Google Drive"
-                      >
-                        <Cloud size={14} />
-                      </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); handleOpenModal('edit', patient); }}
-                        className="p-1.5 hover:bg-surface-container-highest text-on-surface-variant rounded transition-all" 
-                        title="Editar"
-                      >
-                        <Edit2 size={14} />
-                      </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); handleOpenModal('delete', patient); }}
-                        className="p-1.5 hover:bg-error-container text-error rounded transition-all" 
-                        title="Eliminar"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
+                  <td className="px-4 py-3 text-right text-on-surface-variant/40 group-hover:text-primary transition-colors">
+                    <ChevronRight size={16} />
                   </td>
                 </motion.tr>
               ))}
@@ -956,6 +1009,8 @@ export function Patients() {
             <button className="px-2 py-1 bg-white border border-outline-variant rounded text-[10px] font-medium text-on-surface-variant disabled:opacity-50" disabled>Sig.</button>
           </div>
         </div>
+          </>
+        )}
       </div>
 
       {/* Modals */}
@@ -1104,674 +1159,6 @@ export function Patients() {
           <div className="flex gap-3 pt-2">
             <button onClick={() => setActiveModal(null)} className="flex-1 px-4 py-2 bg-surface border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-outline-variant transition-colors uppercase tracking-widest">Cancelar</button>
             <button onClick={handleDeletePatient} className="flex-1 px-4 py-2 bg-error text-white rounded-lg text-[12px] font-bold hover:bg-error/90 transition-colors uppercase tracking-widest">Eliminar</button>
-          </div>
-        </div>
-      </Modal>
-
-      <Modal
-        isOpen={activeModal === 'history'}
-        onClose={() => setActiveModal(null)}
-        title={`Detalles del Paciente: ${currentPatient?.name}`}
-        className={cn("w-full transition-all", patientDetailTab === 'photos' ? "max-w-4xl" : "max-w-2xl")}
-      >
-        <div className="space-y-6">
-          <div className="flex items-center gap-4 p-4 bg-surface-bright rounded-xl border border-outline-variant">
-            <div className="w-12 h-12 rounded-full bg-primary-container text-primary flex items-center justify-center text-lg font-bold">
-              {currentPatient?.name.charAt(0)}
-            </div>
-            <div className="flex-1">
-              <h4 className="text-sm font-bold text-on-surface">{currentPatient?.name}</h4>
-              <p className="text-[11px] text-on-surface-variant tracking-wide uppercase font-bold">{currentPatient?.idNumber} • {currentPatient?.gender} • {calculateAge(currentPatient?.birthDate)} años</p>
-            </div>
-            <div className="text-right">
-              <span className={cn(
-                "px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider",
-                currentPatient?.status === 'active' ? "bg-tertiary-container text-on-tertiary-container" : "bg-surface-dim text-on-surface-variant"
-              )}>
-                {currentPatient?.status === 'active' ? 'ACTIVO' : 'INACTIVO'}
-              </span>
-            </div>
-          </div>
-
-          {/* Attendance & Financial KPIs */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
-              <CheckCircle2 size={16} className="text-tertiary mb-1" />
-              <span className="text-[18px] font-bold text-on-surface">{patientStats.attendance}%</span>
-              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Asistencia</span>
-            </div>
-            <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
-              <AlertTriangle size={16} className="text-error mb-1" />
-              <span className="text-[18px] font-bold text-on-surface">{patientStats.absences}</span>
-              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Faltas</span>
-            </div>
-            <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
-              <Plus size={16} className="text-primary mb-1" />
-              <span className="text-[13px] font-bold text-on-surface truncate w-full text-center">{patientStats.nextApt}</span>
-              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Próximo Turno</span>
-            </div>
-            <div className="p-3 bg-surface rounded-xl border border-outline-variant flex flex-col items-center">
-              <TrendingUp size={16} className="text-secondary mb-1" />
-              <span className="text-[13px] font-bold text-on-surface">${patientStats.totalSpent.toLocaleString()}</span>
-              <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter">Total Invertido</span>
-            </div>
-          </div>
-
-          {/* Sub-tabs: Evoluciones vs Fotos vs Paquetes vs Google Drive */}
-          <div className="flex items-center gap-2 border-b border-outline-variant overflow-x-auto">
-            <button
-              type="button"
-              id="tab-patient-evolutions"
-              onClick={() => setPatientDetailTab('evolutions')}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap",
-                patientDetailTab === 'evolutions'
-                  ? "border-primary text-primary"
-                  : "border-transparent text-on-surface-variant hover:text-on-surface"
-              )}
-            >
-              <FileText size={14} />
-              Evoluciones ({evolutions.length})
-            </button>
-
-            <button
-              type="button"
-              id="tab-patient-photos"
-              onClick={() => setPatientDetailTab('photos')}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap",
-                patientDetailTab === 'photos'
-                  ? "border-primary text-primary"
-                  : "border-transparent text-on-surface-variant hover:text-on-surface"
-              )}
-            >
-              <Camera size={14} />
-              Antes y Después (Fotos)
-            </button>
-
-            <button
-              type="button"
-              id="tab-patient-packages"
-              onClick={() => setPatientDetailTab('packages')}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap",
-                patientDetailTab === 'packages'
-                  ? "border-primary text-primary"
-                  : "border-transparent text-on-surface-variant hover:text-on-surface"
-              )}
-            >
-              <Package size={14} />
-              Paquetes Adquiridos ({patientPackages.length})
-            </button>
-
-            <button
-              type="button"
-              id="tab-patient-drive"
-              onClick={() => setPatientDetailTab('drive')}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap",
-                patientDetailTab === 'drive'
-                  ? "border-primary text-primary"
-                  : "border-transparent text-on-surface-variant hover:text-on-surface"
-              )}
-            >
-              <Cloud size={14} className={cn(patientDetailTab === 'drive' ? "text-primary" : "text-on-surface-variant")} />
-              Archivos y Google Drive
-            </button>
-          </div>
-
-          {patientDetailTab === 'photos' ? (
-            <PatientEvolutionPhotos
-              patient={currentPatient || selectedPatient}
-              ownerId={ownerId}
-              treatments={treatments}
-            />
-          ) : patientDetailTab === 'packages' ? (
-            <PatientPackagesView 
-              patient={currentPatient || selectedPatient} 
-              ownerId={ownerId} 
-            />
-          ) : patientDetailTab === 'drive' ? (
-            <PatientDriveFiles
-              patient={currentPatient || selectedPatient}
-              evolutions={evolutions}
-              doctorName={currentDoctorName}
-            />
-          ) : (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <h5 className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Evoluciones y Tratamientos</h5>
-                <button 
-                  onClick={() => setIsAddingEntry(!isAddingEntry)}
-                  className="text-[10px] font-bold text-primary hover:underline uppercase tracking-wider flex items-center gap-1"
-                >
-                  {isAddingEntry ? 'Cerrar Formulario' : <><Plus size={12} /> Añadir Entrada</>}
-                </button>
-              </div>
-
-              {isAddingEntry && (
-                <motion.div 
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  className="p-4 bg-primary-container/20 rounded-xl border border-primary/20 space-y-3"
-                >
-                  {/* Selector de Turno / Atención */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-on-surface-variant uppercase flex items-center justify-between">
-                      <span className="flex items-center gap-1.5">
-                        <CalendarClock size={12} className="text-primary" />
-                        Turno / Cita de Atención
-                      </span>
-                      {evolutionData.appointmentId ? (
-                        <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
-                          <Link2 size={10} />
-                          Turno Vinculado
-                        </span>
-                      ) : (
-                        <span className="text-[9px] text-on-surface-variant font-medium">
-                          Atención directa / Manual
-                        </span>
-                      )}
-                    </label>
-                    <select
-                      id="evolution-appointment-select"
-                      className="w-full px-2.5 py-2 bg-white border border-outline-variant rounded-md text-[12px] font-medium text-on-surface outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                      value={evolutionData.appointmentId}
-                      onChange={(e) => handleSelectAppointmentForEvolution(e.target.value)}
-                    >
-                      {patientAppointments.length > 0 ? (
-                        <>
-                          <option value="">-- Seleccionar Turno del Paciente --</option>
-                          {patientAppointments.map(apt => {
-                            const isPkg = Boolean(apt.isPackageSession);
-                            const aptCost = isPkg ? 0 : (
-                              typeof apt.cost === 'number' && !isNaN(apt.cost)
-                                ? apt.cost
-                                : (typeof apt.price === 'number' && !isNaN(apt.price))
-                                  ? apt.price
-                                  : (treatments.find(t => t.name === apt.type)?.cost || 0)
-                            );
-                            return (
-                              <option key={apt.id} value={apt.id}>
-                                {apt.date} {apt.time ? `(${apt.time} hs)` : ''} • {apt.type || apt.treatment || 'Consulta'} • {isPkg ? 'Paquete ($0)' : `$${aptCost.toLocaleString()}`} • [{apt.status || 'pendiente'}]
-                              </option>
-                            );
-                          })}
-                          <option value="manual">-- Registrar atención directa (sin turno) --</option>
-                        </>
-                      ) : (
-                        <option value="manual">-- Sin turnos previos (atención directa en consultorio) --</option>
-                      )}
-                    </select>
-                  </div>
-
-                  {/* Cobertura de Paquete: Si el paciente tiene paquetes activos con sesiones disponibles */}
-                  {patientPackages.some(p => p.status === 'active' && p.remainingSessions > 0) && (
-                    <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[11px] font-bold text-amber-900 flex items-center gap-1.5 uppercase tracking-wider">
-                          <Sparkles size={13} className="text-amber-600" />
-                          ¿Cubrir con sesión de Paquete Adquirido?
-                        </label>
-                        {evolutionData.isPackageSession && (
-                          <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded">
-                            Costo $0 (Abonado previamente)
-                          </span>
-                        )}
-                      </div>
-                      
-                      <select
-                        className="w-full px-2.5 py-1.5 bg-white border border-amber-400 rounded-md text-[12px] font-bold text-on-surface outline-none focus:ring-1 focus:ring-amber-500"
-                        value={
-                          evolutionData.isPackageSession
-                            ? `${evolutionData.patientPackageId}:::${evolutionData.treatment}`
-                            : 'none'
-                        }
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          if (val === 'none') {
-                            const curTreatment = treatments.find(t => t.name === evolutionData.treatment);
-                            setEvolutionData({
-                              ...evolutionData,
-                              isPackageSession: false,
-                              patientPackageId: '',
-                              packageName: '',
-                              paidAmount: curTreatment?.cost || 0
-                            });
-                          } else {
-                            const [pkgId, treatName] = val.split(':::');
-                            const foundPkg = patientPackages.find(p => p.id === pkgId);
-                            const curTreatment = treatments.find(t => t.name === treatName);
-                            setEvolutionData({
-                              ...evolutionData,
-                              isPackageSession: true,
-                              patientPackageId: pkgId,
-                              packageName: foundPkg?.packageName || 'Paquete',
-                              treatment: treatName,
-                              treatmentId: curTreatment?.id || '',
-                              paidAmount: 0
-                            });
-                          }
-                        }}
-                      >
-                        <option value="none">No usar paquete (cobro individual habitual)</option>
-                        {patientPackages
-                          .filter(p => p.status === 'active' && p.remainingSessions > 0)
-                          .flatMap(pkg => 
-                            (pkg.items || [])
-                              .filter(item => item.remainingQuantity > 0)
-                              .map((item, idx) => (
-                                <option key={`${pkg.id}-${idx}`} value={`${pkg.id}:::${item.treatmentName}`}>
-                                  🎁 [{pkg.packageName}] {item.treatmentName} ({item.remainingQuantity} restantes) — $0
-                                </option>
-                              ))
-                          )}
-                      </select>
-                      <p className="text-[10px] text-amber-800 leading-tight">
-                        Al seleccionar un tratamiento de paquete, se descontará 1 sesión de la cantidad adquirida y el valor a abonar será $0.
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-on-surface-variant uppercase flex items-center justify-between">
-                        <span className="flex items-center gap-1">
-                          <Stethoscope size={11} className="text-primary" />
-                          Tratamiento Realizado
-                        </span>
-                        {evolutionData.isPackageSession && (
-                          <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                            Sesión de Paquete
-                          </span>
-                        )}
-                      </label>
-                      <select 
-                        id="evolution-treatment-select"
-                        className="w-full px-2.5 py-2 bg-white border border-outline-variant rounded-md text-[12px] font-medium text-on-surface outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                        value={evolutionData.treatment}
-                        onChange={(e) => {
-                          const t = treatments.find(item => item.name === e.target.value);
-                          setEvolutionData({ 
-                            ...evolutionData, 
-                            treatment: e.target.value,
-                            treatmentId: t?.id || '',
-                            // If package session is active, keep paidAmount as 0
-                            paidAmount: evolutionData.isPackageSession 
-                              ? 0 
-                              : (!evolutionData.appointmentId && t?.cost !== undefined ? t.cost : evolutionData.paidAmount)
-                          });
-                        }}
-                      >
-                        <option value="">-- Seleccionar Tratamiento --</option>
-                        {treatments.map(t => (
-                          <option key={t.id} value={t.name}>
-                            {t.name} {t.duration ? `• ${t.duration} min` : ''}
-                          </option>
-                        ))}
-                        {/* Preserve custom treatment name from appointment if not in catalog */}
-                        {evolutionData.treatment && !treatments.some(t => t.name === evolutionData.treatment) && (
-                          <option value={evolutionData.treatment}>
-                            {evolutionData.treatment} (del turno)
-                          </option>
-                        )}
-                      </select>
-                      {treatments.length === 0 && (
-                        <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded text-[10px] text-amber-900 flex items-center justify-between mt-1">
-                          <span>No tienes tratamientos registrados.</span>
-                          <Link to="/treatments" className="font-bold text-primary underline ml-1">
-                            Ir a Tratamientos
-                          </Link>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-on-surface-variant uppercase flex items-center justify-between">
-                        <span className="flex items-center gap-1">
-                          <Calendar size={11} className="text-primary" />
-                          Fecha de Atención
-                        </span>
-                        {evolutionData.appointmentId && (
-                          <span className="text-[9px] text-primary font-semibold">Fecha del turno</span>
-                        )}
-                      </label>
-                      <input 
-                        type="date" 
-                        className="w-full px-2.5 py-2 bg-white border border-outline-variant rounded-md text-[12px] font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                        value={evolutionData.date}
-                        onChange={(e) => setEvolutionData({ ...evolutionData, date: e.target.value })}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-on-surface-variant uppercase flex items-center justify-between">
-                        <span className="flex items-center gap-1">
-                          <DollarSign size={11} className="text-emerald-600" />
-                          Valor pagado en su momento ($)
-                        </span>
-                        {evolutionData.isPackageSession ? (
-                          <span className="text-[9px] text-emerald-800 font-bold bg-emerald-100 px-1.5 py-0.5 rounded">
-                            Pre-abonado ($0)
-                          </span>
-                        ) : (
-                          <span className="text-[9px] text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                            Histórico
-                          </span>
-                        )}
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant font-bold text-[12px]">$</span>
-                        <input 
-                          type="number" 
-                          min="0"
-                          step="any"
-                          disabled={evolutionData.isPackageSession}
-                          placeholder="0"
-                          className={cn(
-                            "w-full pl-6 pr-3 py-1.5 bg-white border border-outline-variant rounded-md text-[13px] font-bold outline-none focus:border-primary focus:ring-1 focus:ring-primary",
-                            evolutionData.isPackageSession 
-                              ? "bg-emerald-50/50 text-emerald-700 cursor-not-allowed border-emerald-300"
-                              : "text-emerald-800"
-                          )}
-                          value={evolutionData.paidAmount}
-                          onChange={(e) => setEvolutionData({ ...evolutionData, paidAmount: Number(e.target.value) || 0 })}
-                        />
-                      </div>
-                      <p className="text-[9px] text-on-surface-variant leading-tight">
-                        {evolutionData.isPackageSession 
-                          ? "Cubierto por paquete de tratamientos. No sumará ingresos adicionales ya que fue abonado en la compra del paquete."
-                          : "Valor abonado en la fecha del turno. No se modifica si cambia el precio actual del catálogo."}
-                      </p>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-on-surface-variant uppercase flex items-center justify-between">
-                        <span>Doctor / Profesional a Cargo</span>
-                        <span className="text-[9px] text-emerald-600 font-semibold flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
-                          Sesión activa
-                        </span>
-                      </label>
-                      <div className="w-full px-2.5 py-1.5 bg-white/80 rounded-md border border-outline-variant flex items-center justify-between text-[12px] text-on-surface select-none">
-                        <div className="flex items-center gap-2 truncate">
-                          <User size={13} className="text-primary shrink-0" />
-                          <span className="font-bold truncate">{currentDoctorName}</span>
-                        </div>
-                        <span className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant/70 bg-surface px-1.5 py-0.5 rounded border border-outline-variant/50 shrink-0 ml-1">
-                          {profile?.role === 'admin' ? 'Administrador' : 'Médico'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-on-surface-variant uppercase">Evolución / Notas Clínicas</label>
-                    <textarea 
-                      rows={3} 
-                      className="w-full px-2.5 py-1.5 bg-white border border-outline-variant rounded-md text-[12px] resize-none outline-none focus:border-primary focus:ring-1 focus:ring-primary" 
-                      placeholder="Describa el procedimiento realizado, hallazgos clínicos y observaciones del paciente..." 
-                      value={evolutionData.note}
-                      onChange={(e) => setEvolutionData({ ...evolutionData, note: e.target.value })}
-                    />
-                  </div>
-
-                  {/* Agendar Próximo Turno / Control (Dentro de la Evolución) */}
-                  <div className={cn(
-                    "rounded-xl border transition-all p-3 space-y-2.5",
-                    scheduleNextApt 
-                      ? "bg-primary-container/25 border-primary/40 shadow-xs" 
-                      : "bg-surface border-outline-variant/70 hover:border-outline-variant"
-                  )}>
-                    <div className="flex items-center justify-between gap-2">
-                      <label 
-                        htmlFor="patients-schedule-next-apt-toggle"
-                        className="flex items-center gap-2 cursor-pointer select-none"
-                      >
-                        <input
-                          id="patients-schedule-next-apt-toggle"
-                          type="checkbox"
-                          checked={scheduleNextApt}
-                          onChange={(e) => {
-                            setScheduleNextApt(e.target.checked);
-                            if (e.target.checked && !nextAptData.date) {
-                              setNextAptData(prev => ({ ...prev, date: getDateOffset(7) }));
-                            }
-                          }}
-                          className="w-4 h-4 rounded text-primary focus:ring-primary border-outline-variant cursor-pointer"
-                        />
-                        <div className="flex items-center gap-1.5">
-                          <CalendarPlus size={14} className={scheduleNextApt ? "text-primary" : "text-on-surface-variant"} />
-                          <span className={cn(
-                            "text-xs font-bold uppercase tracking-wider",
-                            scheduleNextApt ? "text-primary font-black" : "text-on-surface font-semibold"
-                          )}>
-                            Agendar Próximo Turno / Control
-                          </span>
-                        </div>
-                      </label>
-
-                      {scheduleNextApt ? (
-                        <span className="text-[9px] font-bold text-primary bg-primary/15 px-2 py-0.5 rounded-full">
-                          Se agendará al guardar
-                        </span>
-                      ) : (
-                        <span className="text-[9px] text-on-surface-variant/70">
-                          Opcional
-                        </span>
-                      )}
-                    </div>
-
-                    {scheduleNextApt && (
-                      <div className="pt-2 border-t border-primary/20 space-y-2.5">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider mr-1">
-                            Atajos:
-                          </span>
-                          {[
-                            { label: '+7d', days: 7 },
-                            { label: '+14d', days: 14 },
-                            { label: '+21d', days: 21 },
-                            { label: '+30d', days: 30 },
-                          ].map((preset) => {
-                            const calculated = getDateOffset(preset.days);
-                            const isSelected = nextAptData.date === calculated;
-                            return (
-                              <button
-                                key={preset.days}
-                                type="button"
-                                onClick={() => setNextAptData(prev => ({ ...prev, date: calculated }))}
-                                className={cn(
-                                  "px-2 py-0.5 rounded text-[10px] font-bold uppercase transition-all border cursor-pointer",
-                                  isSelected
-                                    ? "bg-primary text-white border-primary"
-                                    : "bg-white text-on-surface-variant border-outline-variant hover:bg-surface-bright"
-                                )}
-                              >
-                                {preset.label}
-                              </button>
-                            );
-                          })}
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                          <div className="space-y-1">
-                            <label className="text-[9px] font-bold text-on-surface-variant uppercase flex items-center gap-1">
-                              <Calendar size={10} className="text-primary" /> Fecha *
-                            </label>
-                            <input
-                              type="date"
-                              required
-                              className="w-full px-2 py-1 bg-white border border-outline-variant rounded text-[11px] font-medium outline-none focus:border-primary"
-                              value={nextAptData.date}
-                              onChange={(e) => setNextAptData(prev => ({ ...prev, date: e.target.value }))}
-                            />
-                          </div>
-
-                          <div className="space-y-1">
-                            <label className="text-[9px] font-bold text-on-surface-variant uppercase flex items-center gap-1">
-                              <Clock size={10} className="text-primary" /> Hora *
-                            </label>
-                            <input
-                              type="time"
-                              required
-                              className="w-full px-2 py-1 bg-white border border-outline-variant rounded text-[11px] font-medium outline-none focus:border-primary"
-                              value={nextAptData.time}
-                              onChange={(e) => setNextAptData(prev => ({ ...prev, time: e.target.value }))}
-                            />
-                          </div>
-
-                          <div className="space-y-1">
-                            <label className="text-[9px] font-bold text-on-surface-variant uppercase flex items-center gap-1">
-                              <Clock size={10} className="text-primary" /> Duración
-                            </label>
-                            <select
-                              className="w-full px-2 py-1 bg-white border border-outline-variant rounded text-[11px] font-medium outline-none focus:border-primary cursor-pointer"
-                              value={nextAptData.duration}
-                              onChange={(e) => setNextAptData(prev => ({ ...prev, duration: Number(e.target.value) || 30 }))}
-                            >
-                              <option value={15}>15 min</option>
-                              <option value={30}>30 min</option>
-                              <option value={45}>45 min</option>
-                              <option value={60}>60 min</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                            <label className="text-[9px] font-bold text-on-surface-variant uppercase flex items-center gap-1">
-                              <Stethoscope size={10} className="text-primary" /> Motivo / Tratamiento
-                            </label>
-                            <input
-                              type="text"
-                              list="patients-next-treatments-list"
-                              placeholder="Ej: Control / Seguimiento..."
-                              className="w-full px-2 py-1 bg-white border border-outline-variant rounded text-[11px] font-medium outline-none focus:border-primary"
-                              value={nextAptData.treatment}
-                              onChange={(e) => setNextAptData(prev => ({ ...prev, treatment: e.target.value }))}
-                            />
-                            <datalist id="patients-next-treatments-list">
-                              <option value="Control / Seguimiento" />
-                              {treatments.map(t => (
-                                <option key={t.id} value={t.name} />
-                              ))}
-                            </datalist>
-                          </div>
-
-                          <div className="space-y-1">
-                            <label className="text-[9px] font-bold text-on-surface-variant uppercase">
-                              Indicaciones para el turno
-                            </label>
-                            <input
-                              type="text"
-                              placeholder="Ej: Control post-tratamiento..."
-                              className="w-full px-2 py-1 bg-white border border-outline-variant rounded text-[11px] font-medium outline-none focus:border-primary"
-                              value={nextAptData.notes}
-                              onChange={(e) => setNextAptData(prev => ({ ...prev, notes: e.target.value }))}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex justify-end gap-2 pt-1">
-                    <button 
-                      onClick={() => setIsAddingEntry(false)}
-                      className="px-3 py-1.5 text-[11px] font-bold text-on-surface-variant uppercase hover:bg-surface rounded transition-colors"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      onClick={handleAddEvolution}
-                      disabled={!evolutionData.treatment || !evolutionData.note.trim()}
-                      className="px-4 py-1.5 bg-primary text-white text-[11px] font-bold rounded-lg shadow-sm uppercase hover:bg-primary/90 disabled:opacity-50 transition-all flex items-center gap-1.5"
-                    >
-                      <Save size={13} />
-                      Guardar Evolución
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            
-            <div className="space-y-3">
-              {evolutions.map((entry) => {
-                const paidValue = Number(entry.cost ?? entry.paidAmount ?? 0);
-                return (
-                  <div key={entry.id} className="p-3.5 bg-white border border-outline-variant rounded-xl space-y-2 relative overflow-hidden group hover:border-primary/50 transition-all shadow-sm">
-                    <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-primary"></div>
-                    <div className="flex justify-between items-start pl-1">
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-[10px] font-bold text-primary uppercase tracking-widest flex items-center gap-1">
-                            <Calendar size={10} />
-                            {entry.date}
-                          </span>
-                          {paidValue > 0 && (
-                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-0.5" title="Valor pagado en su momento">
-                              <DollarSign size={10} />
-                              Abonado: ${paidValue.toLocaleString()}
-                            </span>
-                          )}
-                          {entry.isPackageSession && (
-                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300 flex items-center gap-1" title="Sesión cubierta por paquete previamente abonado">
-                              <Package size={10} />
-                              Paquete {entry.packageName ? `(${entry.packageName})` : ''} • $0
-                            </span>
-                          )}
-                          {entry.appointmentId && (
-                            <span className="text-[9px] font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded border border-primary/20 flex items-center gap-1">
-                              <Link2 size={9} />
-                              Turno Vinculado
-                            </span>
-                          )}
-                        </div>
-                        <h6 className="text-[13px] font-bold text-on-surface mt-1 flex items-center gap-1.5">
-                          <Stethoscope size={13} className="text-primary/70 shrink-0" />
-                          {entry.treatment}
-                        </h6>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[9px] font-bold bg-surface px-2 py-0.5 rounded text-on-surface-variant uppercase border border-outline-variant/30">
-                          {entry.status || 'Completado'}
-                        </span>
-                        <button
-                          onClick={() => handleDeleteEvolution(entry.id)}
-                          className="p-1 text-on-surface-variant/40 hover:text-error hover:bg-error/10 rounded transition-colors"
-                          title="Eliminar evolución"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    </div>
-                    <p className="text-[12px] text-on-surface leading-relaxed pl-1 whitespace-pre-wrap">{entry.note}</p>
-                    <div className="flex items-center justify-between pt-1.5 border-t border-surface pl-1">
-                      <div className="flex items-center gap-1.5 text-on-surface-variant">
-                        <User size={11} className="text-primary" />
-                        <p className="text-[10px] font-semibold">{entry.doctor}</p>
-                      </div>
-                      {entry.doctorEmail && (
-                        <span className="text-[9px] text-on-surface-variant/60">{entry.doctorEmail}</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-              {evolutions.length === 0 && (
-                <div className="text-center py-8 border-2 border-dashed border-outline-variant rounded-xl opacity-60">
-                  <FileText size={24} className="mx-auto mb-2 text-on-surface-variant" />
-                  <p className="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">Sin evoluciones registradas</p>
-                  <p className="text-[10px] text-on-surface-variant/70 mt-1">Haz clic en &quot;Añadir Entrada&quot; para registrar la primera evolución clínica del paciente.</p>
-                </div>
-              )}
-            </div>
-          </div>
-          )}
-
-          <div className="pt-4">
-            <button onClick={() => setActiveModal(null)} className="w-full px-4 py-2 border border-outline-variant rounded-lg text-[12px] font-bold hover:bg-surface transition-colors uppercase tracking-widest">Cerrar Historial</button>
           </div>
         </div>
       </Modal>

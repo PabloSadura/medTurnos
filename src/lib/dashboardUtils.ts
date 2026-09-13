@@ -64,6 +64,9 @@ export function getAppointmentRevenue(
       (ev.patientId && app.patientId && ev.patientId === app.patientId && ev.date && app.date && ev.date === app.date)
     );
     if (matchingEvo) {
+      if (Array.isArray(matchingEvo.items) && matchingEvo.items.length > 0) {
+        return matchingEvo.items.reduce((sum: number, it: any) => sum + (it.isPackageSession ? 0 : Number(it.price || it.paidAmount || 0)), 0);
+      }
       if (typeof matchingEvo.paidAmount === 'number' && !isNaN(matchingEvo.paidAmount)) {
         return matchingEvo.paidAmount;
       }
@@ -74,6 +77,9 @@ export function getAppointmentRevenue(
   }
 
   // 2. Check the appointment's own immutable historical paid amount / cost
+  if (Array.isArray(app.treatmentItems) && app.treatmentItems.length > 0) {
+    return app.treatmentItems.reduce((sum: number, it: any) => sum + (it.isPackageSession ? 0 : Number(it.price || it.paidAmount || 0)), 0);
+  }
   if (typeof app.paidAmount === 'number' && !isNaN(app.paidAmount)) {
     return app.paidAmount;
   }
@@ -198,14 +204,16 @@ export function computeMonthlyEvolution(
     const packagesRevenue = monthPackages.reduce((acc, p) => acc + (Number(p.pricePaid) || 0), 0);
     const packagesCount = monthPackages.length;
 
-    // Standalone evolutions (clinical attentions registered directly without a linked appointment)
+    // Standalone evolutions (clinical attentions registered directly without a linked finished appointment)
     const standaloneEvolutions = monthEvolutions.filter(ev => {
-      const isLinkedToAnyApp = monthApps.some(a => 
-        (ev.appointmentId && a.id === ev.appointmentId) || 
-        (a.evolutionId && a.evolutionId === ev.id) || 
-        (a.patientId && ev.patientId && a.patientId === ev.patientId && a.date === ev.date)
+      const isLinkedToFinishedApp = monthApps.some(a => 
+        normalizeStatus(a.status) === 'finished' && (
+          (ev.appointmentId && a.id === ev.appointmentId) || 
+          (a.evolutionId && a.evolutionId === ev.id) || 
+          (a.patientId && ev.patientId && a.patientId === ev.patientId && a.date === ev.date)
+        )
       );
-      return !isLinkedToAnyApp;
+      return !isLinkedToFinishedApp;
     });
 
     const totalAppointments = monthApps.length + standaloneEvolutions.length;
@@ -239,11 +247,13 @@ export function computeMonthlyEvolution(
     // Add standalone completed clinical attentions
     standaloneEvolutions.forEach(ev => {
       finished++;
-      const evPaid = (typeof ev.paidAmount === 'number' && !isNaN(ev.paidAmount))
-        ? ev.paidAmount
-        : (typeof ev.cost === 'number' && !isNaN(ev.cost))
-          ? ev.cost
-          : 0;
+      const evPaid = (Array.isArray(ev.items) && ev.items.length > 0)
+        ? ev.items.reduce((sum: number, it: any) => sum + (it.isPackageSession ? 0 : Number(it.price || it.paidAmount || 0)), 0)
+        : (typeof ev.paidAmount === 'number' && !isNaN(ev.paidAmount))
+          ? ev.paidAmount
+          : (typeof ev.cost === 'number' && !isNaN(ev.cost))
+            ? ev.cost
+            : 0;
       appointmentsRevenue += evPaid;
     });
 
