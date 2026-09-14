@@ -14,7 +14,7 @@ import {
 } from 'firebase/firestore';
 import { ReminderModal } from '../components/ReminderModal';
 import { getPatientFirstName } from '../lib/patientNameUtils';
-import { formatDateDDMMAAAA, formatArgentinePhoneWithPrefix, getWhatsAppNumber } from '../lib/phoneUtils';
+import { formatDateDDMMAAAA, formatDateFullTextSpanish, formatArgentinePhoneWithPrefix, getWhatsAppNumber } from '../lib/phoneUtils';
 
 export function Reminders() {
   const { ownerId, profile } = useAuth();
@@ -235,7 +235,7 @@ export function Reminders() {
     }
   };
 
-  // Quick 1-click WhatsApp trigger with fixed prefix +54 9, DDMMAAAA date and clinic address
+  // Quick 1-click WhatsApp trigger with fixed prefix +54 9, full text date and clinic address
   const handleQuickWhatsApp = (apt: any) => {
     const cleanPhone = getWhatsAppNumber(apt.phone);
 
@@ -244,7 +244,7 @@ export function Reminders() {
       return;
     }
 
-    const formattedDate = formatDateDDMMAAAA(apt.date);
+    const formattedDate = formatDateFullTextSpanish(apt.date);
     const message = template
       .replace(/{nombre}/g, apt.patientFirstName)
       .replace(/{fecha}/g, formattedDate)
@@ -376,7 +376,7 @@ export function Reminders() {
                   <span className="font-semibold text-on-surface text-[10px] uppercase tracking-wider">Insertar variable:</span>
                   {[
                     { tag: '{nombre}', label: 'Nombre' },
-                    { tag: '{fecha}', label: 'Fecha (DDMMAAAA)' },
+                    { tag: '{fecha}', label: 'Fecha en texto (ej: lunes 14 de septiembre de 2026)' },
                     { tag: '{hora}', label: 'Hora' },
                     { tag: '{profesional}', label: 'Profesional' },
                     { tag: '{clinica}', label: 'Clínica' },
@@ -400,12 +400,12 @@ export function Reminders() {
               <div className="p-3 bg-surface border border-outline-variant rounded-xl space-y-1.5">
                 <div className="flex items-center gap-1.5 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">
                   <Eye size={12} className="text-secondary" />
-                  <span>Vista previa en vivo (ejemplo con fecha DDMMAAAA):</span>
+                  <span>Vista previa en vivo (ejemplo con fecha en texto completo):</span>
                 </div>
                 <p className="text-xs text-on-surface bg-surface-bright p-2.5 rounded-lg border border-outline-variant/60 leading-relaxed font-sans italic">
                   {template
                     .replace(/{nombre}/g, 'María')
-                    .replace(/{fecha}/g, formatDateDDMMAAAA(todayStr))
+                    .replace(/{fecha}/g, formatDateFullTextSpanish(todayStr))
                     .replace(/{hora}/g, '14:30')
                     .replace(/{profesional}/g, 'Dra. López')
                     .replace(/{clinica}/g, clinicName || 'Nuestra Clínica')

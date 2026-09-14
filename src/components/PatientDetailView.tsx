@@ -4,7 +4,7 @@ import {
   FileText, Camera, Package, Cloud, Plus, X, Save, Clock, Sparkles, 
   Layers, Link2, User, Phone, Mail, Trash2, Edit2, ArrowLeft, 
   CalendarPlus, CheckCircle2, AlertTriangle, TrendingUp, DollarSign,
-  ChevronRight, CalendarClock, Search
+  ChevronRight, CalendarClock, Search, Lock
 } from 'lucide-react';
 import { cn, calculateAge } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -17,6 +17,7 @@ import { PatientPackagesView } from './PatientPackagesView';
 import { PatientDriveFiles } from './PatientDriveFiles';
 import { PatientEvolutionPhotos } from './PatientEvolutionPhotos';
 import { consumePackageSession } from '../lib/packageUtils';
+import { checkEvolutionEditability } from '../lib/evolutionUtils';
 import { PatientPackage } from '../types';
 import { 
   splitFullName, formatPatientFullName, getPatientFirstName, 
@@ -59,6 +60,15 @@ export function PatientDetailView({
   const [historySearchTerm, setHistorySearchTerm] = useState('');
   const [patientPackages, setPatientPackages] = useState<PatientPackage[]>([]);
   const [patientAppointments, setPatientAppointments] = useState<any[]>([]);
+  const [editingEvolution, setEditingEvolution] = useState<any | null>(null);
+
+  // Automatically open evolution entry if navigated from appointment or requested
+  useEffect(() => {
+    if (initialAddEntry || targetAppointmentId) {
+      setIsAddingEntry(true);
+      setPatientDetailTab('evolutions');
+    }
+  }, [initialAddEntry, targetAppointmentId]);
   const [patientStats, setPatientStats] = useState({
     attendance: 0,
     absences: 0,
@@ -214,18 +224,18 @@ export function PatientDetailView({
 
         setEvolutionData(prev => ({
           ...prev,
-          appointmentId: prev.appointmentId || targetApt.id,
-          date: prev.appointmentId ? prev.date : (targetApt.date || todayStr),
-          treatment: prev.appointmentId ? prev.treatment : (targetApt.type || targetApt.treatment || (treatments[0]?.name || '')),
-          treatmentId: prev.appointmentId ? prev.treatmentId : (targetApt.treatmentId || matchedTreatment?.id || ''),
-          paidAmount: prev.appointmentId ? prev.paidAmount : historicalPrice,
+          appointmentId: targetAppointmentId ? targetApt.id : (prev.appointmentId || targetApt.id),
+          date: targetAppointmentId ? (targetApt.date || todayStr) : (prev.appointmentId ? prev.date : (targetApt.date || todayStr)),
+          treatment: targetAppointmentId ? (targetApt.type || targetApt.treatment || (treatments[0]?.name || '')) : (prev.appointmentId ? prev.treatment : (targetApt.type || targetApt.treatment || (treatments[0]?.name || ''))),
+          treatmentId: targetAppointmentId ? (targetApt.treatmentId || matchedTreatment?.id || '') : (prev.appointmentId ? prev.treatmentId : (targetApt.treatmentId || matchedTreatment?.id || '')),
+          paidAmount: targetAppointmentId ? historicalPrice : (prev.appointmentId ? prev.paidAmount : historicalPrice),
           isPackageSession: isTargetPkg,
           patientPackageId: targetApt.patientPackageId || '',
           packageName: targetApt.packageName || ''
         }));
 
         setEvolutionTreatments(prev => {
-          if (prev.length > 0 && prev[0].treatmentName) return prev;
+          if (!targetAppointmentId && prev.length > 0 && prev[0].treatmentName) return prev;
           if (targetApt.treatmentItems && Array.isArray(targetApt.treatmentItems) && targetApt.treatmentItems.length > 0) {
             return targetApt.treatmentItems.map((it: any, idx: number) => ({
               id: `trt-apt-${idx}`,
@@ -421,6 +431,84 @@ export function PatientDetailView({
     }
   };
 
+  const handleCancelEdit = () => {
+    setEditingEvolution(null);
+    const defaultTreatment = treatments[0] || null;
+    setEvolutionTreatments([{
+      id: `trt-${Date.now()}`,
+      treatmentId: defaultTreatment?.id || '',
+      treatmentName: defaultTreatment?.name || '',
+      price: defaultTreatment?.cost !== undefined ? Number(defaultTreatment.cost) : 0,
+      isPackageSession: false,
+      patientPackageId: '',
+      packageName: ''
+    }]);
+    setEvolutionData({
+      treatment: defaultTreatment?.name || '',
+      treatmentId: defaultTreatment?.id || '',
+      note: '',
+      date: new Date().toISOString().split('T')[0],
+      appointmentId: '',
+      paidAmount: defaultTreatment?.cost || 0,
+      isPackageSession: false,
+      patientPackageId: '',
+      packageName: ''
+    });
+  };
+
+  const handleStartEditEvolution = (entry: any) => {
+    const editability = checkEvolutionEditability(entry);
+    if (!editability.canEdit) {
+      showToast('No es posible editar: esta evolución fue registrada hace más de 24 horas y no permite modificaciones.', 'error');
+      return;
+    }
+
+    setEditingEvolution(entry);
+    setIsAddingEntry(true);
+    setPatientDetailTab('evolutions');
+
+    setEvolutionData({
+      treatment: entry.treatment || '',
+      treatmentId: entry.treatmentId || '',
+      note: entry.note || '',
+      date: entry.date || new Date().toISOString().split('T')[0],
+      appointmentId: entry.appointmentId || '',
+      paidAmount: typeof entry.paidAmount === 'number' ? entry.paidAmount : (entry.cost || 0),
+      isPackageSession: Boolean(entry.isPackageSession),
+      patientPackageId: entry.patientPackageId || '',
+      packageName: entry.packageName || ''
+    });
+
+    if (Array.isArray(entry.items) && entry.items.length > 0) {
+      setEvolutionTreatments(entry.items.map((it: any, idx: number) => ({
+        id: `trt-edit-${idx}-${Date.now()}`,
+        treatmentId: it.treatmentId || '',
+        treatmentName: it.treatmentName || it.treatment || '',
+        price: it.isPackageSession ? 0 : Number(it.price || 0),
+        isPackageSession: Boolean(it.isPackageSession),
+        patientPackageId: it.patientPackageId || '',
+        packageName: it.packageName || ''
+      })));
+    } else {
+      setEvolutionTreatments([{
+        id: `trt-edit-0-${Date.now()}`,
+        treatmentId: entry.treatmentId || '',
+        treatmentName: entry.treatment || (treatments[0]?.name || ''),
+        price: entry.isPackageSession ? 0 : Number(entry.paidAmount ?? entry.cost ?? 0),
+        isPackageSession: Boolean(entry.isPackageSession),
+        patientPackageId: entry.patientPackageId || '',
+        packageName: entry.packageName || ''
+      }]);
+    }
+
+    setTimeout(() => {
+      const container = document.getElementById('evolution-form-container');
+      if (container) {
+        container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 50);
+  };
+
   const handleAddEvolution = async () => {
     if (!patient) return;
     if (evolutionTreatments.length === 0) {
@@ -435,6 +523,83 @@ export function PatientDetailView({
     if (!evolutionData.note.trim()) {
       showToast('Por favor describe la nota o procedimiento de la evolución');
       return;
+    }
+
+    // Edición de evolución existente dentro del plazo de 24 horas
+    if (editingEvolution) {
+      const editability = checkEvolutionEditability(editingEvolution);
+      if (!editability.canEdit) {
+        showToast('No se puede guardar: el plazo de 24 horas para modificar esta evolución ha expirado.', 'error');
+        return;
+      }
+
+      try {
+        const batch = writeBatch(db);
+        const evolutionPath = `patients/${patient.id}/evolutions`;
+        const evoRef = doc(db, evolutionPath, editingEvolution.id);
+        const globalEvolutionRef = doc(db, 'evolutions', editingEvolution.id);
+
+        const attentionDate = evolutionData.date || new Date().toISOString().split('T')[0];
+        const totalPaid = evolutionTreatments.reduce(
+          (sum, item) => sum + (item.isPackageSession ? 0 : Number(item.price || 0)),
+          0
+        );
+        const combinedTreatmentName = evolutionTreatments.map(t => t.treatmentName).join(' + ');
+
+        const itemsPayload = evolutionTreatments.map(t => ({
+          treatmentId: t.treatmentId || '',
+          treatmentName: t.treatmentName,
+          price: t.isPackageSession ? 0 : Number(t.price || 0),
+          isPackageSession: Boolean(t.isPackageSession),
+          patientPackageId: t.patientPackageId || null,
+          packageName: t.packageName || null
+        }));
+
+        const isAllPackages = evolutionTreatments.every(t => t.isPackageSession);
+        const firstPkg = evolutionTreatments.find(t => t.isPackageSession);
+
+        const updatePayload: any = {
+          treatment: combinedTreatmentName,
+          treatmentId: evolutionTreatments[0]?.treatmentId || '',
+          items: itemsPayload,
+          cost: totalPaid,
+          paidAmount: totalPaid,
+          isPackageSession: isAllPackages,
+          patientPackageId: firstPkg?.patientPackageId || null,
+          packageName: firstPkg?.packageName || null,
+          note: evolutionData.note.trim(),
+          date: attentionDate,
+          appointmentId: evolutionData.appointmentId || null,
+          updatedAt: serverTimestamp(),
+          lastEditedAt: serverTimestamp(),
+          lastEditedBy: currentDoctorName
+        };
+
+        batch.update(evoRef, updatePayload);
+        batch.update(globalEvolutionRef, updatePayload);
+
+        // Si estaba vinculada a un turno, actualizar costo y tratamiento en el turno
+        if (evolutionData.appointmentId) {
+          batch.update(doc(db, 'appointments', evolutionData.appointmentId), {
+            cost: totalPaid,
+            price: totalPaid,
+            paidAmount: totalPaid,
+            treatment: combinedTreatmentName,
+            type: combinedTreatmentName,
+            treatmentItems: itemsPayload,
+            updatedAt: serverTimestamp()
+          });
+        }
+
+        await batch.commit();
+
+        showToast('Evolución clínica modificada exitosamente');
+        handleCancelEdit();
+        return;
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, `patients/${patient.id}/evolutions/${editingEvolution.id}`);
+        return;
+      }
     }
 
     try {
@@ -658,16 +823,29 @@ export function PatientDetailView({
     }
   };
 
-  const handleDeleteEvolution = async (evolutionId: string) => {
+  const handleDeleteEvolution = async (evolutionOrId: any) => {
+    const evoObj = typeof evolutionOrId === 'string' 
+      ? evolutions.find(e => e.id === evolutionOrId) 
+      : evolutionOrId;
+    const evoId = typeof evolutionOrId === 'string' ? evolutionOrId : evolutionOrId?.id;
+
+    if (evoObj) {
+      const editability = checkEvolutionEditability(evoObj);
+      if (!editability.canEdit) {
+        showToast('No es posible eliminar: esta evolución fue registrada hace más de 24 horas y se encuentra archivada y protegida.', 'error');
+        return;
+      }
+    }
+
     if (!window.confirm('¿Está seguro de que desea eliminar esta evolución?')) return;
     try {
       const batch = writeBatch(db);
-      batch.delete(doc(db, `patients/${patient.id}/evolutions`, evolutionId));
-      batch.delete(doc(db, 'evolutions', evolutionId));
+      batch.delete(doc(db, `patients/${patient.id}/evolutions`, evoId));
+      batch.delete(doc(db, 'evolutions', evoId));
       await batch.commit();
       showToast('Evolución eliminada con éxito');
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `patients/${patient.id}/evolutions/${evolutionId}`);
+      handleFirestoreError(error, OperationType.DELETE, `patients/${patient.id}/evolutions/${evoId}`);
     }
   };
 
@@ -698,18 +876,42 @@ export function PatientDetailView({
             return treatmentObj && treatmentObj.materials && treatmentObj.materials.length > 0;
           })()
     );
-    
+    const editability = checkEvolutionEditability(entry);
+    const isCurrentlyEditing = editingEvolution?.id === entry.id;
+
     return (
       <div 
         key={entry.id} 
         className={cn(
-          "bg-surface rounded-xl border border-outline-variant space-y-2 relative group hover:border-primary/40 transition-colors shadow-2xs",
+          "bg-surface rounded-xl border space-y-2 relative group transition-all shadow-2xs",
+          isCurrentlyEditing 
+            ? "border-amber-500/80 ring-2 ring-amber-500/20 bg-amber-50/20" 
+            : "border-outline-variant hover:border-primary/40",
           compact ? "p-3 text-xs" : "p-4 space-y-2.5"
         )}
       >
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs font-bold text-on-surface font-mono">{entry.date}</span>
+
+            {/* Badge de estado de edición (24 Horas) */}
+            {editability.canEdit ? (
+              <span 
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold text-amber-800 bg-amber-500/15 border border-amber-500/30 shadow-2xs"
+                title={`Esta evolución puede modificarse porque fue registrada hace menos de 24 horas. Restan ~${editability.remainingHours}h ${editability.remainingMinutes}m.`}
+              >
+                <Clock size={10} className="text-amber-600" />
+                <span>Editable ({editability.remainingHours > 0 ? `quedan ~${editability.remainingHours}h` : `${editability.remainingMinutes} min`})</span>
+              </span>
+            ) : (
+              <span 
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant/70 bg-surface-bright border border-outline-variant/60"
+                title="Edición bloqueada: Las notas de evolución clínica no pueden modificarse trascurridas 24 horas del registro por seguridad y auditoría médica."
+              >
+                <Lock size={9} />
+                <span>Edición cerrada (+24h)</span>
+              </span>
+            )}
             
             {hasItems ? (
               <>
@@ -758,20 +960,62 @@ export function PatientDetailView({
               </span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => handleDeleteEvolution(entry.id)}
-            className="opacity-0 group-hover:opacity-100 p-1 text-on-surface-variant hover:text-error hover:bg-error-container rounded transition-all cursor-pointer"
-            title="Eliminar evolución"
-          >
-            <Trash2 size={13} />
-          </button>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            {editability.canEdit ? (
+              <button
+                type="button"
+                onClick={() => handleStartEditEvolution(entry)}
+                className={cn(
+                  "inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold rounded-md transition-all cursor-pointer shadow-2xs active:scale-95",
+                  isCurrentlyEditing
+                    ? "bg-amber-600 text-white hover:bg-amber-700"
+                    : "text-primary bg-primary/10 hover:bg-primary/20 border border-primary/25"
+                )}
+                title="Editar evolución dentro de las 24 horas permitidas"
+              >
+                <Edit2 size={11} />
+                <span>{isCurrentlyEditing ? 'Editando...' : 'Editar'}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled
+                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium text-on-surface-variant/50 bg-surface-bright border border-outline-variant/40 rounded-md cursor-not-allowed"
+                title="Superó el plazo máximo de 24 horas para modificaciones"
+              >
+                <Lock size={10} />
+                <span className="hidden sm:inline">No editable</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => handleDeleteEvolution(entry)}
+              className={cn(
+                "p-1 rounded transition-all cursor-pointer",
+                editability.canEdit
+                  ? "opacity-0 group-hover:opacity-100 text-on-surface-variant hover:text-error hover:bg-error-container"
+                  : "opacity-0 group-hover:opacity-60 text-on-surface-variant/40 hover:text-on-surface-variant cursor-not-allowed"
+              )}
+              title={editability.canEdit ? "Eliminar evolución" : "No eliminable (registro archivado tras 24hs)"}
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
         </div>
+
         <p className="text-[12px] text-on-surface leading-relaxed pl-1 whitespace-pre-wrap">{entry.note}</p>
+
         <div className="flex items-center justify-between pt-1.5 border-t border-outline-variant/40 pl-1 text-[10px] text-on-surface-variant">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <User size={11} className="text-primary" />
             <p className="font-semibold">{entry.doctor}</p>
+            {entry.lastEditedBy && (
+              <span className="text-[9px] text-amber-700 font-medium bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                Editado por {entry.lastEditedBy}
+              </span>
+            )}
           </div>
           {entry.doctorEmail && (
             <span className="text-[9px] text-on-surface-variant/60 truncate max-w-[150px]">{entry.doctorEmail}</span>
@@ -818,16 +1062,53 @@ export function PatientDetailView({
     const activePackages = patientPackages.filter(p => p.status === 'active' && p.remainingSessions > 0);
 
     return (
-      <div className="p-4.5 bg-surface rounded-xl border border-primary/30 space-y-4 shadow-sm animate-in fade-in duration-200 h-full flex flex-col justify-between">
+      <div id="evolution-form-container" className="p-4.5 bg-surface rounded-xl border border-primary/30 space-y-4 shadow-sm animate-in fade-in duration-200 h-full flex flex-col justify-between">
         <div className="flex items-center justify-between border-b border-outline-variant pb-2.5 shrink-0">
           <div className="flex items-center gap-2">
-            <Sparkles size={14} className="text-primary" />
-            <span className="text-[12px] font-bold text-on-surface uppercase tracking-wider">Registrar Evolución Clínica</span>
+            {editingEvolution ? (
+              <Edit2 size={15} className="text-amber-600" />
+            ) : (
+              <Sparkles size={14} className="text-primary" />
+            )}
+            <span className="text-[12px] font-bold text-on-surface uppercase tracking-wider">
+              {editingEvolution ? 'Modificar Evolución Clínica' : 'Registrar Evolución Clínica'}
+            </span>
           </div>
-          <span className="text-[10px] text-on-surface-variant bg-surface-bright px-2 py-0.5 rounded border border-outline-variant font-medium">
-            Atendido por: <b>{currentDoctorName}</b>
-          </span>
+          <div className="flex items-center gap-2">
+            {editingEvolution && (
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                className="text-[11px] font-bold text-on-surface-variant hover:text-error px-2 py-0.5 rounded border border-outline-variant hover:border-error/30 transition-colors flex items-center gap-1 cursor-pointer"
+                title="Descartar cambios y volver al modo de nueva evolución"
+              >
+                <X size={12} />
+                <span>Cancelar edición</span>
+              </button>
+            )}
+            <span className="text-[10px] text-on-surface-variant bg-surface-bright px-2 py-0.5 rounded border border-outline-variant font-medium">
+              Atendido por: <b>{currentDoctorName}</b>
+            </span>
+          </div>
         </div>
+
+        {editingEvolution && (
+          <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded-lg flex items-center justify-between gap-2 text-xs text-amber-900">
+            <div className="flex items-center gap-2">
+              <Clock size={14} className="text-amber-600 shrink-0" />
+              <span>
+                <b>Modo Edición:</b> Modificando registro ({checkEvolutionEditability(editingEvolution).message}). Pasadas 24hs la edición quedará cerrada.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              className="text-[11px] font-bold text-amber-800 underline hover:no-underline shrink-0 cursor-pointer"
+            >
+              Volver a nueva
+            </button>
+          </div>
+        )}
 
         {/* Vincular con Turno Agendado y Fecha */}
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
@@ -1131,19 +1412,29 @@ export function PatientDetailView({
         <div className="flex items-center justify-end gap-2 pt-3 mt-auto border-t border-outline-variant/60 shrink-0">
           <button
             type="button"
-            onClick={() => setIsAddingEntry(false)}
+            onClick={() => {
+              if (editingEvolution) {
+                handleCancelEdit();
+              }
+              setIsAddingEntry(false);
+            }}
             className="px-3.5 py-2 border border-outline-variant rounded-lg text-xs font-bold text-on-surface-variant hover:bg-surface-bright transition-colors cursor-pointer"
           >
-            Cancelar
+            {editingEvolution ? 'Cancelar Edición' : 'Cancelar'}
           </button>
           <button
             type="button"
             onClick={handleAddEvolution}
-            className="px-5 py-2 bg-primary text-white rounded-lg text-xs font-bold flex items-center gap-1.5 hover:bg-primary/90 transition-all shadow-sm cursor-pointer active:scale-95"
+            className={cn(
+              "px-5 py-2 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer active:scale-95",
+              editingEvolution ? "bg-amber-600 hover:bg-amber-700" : "bg-primary hover:bg-primary/90"
+            )}
             id="btn-save-evolution"
           >
             <Save size={13} />
-            Guardar Evolución ({evolutionTreatments.length > 1 ? `${evolutionTreatments.length} tratamientos` : '1 tratamiento'} • ${totalEvolutionPrice.toLocaleString()})
+            {editingEvolution
+              ? `Guardar Cambios (${totalEvolutionPrice > 0 ? `$${totalEvolutionPrice.toLocaleString()}` : 'Sesión de paquete'})`
+              : `Guardar Evolución (${evolutionTreatments.length > 1 ? `${evolutionTreatments.length} tratamientos` : '1 tratamiento'} • $${totalEvolutionPrice.toLocaleString()})`}
           </button>
         </div>
       </div>
@@ -1379,7 +1670,14 @@ export function PatientDetailView({
               </div>
               <button
                 type="button"
-                onClick={() => setIsAddingEntry(!isAddingEntry)}
+                onClick={() => {
+                  if (isAddingEntry) {
+                    setIsAddingEntry(false);
+                    if (editingEvolution) handleCancelEdit();
+                  } else {
+                    setIsAddingEntry(true);
+                  }
+                }}
                 className={cn(
                   "px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs shrink-0",
                   isAddingEntry 
@@ -1389,7 +1687,7 @@ export function PatientDetailView({
                 id="btn-toggle-add-evolution"
               >
                 {isAddingEntry ? <X size={13} /> : <Plus size={13} />}
-                {isAddingEntry ? 'Cerrar Formulario' : 'Añadir Entrada'}
+                {isAddingEntry ? (editingEvolution ? 'Cancelar Edición' : 'Cerrar Formulario') : 'Añadir Entrada'}
               </button>
             </div>
 

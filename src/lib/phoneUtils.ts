@@ -84,3 +84,60 @@ export function formatDateDDMMAAAA(dateInput: string | Date | null | undefined):
 
   return `${day}/${month}/${year}`;
 }
+
+const SPANISH_DAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+const SPANISH_MONTHS = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
+];
+
+/**
+ * Formats a date into full text format in Spanish.
+ * Example: '2026-09-14' or '14/09/2026' -> 'lunes 14 de septiembre de 2026'
+ */
+export function formatDateFullTextSpanish(dateInput: string | Date | null | undefined): string {
+  if (!dateInput) return '';
+
+  let year = 0;
+  let month = 0; // 1 to 12
+  let day = 0;
+
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    // Match DD/MM/YYYY or DD-MM-YYYY
+    const ddmmyyyyMatch = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (ddmmyyyyMatch) {
+      day = parseInt(ddmmyyyyMatch[1], 10);
+      month = parseInt(ddmmyyyyMatch[2], 10);
+      year = parseInt(ddmmyyyyMatch[3], 10);
+    } else {
+      // Match YYYY-MM-DD or ISO string
+      const yyyymmddMatch = trimmed.split('T')[0].match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+      if (yyyymmddMatch) {
+        year = parseInt(yyyymmddMatch[1], 10);
+        month = parseInt(yyyymmddMatch[2], 10);
+        day = parseInt(yyyymmddMatch[3], 10);
+      } else {
+        const d = new Date(dateInput);
+        if (isNaN(d.getTime())) return String(dateInput);
+        day = d.getDate();
+        month = d.getMonth() + 1;
+        year = d.getFullYear();
+      }
+    }
+  } else if (dateInput instanceof Date) {
+    if (isNaN(dateInput.getTime())) return '';
+    day = dateInput.getDate();
+    month = dateInput.getMonth() + 1;
+    year = dateInput.getFullYear();
+  } else {
+    return '';
+  }
+
+  // Construct local date at midday to avoid daylight savings or UTC boundary drift
+  const localDate = new Date(year, month - 1, day, 12, 0, 0);
+  const dayOfWeekName = SPANISH_DAYS[localDate.getDay()];
+  const monthName = SPANISH_MONTHS[month - 1] || '';
+
+  return `${dayOfWeekName} ${day} de ${monthName} de ${year}`;
+}

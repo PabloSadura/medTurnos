@@ -482,6 +482,11 @@ export function Agenda() {
   };
 
   const handleOpenClinicalHistory = (apt: any) => {
+    const targetPatientId = apt?.patientId || patients.find(p => p.name?.trim().toLowerCase() === apt?.patientName?.trim().toLowerCase())?.id;
+    if (targetPatientId) {
+      navigate(`/patients?id=${targetPatientId}&appointmentId=${apt.id}&action=add-entry`);
+      return;
+    }
     const patient = patients.find(p => p.id === apt.patientId) || {
       id: apt.patientId,
       name: apt.patientName,
@@ -502,7 +507,7 @@ export function Agenda() {
   const handleUpdateStatus = async (status: string) => {
     if (!selectedAppointment) return;
     try {
-      // User request: When changing status to 'in-session', automatically open the clinical history modal
+      // User request: When changing status to 'in-session', automatically redirect to patients opening a new entry in evolutions
       if (status === 'in-session') {
         await updateDoc(doc(db, 'appointments', selectedAppointment.id), {
           status: 'in-session',
@@ -511,17 +516,13 @@ export function Agenda() {
 
         setIsDetailModalOpen(false);
 
-        const patient = patients.find(p => p.id === selectedAppointment.patientId) || {
-          id: selectedAppointment.patientId,
-          name: selectedAppointment.patientName,
-          phone: selectedAppointment.phone || '',
-          idNumber: selectedAppointment.idNumber || ''
-        };
-
-        setClinicalHistoryAppointment({ ...selectedAppointment, status: 'in-session' });
-        setClinicalHistoryPatient(patient);
-        setIsClinicalHistoryOpen(true);
-        showToast('Turno en sesión. Abriendo historia clínica...', 'success');
+        const targetPatientId = selectedAppointment.patientId || patients.find(p => p.name?.trim().toLowerCase() === selectedAppointment.patientName?.trim().toLowerCase())?.id;
+        if (targetPatientId) {
+          navigate(`/patients?id=${targetPatientId}&appointmentId=${selectedAppointment.id}&action=add-entry`);
+          showToast('Turno en sesión. Abriendo nueva evolución clínica...', 'success');
+        } else {
+          showToast('Turno puesto en sesión', 'success');
+        }
         return;
       }
 
@@ -1299,11 +1300,11 @@ export function Agenda() {
                             <button
                               type="button"
                               onClick={() => handleOpenClinicalHistory(apt)}
-                              title="Abrir historia clínica del paciente en sesión"
+                              title="Abrir evoluciones del paciente en sesión"
                               className="px-2.5 py-1.5 rounded-lg bg-tertiary text-white hover:bg-tertiary/90 text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer animate-pulse"
                             >
                               <Stethoscope size={13} />
-                              <span>Historia Clínica</span>
+                              <span>Evolución (En Sesión)</span>
                             </button>
                           )}
                           <button
@@ -2156,12 +2157,13 @@ export function Agenda() {
               <button 
                 type="button"
                 onClick={() => {
-                  if (selectedAppointment?.patientId) {
-                    navigate(`/patients?id=${selectedAppointment.patientId}`);
+                  const targetPatientId = selectedAppointment?.patientId || patients.find(p => p.name?.trim().toLowerCase() === selectedAppointment?.patientName?.trim().toLowerCase())?.id;
+                  if (targetPatientId) {
+                    navigate(`/patients?id=${targetPatientId}&appointmentId=${selectedAppointment.id}&action=add-entry`);
                   }
                   setIsDetailModalOpen(false);
                 }}
-                className="px-4 py-2 bg-surface-variant text-on-surface text-[11px] font-bold rounded-lg hover:bg-surface-variant/80 border border-outline-variant transition-colors uppercase tracking-widest"
+                className="px-4 py-2 bg-surface-variant text-on-surface text-[11px] font-bold rounded-lg hover:bg-surface-variant/80 border border-outline-variant transition-colors uppercase tracking-widest cursor-pointer"
               >
                 Ver Ficha
               </button>
@@ -2170,12 +2172,17 @@ export function Agenda() {
                   type="button"
                   onClick={() => {
                     setIsDetailModalOpen(false);
-                    handleOpenClinicalHistory(selectedAppointment);
+                    const targetPatientId = selectedAppointment?.patientId || patients.find(p => p.name?.trim().toLowerCase() === selectedAppointment?.patientName?.trim().toLowerCase())?.id;
+                    if (targetPatientId) {
+                      navigate(`/patients?id=${targetPatientId}&appointmentId=${selectedAppointment.id}&action=add-entry`);
+                    } else {
+                      handleOpenClinicalHistory(selectedAppointment);
+                    }
                   }}
-                  className="flex-1 px-4 py-2 bg-tertiary text-white text-[11px] font-bold rounded-lg hover:bg-tertiary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm animate-pulse"
+                  className="flex-1 px-4 py-2 bg-tertiary text-white text-[11px] font-bold rounded-lg hover:bg-tertiary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm animate-pulse cursor-pointer"
                 >
                   <Stethoscope size={13} />
-                  Historia Clínica (En Sesión)
+                  Evolución (En Sesión)
                 </button>
               ) : (
                 <button 
@@ -2183,7 +2190,7 @@ export function Agenda() {
                   onClick={async () => {
                     await handleUpdateStatus('in-session');
                   }}
-                  className="flex-1 px-4 py-2 bg-primary text-white text-[11px] font-bold rounded-lg hover:bg-primary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm"
+                  className="flex-1 px-4 py-2 bg-primary text-white text-[11px] font-bold rounded-lg hover:bg-primary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
                 >
                   <Stethoscope size={13} />
                   Atender (Poner En Sesión)

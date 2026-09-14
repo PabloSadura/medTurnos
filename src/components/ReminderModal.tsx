@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { Modal } from './Modal';
 import { getPatientFirstName } from '../lib/patientNameUtils';
-import { formatDateDDMMAAAA, getWhatsAppNumber, cleanArgentineLocalPhone } from '../lib/phoneUtils';
+import { formatDateDDMMAAAA, formatDateFullTextSpanish, getWhatsAppNumber, cleanArgentineLocalPhone } from '../lib/phoneUtils';
 import { PhoneInputArgentina } from './PhoneInputArgentina';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -40,9 +40,9 @@ export function ReminderModal({
   const [copied, setCopied] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
 
-  // Format date in DDMMAAAA and time
+  // Format date in full Spanish text (e.g. 'lunes 14 de septiembre de 2026') and time
   const appointmentDate = appointment.date 
-    ? formatDateDDMMAAAA(appointment.date)
+    ? formatDateFullTextSpanish(appointment.date)
     : 'su fecha programada';
   const appointmentTime = appointment.time || appointment.startTime || 'su horario';
   const professionalName = appointment.professionalName || appointment.professional || 'su profesional';
