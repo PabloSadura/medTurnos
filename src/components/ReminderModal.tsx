@@ -1,14 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageCircle, Send, Check, Copy, ExternalLink, 
-  Clock, Calendar, User, Phone, Sparkles, AlertTriangle 
+  Clock, Calendar, User, Phone, Sparkles, AlertTriangle, Globe
 } from 'lucide-react';
 import { Modal } from './Modal';
 import { getPatientFirstName } from '../lib/patientNameUtils';
 import { formatDateDDMMAAAA, formatDateFullTextSpanish, getWhatsAppNumber, cleanArgentineLocalPhone } from '../lib/phoneUtils';
+import { buildWhatsAppUrl, interpretEmojis, containsEmojis } from '../lib/whatsappUtils';
+import { EmojiToolbar } from './EmojiToolbar';
 import { PhoneInputArgentina } from './PhoneInputArgentina';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { useAuth } from '../contexts/AuthContext';
 
 export interface ReminderModalProps {
   isOpen: boolean;
@@ -17,6 +20,7 @@ export interface ReminderModalProps {
   defaultTemplate?: string;
   clinicName?: string;
   clinicAddress?: string;
+  professionalName?: string;
   onReminderSent?: (appointmentId: string, message: string) => void;
 }
 
@@ -25,11 +29,31 @@ export function ReminderModal({
   onClose,
   appointment,
   defaultTemplate,
-  clinicName = 'nuestra clínica',
-  clinicAddress = 'nuestra sede',
+  clinicName: propClinicName,
+  clinicAddress: propClinicAddress,
+  professionalName: propProfessionalName,
   onReminderSent
 }: ReminderModalProps) {
   if (!appointment) return null;
+
+  const { user, profile, ownerId } = useAuth();
+  const [activeTemplate, setActiveTemplate] = useState<string>(defaultTemplate || '');
+
+  // Load custom template if not passed explicitly as prop
+  useEffect(() => {
+    if (defaultTemplate) {
+      setActiveTemplate(defaultTemplate);
+      return;
+    }
+    const targetUserId = ownerId || user?.uid;
+    if (targetUserId) {
+      getDoc(doc(db, 'reminder_settings', targetUserId)).then(snap => {
+        if (snap.exists() && snap.data()?.template) {
+          setActiveTemplate(snap.data()?.template);
+        }
+      }).catch(console.warn);
+    }
+  }, [defaultTemplate, ownerId, user?.uid]);
 
   const patientName = appointment.patientName || appointment.name || 'Paciente';
   const firstName = appointment.patientFirstName || getPatientFirstName(appointment);
@@ -39,36 +63,69 @@ export function ReminderModal({
   const [message, setMessage] = useState('');
   const [copied, setCopied] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Clinic metadata fallback
+  const clinicName = propClinicName || profile?.clinicName || 'nuestra clínica';
+  const clinicAddress = propClinicAddress || profile?.clinicAddress || profile?.address || 'nuestra sede';
 
   // Format date in full Spanish text (e.g. 'lunes 14 de septiembre de 2026') and time
   const appointmentDate = appointment.date 
     ? formatDateFullTextSpanish(appointment.date)
     : 'su fecha programada';
   const appointmentTime = appointment.time || appointment.startTime || 'su horario';
-  const professionalName = appointment.professionalName || appointment.professional || 'su profesional';
+
+  // Name of the logged-in professional
+  const loggedInProfessional = (profile?.name && profile.name.trim())
+    || (profile?.displayName && profile.displayName.trim())
+    || (user?.displayName && user.displayName.trim())
+    || (user?.email ? user.email.split('@')[0] : '')
+    || 'Profesional';
+
+  // Professional name resolution:
+  // When {profesional} is requested, it must output the logged-in professional's name
+  const professionalName = (propProfessionalName && propProfessionalName.trim())
+    || (profile?.role !== 'secretaria' && loggedInProfessional ? loggedInProfessional : '')
+    || (appointment?.professionalName && appointment.professionalName.trim())
+    || (appointment?.professional && appointment.professional.trim())
+    || loggedInProfessional
+    || 'Profesional';
+
   const treatmentName = appointment.treatment || appointment.treatmentName || 'su consulta';
 
-  // Quick templates
+  // Centralized variable replacement helper
+  const replaceVariables = (rawText: string) => {
+    if (!rawText) return '';
+    return rawText
+      .replace(/{profesional}/gi, professionalName)
+      .replace(/{nombre}/gi, firstName)
+      .replace(/{fecha}/gi, appointmentDate)
+      .replace(/{hora}/gi, appointmentTime)
+      .replace(/{clinica}/gi, clinicName)
+      .replace(/{direccion}/gi, clinicAddress)
+      .replace(/{tratamiento}/gi, treatmentName);
+  };
+
+  // Quick templates with native, tested emojis
   const buildTemplate = (type: 'standard' | 'today' | 'confirmation' | 'reschedule') => {
     switch (type) {
       case 'today':
-        return `Hola ${firstName}, te recordamos que hoy tienes turno a las ${appointmentTime} con ${professionalName} en ${clinicName} (${clinicAddress}). Por favor avísanos si tienes algún inconveniente. ¡Te esperamos!`;
+        return replaceVariables(
+          `👋 Hola {nombre}, te recordamos que hoy tienes turno a las ⏰ {hora} con 🩺 {profesional} en 🏥 {clinica} (📍 {direccion}). Por favor avísanos si tienes algún inconveniente. ¡Te esperamos! ✨`
+        );
       case 'confirmation':
-        return `Hola ${firstName}, tu turno ha sido agendado para el ${appointmentDate} a las ${appointmentTime} con ${professionalName} (${treatmentName}) en ${clinicName}, ${clinicAddress}. ¡Muchas gracias!`;
+        return replaceVariables(
+          `👋 Hola {nombre}, tu turno ha sido agendado para el 🗓️ {fecha} a las ⏰ {hora} con 🩺 {profesional} ({tratamiento}) en 🏥 {clinica}, 📍 {direccion}. ¡Muchas gracias! 🙏`
+        );
       case 'reschedule':
-        return `Hola ${firstName}, te informamos que tu turno ha sido reprogramado para el ${appointmentDate} a las ${appointmentTime} con ${professionalName} en ${clinicName} (${clinicAddress}). Por favor confírmanos si este horario te queda bien.`;
+        return replaceVariables(
+          `👋 Hola {nombre}, te informamos que tu turno ha sido reprogramado para el 🗓️ {fecha} a las ⏰ {hora} con 🩺 {profesional} en 🏥 {clinica} (📍 {direccion}). Por favor confírmanos si este horario te queda bien. ✅`
+        );
       case 'standard':
       default:
-        return defaultTemplate 
-          ? defaultTemplate
-              .replace(/{nombre}/g, firstName)
-              .replace(/{fecha}/g, appointmentDate)
-              .replace(/{hora}/g, appointmentTime)
-              .replace(/{profesional}/g, professionalName)
-              .replace(/{clinica}/g, clinicName)
-              .replace(/{direccion}/g, clinicAddress)
-              .replace(/{tratamiento}/g, treatmentName)
-          : `Hola ${firstName}, te recordamos tu turno el ${appointmentDate} a las ${appointmentTime} con ${professionalName} en ${clinicName}, ubicada en ${clinicAddress}. Por favor responde este mensaje para confirmar tu asistencia. ¡Te esperamos!`;
+        const tmpl = activeTemplate || defaultTemplate || 
+          `👋 Hola {nombre}, te recordamos tu turno el 🗓️ {fecha} a las ⏰ {hora} con 🩺 {profesional} en 🏥 {clinica}, ubicada en 📍 {direccion}. Por favor responde este mensaje para confirmar tu asistencia. ¡Te esperamos! ✨`;
+        return replaceVariables(tmpl);
     }
   };
 
@@ -76,11 +133,51 @@ export function ReminderModal({
     setPhone(initialPhone);
     setMessage(buildTemplate('standard'));
     setCopied(false);
-  }, [appointment, defaultTemplate, clinicName, clinicAddress]);
+  }, [appointment, activeTemplate, defaultTemplate, clinicName, clinicAddress, professionalName]);
+
+  const handleInsertEmoji = (emoji: string) => {
+    if (textareaRef.current) {
+      const textarea = textareaRef.current;
+      const start = textarea.selectionStart || 0;
+      const end = textarea.selectionEnd || 0;
+      const before = message.substring(0, start);
+      const after = message.substring(end);
+      const newMsg = `${before}${emoji} ${after}`;
+      setMessage(newMsg);
+      setTimeout(() => {
+        textarea.focus();
+        const nextPos = start + emoji.length + 1;
+        textarea.setSelectionRange(nextPos, nextPos);
+      }, 0);
+    } else {
+      setMessage(prev => `${prev} ${emoji} `);
+    }
+  };
+
+  const handleInsertVariable = (tag: string) => {
+    if (textareaRef.current) {
+      const textarea = textareaRef.current;
+      const start = textarea.selectionStart || 0;
+      const end = textarea.selectionEnd || 0;
+      const before = message.substring(0, start);
+      const after = message.substring(end);
+      const newMsg = `${before}${tag} ${after}`;
+      setMessage(newMsg);
+      setTimeout(() => {
+        textarea.focus();
+        const nextPos = start + tag.length + 1;
+        textarea.setSelectionRange(nextPos, nextPos);
+      }, 0);
+    } else {
+      setMessage(prev => `${prev} ${tag} `);
+    }
+  };
 
   const handleCopyMessage = async () => {
     try {
-      await navigator.clipboard.writeText(message);
+      const finalMessage = replaceVariables(message);
+      const interpreted = interpretEmojis(finalMessage);
+      await navigator.clipboard.writeText(interpreted);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     } catch (err) {
@@ -88,15 +185,15 @@ export function ReminderModal({
     }
   };
 
-  const handleOpenWhatsApp = async () => {
+  const handleOpenWhatsApp = async (target: 'web' | 'mobile' | 'auto' = 'web') => {
     const cleanPhone = getWhatsAppNumber(phone);
     if (!cleanPhone || cleanPhone === '549') {
-      alert('Por favor ingrese un número de teléfono válido para enviar el recordatorio.');
       return;
     }
 
-    // Direct WhatsApp web/app URL with pre-filled text
-    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+    const finalMessage = replaceVariables(message);
+    // Generate reliable WhatsApp Web URL with interpreted Unicode emojis and UTF-8 encoding
+    const { url, interpretedMessage } = buildWhatsAppUrl(cleanPhone, finalMessage, target);
     window.open(url, '_blank', 'noopener,noreferrer');
 
     // Mark as sent in Firestore if appointment ID is present
@@ -116,11 +213,16 @@ export function ReminderModal({
     }
 
     if (onReminderSent) {
-      onReminderSent(appointment.id, message);
+      onReminderSent(appointment.id, interpretedMessage);
     }
 
     onClose();
   };
+
+  // Preview resolves variables and emojis
+  const finalPreviewMessage = replaceVariables(message);
+  const interpretedPreview = interpretEmojis(finalPreviewMessage);
+  const hasRawVariablesOrShortcodes = /{(profesional|nombre|fecha|hora|clinica|direccion|tratamiento)}/i.test(message) || interpretedPreview !== message;
 
   return (
     <Modal
@@ -222,7 +324,7 @@ export function ReminderModal({
         </div>
 
         {/* Message Editor */}
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
               Mensaje Personalizado
@@ -231,33 +333,78 @@ export function ReminderModal({
               {message.length} caracteres
             </span>
           </div>
+
+          {/* Emojis Selector Toolbar */}
+          <EmojiToolbar 
+            onInsertEmoji={handleInsertEmoji} 
+            previewText={message} 
+          />
+
           <textarea
+            ref={textareaRef}
             rows={4}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            className="w-full p-3 bg-surface border border-outline-variant rounded-xl text-xs text-on-surface outline-none focus:border-primary transition-all resize-none leading-relaxed"
-            placeholder="Escriba el recordatorio aquí..."
+            className="w-full p-3 bg-surface border border-outline-variant rounded-xl text-xs text-on-surface outline-none focus:border-primary transition-all resize-none leading-relaxed font-sans"
+            placeholder="Escriba el recordatorio aquí... (puedes usar emojis o variables como {profesional}, {nombre}, {fecha}, {hora})"
           />
+
+          {/* Insert Variables toolbar */}
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-on-surface-variant">
+            <span className="font-semibold text-on-surface text-[10px] uppercase tracking-wider">Insertar variable:</span>
+            {[
+              { tag: '{profesional}', label: `Profesional (${professionalName})` },
+              { tag: '{nombre}', label: `Nombre (${firstName})` },
+              { tag: '{fecha}', label: 'Fecha' },
+              { tag: '{hora}', label: 'Hora' },
+              { tag: '{clinica}', label: 'Clínica' },
+              { tag: '{direccion}', label: 'Dirección' },
+              { tag: '{tratamiento}', label: 'Tratamiento' }
+            ].map(({ tag, label }) => (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => handleInsertVariable(tag)}
+                className="px-2 py-0.5 rounded-md bg-surface border border-outline-variant hover:border-primary text-on-surface text-[10px] font-mono cursor-pointer transition-colors"
+                title={`Insertar ${label}`}
+              >
+                + {tag}
+              </button>
+            ))}
+          </div>
+
+          {/* Live preview with resolved variables and emojis */}
+          {hasRawVariablesOrShortcodes && (
+            <div className="p-2.5 bg-primary/5 border border-primary/20 rounded-xl space-y-1">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold text-primary uppercase tracking-wider">
+                <Sparkles size={11} className="text-secondary" />
+                <span>Vista previa del mensaje a enviar (variables resueltas y emojis):</span>
+              </div>
+              <p className="text-xs text-on-surface leading-relaxed font-sans bg-surface/80 p-2.5 rounded-lg border border-outline-variant/60">
+                {interpretedPreview}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Note on manual dispatch */}
-        <div className="p-3 bg-primary/5 border border-primary/15 rounded-xl text-[11px] text-on-surface leading-relaxed flex items-start gap-2">
-          <MessageCircle size={15} className="text-primary shrink-0 mt-0.5" />
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-[11px] text-emerald-900 leading-relaxed flex items-start gap-2">
+          <MessageCircle size={15} className="text-emerald-700 shrink-0 mt-0.5" />
           <div>
-            <p className="font-semibold text-primary">Envío directo sin intermediarios:</p>
-            <p className="text-on-surface-variant">
-              Al hacer clic en <b>"Abrir WhatsApp y Enviar"</b> se abrirá WhatsApp con el mensaje ya escrito y el contacto seleccionado con prefijo <b>+54 9</b>, listo para enviar.
+            <p className="font-bold text-emerald-950">Garantía de emojis e integración con WhatsApp:</p>
+            <p className="text-emerald-800 text-[10px] mt-0.5">
+              Los emojis se codifican en <b>UTF-8 nativo</b> mediante enlace directo oficial, evitando que WhatsApp los transforme en signos de interrogación (<code>?</code>) o caracteres rotos. Listo para enviar al número <b>+54 9</b>.
             </p>
           </div>
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-2 pt-2">
+        <div className="flex items-center gap-2 pt-2 flex-wrap sm:flex-nowrap">
           <button
             type="button"
             onClick={handleCopyMessage}
-            className="px-3 py-2.5 border border-outline-variant hover:bg-surface-bright text-on-surface text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-            title="Copiar texto al portapapeles"
+            className="px-3 py-2.5 border border-outline-variant hover:bg-surface-bright text-on-surface text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
+            title="Copiar texto con emojis ya interpretados al portapapeles"
           >
             {copied ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
             <span>{copied ? '¡Copiado!' : 'Copiar Texto'}</span>
@@ -266,11 +413,12 @@ export function ReminderModal({
           <button
             type="button"
             disabled={!cleanArgentineLocalPhone(phone) || isUpdating}
-            onClick={handleOpenWhatsApp}
+            onClick={() => handleOpenWhatsApp('web')}
             className="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer uppercase tracking-wider"
+            title="Abrir directamente en WhatsApp Web con todos los emojis interpretados y garantizados"
           >
-            <MessageCircle size={15} />
-            <span>Abrir WhatsApp y Enviar</span>
+            <Globe size={15} />
+            <span>WhatsApp Web</span>
             <ExternalLink size={13} />
           </button>
         </div>

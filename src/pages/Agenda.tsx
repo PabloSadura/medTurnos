@@ -32,7 +32,7 @@ const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', '
 export function Agenda() {
   const navigate = useNavigate();
   const { showToast } = useToast();
-  const { ownerId, profile } = useAuth();
+  const { ownerId, profile, user } = useAuth();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(new Date());
   const [appointments, setAppointments] = useState<any[]>([]);
@@ -2472,6 +2472,15 @@ export function Agenda() {
           appointment={reminderModalApt}
           clinicName={profile?.clinicName || 'nuestra clínica'}
           clinicAddress={profile?.clinicAddress || profile?.address || 'nuestra sede'}
+          professionalName={
+            (profile?.role !== 'secretaria' && profile?.name?.trim()) ||
+            reminderModalApt.professionalName ||
+            reminderModalApt.professional ||
+            (profile?.name && profile.name.trim()) ||
+            (profile?.displayName && profile.displayName.trim()) ||
+            (user?.displayName && user.displayName.trim()) ||
+            ''
+          }
           onReminderSent={(aptId) => {
             showToast('Enlace de WhatsApp generado correctamente');
           }}

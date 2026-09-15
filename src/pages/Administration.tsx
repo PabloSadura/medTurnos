@@ -243,6 +243,7 @@ export function Administration() {
         email: userForm.email,
         role: userForm.role.toLowerCase(),
         status: userForm.status,
+        userId: ownerId,
         updatedAt: serverTimestamp()
       }, { merge: true });
 

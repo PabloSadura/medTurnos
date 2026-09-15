@@ -49,6 +49,7 @@ export async function seedAllCollections() {
 
     // Sample Doctor user document
     await setDoc(doc(db, 'users', 'prof_demo_01'), {
+      userId: currentUserId,
       email: 'doctor@demo.com',
       name: 'Dr. Alejandro Morales',
       role: 'medico',
@@ -65,6 +66,40 @@ export async function seedAllCollections() {
         afternoonEnd: '19:00',
         afternoonActive: true
       },
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+
+    // Seed doctor user & staff record for the demo doctor UID
+    await setDoc(doc(db, 'users', 'vYggSdKFqtQ2AOTG3yNSjWKXvrr2'), {
+      userId: currentUserId,
+      authUid: 'vYggSdKFqtQ2AOTG3yNSjWKXvrr2',
+      email: 'doctor@demo.com',
+      name: 'Dr. Alejandro Morales',
+      role: 'medico',
+      status: 'Activo',
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+
+    await setDoc(doc(db, 'staff', 'vYggSdKFqtQ2AOTG3yNSjWKXvrr2'), {
+      userId: currentUserId,
+      authUid: 'vYggSdKFqtQ2AOTG3yNSjWKXvrr2',
+      name: 'Dr. Alejandro Morales',
+      email: 'doctor@demo.com',
+      role: 'medico',
+      status: 'Activo',
+      permissions: ['all'],
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+
+    await setDoc(doc(db, 'staff', 'staff_demo_doctor'), {
+      userId: currentUserId,
+      name: 'Dr. Alejandro Morales',
+      email: 'doctor@demo.com',
+      role: 'medico',
+      status: 'Activo',
+      permissions: ['all'],
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     }, { merge: true });
@@ -246,7 +281,7 @@ export async function seedAllCollections() {
     // 7. REMINDER SETTINGS
     await setDoc(doc(db, 'reminder_settings', currentUserId), {
       userId: currentUserId,
-      template: 'Hola {nombre}, te recordamos tu turno el {fecha} a las {hora} para su {tratamiento}. ¡Te esperamos!',
+      template: '👋 Hola {nombre}, te recordamos tu turno el 🗓️ {fecha} a las ⏰ {hora} con 🩺 {profesional} en 🏥 {clinica}, ubicada en 📍 {direccion}. Por favor responde este mensaje para confirmar tu asistencia. ¡Te esperamos! ✨',
       botEnabled: false,
       rules: [
         { label: '24h Antes (Recordatorio)', active: true },

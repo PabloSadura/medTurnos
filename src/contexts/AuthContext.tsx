@@ -106,6 +106,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             checkStaffStatus(u, data);
           }
         } else {
+          // Check if a user document exists with this email (e.g. created by admin or seeder with a custom doc id)
+          if (u.email) {
+            try {
+              const uq = query(collection(db, 'users'), where('email', '==', u.email), limit(1));
+              const uqSnap = await getDocs(uq);
+              if (!uqSnap.empty) {
+                const existingData = uqSnap.docs[0].data();
+                await setDoc(userRef, {
+                  ...existingData,
+                  authUid: u.uid,
+                  updatedAt: serverTimestamp()
+                }, { merge: true });
+                return; // snapshot listener will trigger with the created doc!
+              }
+            } catch (e) {
+              console.warn("User email lookup error:", e);
+            }
+          }
           // Proceed to staff check if user doc doesn't exist yet (backward compatibility or race condition)
           checkStaffStatus(u);
         }
@@ -163,31 +181,60 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
             setLoading(false);
           } else {
-            // Fallback for legacy staff
-            const q = query(collection(db, 'staff'), where('authUid', '==', u.uid), limit(1));
-            const qSnap = await getDocs(q);
-            if (!qSnap.empty) {
-              const staffData = qSnap.docs[0].data();
+            // Fallback for staff: lookup by authUid OR by email
+            let staffData: any = null;
+            try {
+              const qUid = query(collection(db, 'staff'), where('authUid', '==', u.uid), limit(1));
+              const qUidSnap = await getDocs(qUid);
+              if (!qUidSnap.empty) {
+                staffData = qUidSnap.docs[0].data();
+              } else if (u.email) {
+                const qEmail = query(collection(db, 'staff'), where('email', '==', u.email), limit(1));
+                const qEmailSnap = await getDocs(qEmail);
+                if (!qEmailSnap.empty) {
+                  staffData = qEmailSnap.docs[0].data();
+                }
+              }
+            } catch (err) {
+              console.warn("Error querying staff fallback:", err);
+            }
+
+            if (staffData) {
+              // Ensure staff/u.uid document exists so Firestore Security Rules isStaffOf() succeeds
+              try {
+                await setDoc(staffRef, {
+                  ...staffData,
+                  authUid: u.uid,
+                  updatedAt: serverTimestamp()
+                }, { merge: true });
+              } catch (e) {
+                console.warn("Could not sync staff doc to u.uid:", e);
+              }
+
               setProfile({ ...userBaseData, ...staffData });
               setIsStaff(true);
-              setOwnerId(staffData.userId);
-              setPermissions(staffData.permissions || []);
+              setOwnerId(staffData.userId || u.uid);
+              setPermissions(staffData.permissions || ['all']);
               
-              onSnapshot(doc(db, 'users', staffData.userId), (pSnap) => {
-                if (pSnap.exists()) {
-                  const pData = pSnap.data();
-                  if (pData.darkMode) document.documentElement.classList.add('dark');
-                  else document.documentElement.classList.remove('dark');
-                  if (pData.primaryColor) document.documentElement.style.setProperty('--color-primary', pData.primaryColor);
-                }
-              });
+              if (staffData.userId) {
+                onSnapshot(doc(db, 'users', staffData.userId), (pSnap) => {
+                  if (pSnap.exists()) {
+                    const pData = pSnap.data();
+                    if (pData.darkMode) document.documentElement.classList.add('dark');
+                    else document.documentElement.classList.remove('dark');
+                    if (pData.primaryColor) document.documentElement.style.setProperty('--color-primary', pData.primaryColor);
+                  }
+                }, () => {});
+              }
+              setLoading(false);
             } else if (userBaseData) {
                // Not in staff, but has a user doc.
                // Check if they are a professional role or secretary
                if (userBaseData.role === 'secretary') {
                  setProfile(userBaseData);
                  setIsStaff(true);
-                 setPermissions([]);
+                 setOwnerId(userBaseData.userId || u.uid);
+                 setPermissions(userBaseData.permissions || []);
                } else if (userBaseData.role === 'admin') {
                  setProfile(userBaseData);
                  setIsStaff(false);
@@ -199,26 +246,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                } else {
                  setProfile(userBaseData);
                  setIsStaff(false);
-                 setOwnerId(u.uid);
+                 setOwnerId(userBaseData.userId || u.uid);
                  setPermissions(['all']);
                  if (userBaseData.darkMode) document.documentElement.classList.add('dark');
                  else document.documentElement.classList.remove('dark');
                  if (userBaseData.primaryColor) document.documentElement.style.setProperty('--color-primary', userBaseData.primaryColor);
                }
+               setLoading(false);
             } else {
               // User has no staff doc and no userBaseData doc yet
-              setProfile({
+              const newProfData = {
                 id: u.uid,
                 email: u.email,
-                name: u.displayName || u.email?.split('@')[0] || 'Usuario',
+                name: u.displayName || u.email?.split('@')[0] || 'Profesional',
                 role: 'medico',
-                status: 'Activo'
-              });
+                status: 'Activo',
+                userId: u.uid,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+              };
+              try {
+                await setDoc(userRef, newProfData, { merge: true });
+              } catch (e) {
+                console.warn("Could not create initial user profile:", e);
+              }
+              setProfile(newProfData);
               setIsStaff(false);
               setOwnerId(u.uid);
               setPermissions(['all', 'dashboard', 'agenda', 'patients', 'treatments', 'inventory', 'reminders']);
+              setLoading(false);
             }
-            setLoading(false);
           }
         }, (error) => {
           console.warn("Staff lookup error:", error);

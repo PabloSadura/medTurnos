@@ -141,3 +141,6 @@ export function formatDateFullTextSpanish(dateInput: string | Date | null | unde
 
   return `${dayOfWeekName} ${day} de ${monthName} de ${year}`;
 }
+
+// Re-export WhatsApp emoji interpretation and URL builders
+export { interpretEmojis, buildWhatsAppUrl, EMOJI_SHORTCODE_MAP, EMOJI_PALETTE, QUICK_EMOJIS, containsEmojis } from './whatsappUtils';

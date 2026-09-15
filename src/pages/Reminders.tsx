@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   MessageSquare, Search, Filter, Calendar, Clock, User, Phone, 
-  Send, CheckCircle2, AlertCircle, Sparkles, Settings, ExternalLink, 
-  RefreshCw, Check, Copy, ArrowUpDown, Building, MapPin, Eye, Zap
+  CheckCircle2, AlertCircle, Sparkles, Settings, ExternalLink, 
+  RefreshCw, Check, Copy, ArrowUpDown, Building, MapPin, Eye, Zap, Smile
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -13,11 +13,19 @@ import {
   serverTimestamp, setDoc, getDoc 
 } from 'firebase/firestore';
 import { ReminderModal } from '../components/ReminderModal';
+import { EmojiToolbar } from '../components/EmojiToolbar';
 import { getPatientFirstName } from '../lib/patientNameUtils';
-import { formatDateDDMMAAAA, formatDateFullTextSpanish, formatArgentinePhoneWithPrefix, getWhatsAppNumber } from '../lib/phoneUtils';
+import { formatDateDDMMAAAA, formatDateFullTextSpanish, formatArgentinePhoneWithPrefix } from '../lib/phoneUtils';
+import { interpretEmojis } from '../lib/whatsappUtils';
 
 export function Reminders() {
-  const { ownerId, profile } = useAuth();
+  const { ownerId, profile, user } = useAuth();
+
+  const loggedProfessionalName = (profile?.name && profile.name.trim())
+    || (profile?.displayName && profile.displayName.trim())
+    || (user?.displayName && user.displayName.trim())
+    || (user?.email ? user.email.split('@')[0] : '')
+    || 'Profesional';
 
   const [appointments, setAppointments] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
@@ -34,10 +42,11 @@ export function Reminders() {
   const [activeModalAppointment, setActiveModalAppointment] = useState<any | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const templateTextareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Default Template & Clinic Info in Settings
+  // Default Template & Clinic Info in Settings with native tested emojis
   const [template, setTemplate] = useState(
-    'Hola {nombre}, te recordamos tu turno el {fecha} a las {hora} con {profesional} en {clinica}, ubicada en {direccion}. Por favor responde este mensaje para confirmar tu asistencia. ¡Te esperamos!'
+    '👋 Hola {nombre}, te recordamos tu turno el 🗓️ {fecha} a las ⏰ {hora} con 🩺 {profesional} en 🏥 {clinica}, ubicada en 📍 {direccion}. Por favor responde este mensaje para confirmar tu asistencia. ¡Te esperamos! ✨'
   );
   const [clinicName, setClinicName] = useState('Nuestra Clínica');
   const [clinicAddress, setClinicAddress] = useState('Av. Libertador 1234');
@@ -235,38 +244,6 @@ export function Reminders() {
     }
   };
 
-  // Quick 1-click WhatsApp trigger with fixed prefix +54 9, full text date and clinic address
-  const handleQuickWhatsApp = (apt: any) => {
-    const cleanPhone = getWhatsAppNumber(apt.phone);
-
-    if (!cleanPhone || cleanPhone === '549') {
-      setActiveModalAppointment(apt);
-      return;
-    }
-
-    const formattedDate = formatDateFullTextSpanish(apt.date);
-    const message = template
-      .replace(/{nombre}/g, apt.patientFirstName)
-      .replace(/{fecha}/g, formattedDate)
-      .replace(/{hora}/g, apt.time || 'su horario')
-      .replace(/{profesional}/g, apt.professionalName || apt.professional || 'su profesional')
-      .replace(/{clinica}/g, clinicName)
-      .replace(/{direccion}/g, clinicAddress)
-      .replace(/{tratamiento}/g, apt.treatment || 'su consulta');
-
-    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
-
-    // Mark as sent
-    updateDoc(doc(db, 'appointments', apt.id), {
-      reminderSent: true,
-      reminderSentAt: serverTimestamp(),
-      reminderPhone: cleanPhone
-    }).catch(console.warn);
-
-    showToast(`WhatsApp abierto para ${apt.patientFirstName}`);
-  };
-
   return (
     <div className="space-y-6">
       {/* Toast */}
@@ -285,7 +262,7 @@ export function Reminders() {
             Recordatorios de Turnos
           </h1>
           <p className="text-xs text-on-surface-variant mt-1">
-            Envío manual de recordatorios con 1 clic directo a WhatsApp Web o móvil con mensaje personalizado.
+            Gestión y envío de recordatorios directos a WhatsApp con emojis nativos y mensaje personalizado.
           </p>
         </div>
 
@@ -364,12 +341,37 @@ export function Reminders() {
                     Formato de fecha: <b>DDMMAAAA (DD/MM/AAAA)</b>
                   </span>
                 </div>
+
+                {/* Emoji toolbar */}
+                <EmojiToolbar 
+                  onInsertEmoji={(emoji) => {
+                    if (templateTextareaRef.current) {
+                      const textarea = templateTextareaRef.current;
+                      const start = textarea.selectionStart || 0;
+                      const end = textarea.selectionEnd || 0;
+                      const before = template.substring(0, start);
+                      const after = template.substring(end);
+                      const updated = `${before}${emoji} ${after}`;
+                      setTemplate(updated);
+                      setTimeout(() => {
+                        textarea.focus();
+                        const nextPos = start + emoji.length + 1;
+                        textarea.setSelectionRange(nextPos, nextPos);
+                      }, 0);
+                    } else {
+                      setTemplate(prev => `${prev} ${emoji} `);
+                    }
+                  }} 
+                  previewText={template} 
+                />
+
                 <textarea
+                  ref={templateTextareaRef}
                   rows={3}
                   value={template}
                   onChange={(e) => setTemplate(e.target.value)}
-                  className="w-full p-3 bg-surface border border-outline-variant rounded-xl text-xs text-on-surface outline-none focus:border-primary transition-all resize-none leading-relaxed"
-                  placeholder="Ej: Hola {nombre}, te recordamos tu turno el {fecha} a las {hora} con {profesional} en {clinica}, ubicada en {direccion}..."
+                  className="w-full p-3 bg-surface border border-outline-variant rounded-xl text-xs text-on-surface outline-none focus:border-primary transition-all resize-none leading-relaxed font-sans"
+                  placeholder="Ej: 👋 Hola {nombre}, te recordamos tu turno el 🗓️ {fecha} a las ⏰ {hora} con 🩺 {profesional} en 🏥 {clinica}, ubicada en 📍 {direccion}..."
                 />
 
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-on-surface-variant">
@@ -378,7 +380,7 @@ export function Reminders() {
                     { tag: '{nombre}', label: 'Nombre' },
                     { tag: '{fecha}', label: 'Fecha en texto (ej: lunes 14 de septiembre de 2026)' },
                     { tag: '{hora}', label: 'Hora' },
-                    { tag: '{profesional}', label: 'Profesional' },
+                    { tag: '{profesional}', label: `Profesional (${loggedProfessionalName})` },
                     { tag: '{clinica}', label: 'Clínica' },
                     { tag: '{direccion}', label: 'Dirección' },
                     { tag: '{tratamiento}', label: 'Tratamiento' }
@@ -400,17 +402,19 @@ export function Reminders() {
               <div className="p-3 bg-surface border border-outline-variant rounded-xl space-y-1.5">
                 <div className="flex items-center gap-1.5 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">
                   <Eye size={12} className="text-secondary" />
-                  <span>Vista previa en vivo (ejemplo con fecha en texto completo):</span>
+                  <span>Vista previa en vivo para WhatsApp (con emojis interpretados):</span>
                 </div>
-                <p className="text-xs text-on-surface bg-surface-bright p-2.5 rounded-lg border border-outline-variant/60 leading-relaxed font-sans italic">
-                  {template
-                    .replace(/{nombre}/g, 'María')
-                    .replace(/{fecha}/g, formatDateFullTextSpanish(todayStr))
-                    .replace(/{hora}/g, '14:30')
-                    .replace(/{profesional}/g, 'Dra. López')
-                    .replace(/{clinica}/g, clinicName || 'Nuestra Clínica')
-                    .replace(/{direccion}/g, clinicAddress || 'Av. Libertador 1234')
-                    .replace(/{tratamiento}/g, 'Control y Limpieza')}
+                <p className="text-xs text-on-surface bg-surface-bright p-2.5 rounded-lg border border-outline-variant/60 leading-relaxed font-sans">
+                  {interpretEmojis(
+                    template
+                      .replace(/{nombre}/gi, 'María')
+                      .replace(/{fecha}/gi, formatDateFullTextSpanish(todayStr))
+                      .replace(/{hora}/gi, '14:30')
+                      .replace(/{profesional}/gi, loggedProfessionalName)
+                      .replace(/{clinica}/gi, clinicName || 'Nuestra Clínica')
+                      .replace(/{direccion}/gi, clinicAddress || 'Av. Libertador 1234')
+                      .replace(/{tratamiento}/gi, 'Control y Limpieza')
+                  )}
                 </p>
               </div>
 
@@ -665,27 +669,15 @@ export function Reminders() {
                       {isSent ? <CheckCircle2 size={15} className="text-emerald-600" /> : <Clock size={15} />}
                     </button>
 
-                    {/* Quick 1-click WhatsApp button */}
-                    {hasPhone && (
-                      <button
-                        type="button"
-                        onClick={() => handleQuickWhatsApp(apt)}
-                        title="Abrir WhatsApp Web/Móvil con mensaje directo"
-                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
-                      >
-                        <Send size={13} />
-                        <span className="hidden sm:inline">1-Clic WhatsApp</span>
-                      </button>
-                    )}
-
-                    {/* Open Detailed Customization Modal */}
+                    {/* Open Detailed Customization Modal with verified WhatsApp Web button */}
                     <button
                       type="button"
                       onClick={() => setActiveModalAppointment(apt)}
-                      className="px-3.5 py-2 bg-primary text-white hover:bg-primary/90 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                      title="Abrir editor para verificar mensaje, emojis y enviar por WhatsApp Web"
                     >
                       <MessageSquare size={13} />
-                      <span>Personalizar</span>
+                      <span>Personalizar y Enviar</span>
                     </button>
                   </div>
                 </div>
@@ -704,6 +696,12 @@ export function Reminders() {
           defaultTemplate={template}
           clinicName={clinicName}
           clinicAddress={clinicAddress}
+          professionalName={
+            (profile?.role !== 'secretaria' && loggedProfessionalName) ||
+            activeModalAppointment.professionalName || 
+            activeModalAppointment.professional || 
+            loggedProfessionalName
+          }
           onReminderSent={(aptId) => {
             showToast('Recordatorio abierto en WhatsApp con éxito');
             // Update local state if needed
