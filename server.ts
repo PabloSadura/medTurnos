@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import admin from "firebase-admin";
+import { getFirestore as getAdminFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 import axios from "axios";
 import dotenv from "dotenv";
@@ -35,13 +36,13 @@ function getFirebaseAdmin() {
         });
       }
       if (!adminDbInstance) {
-        adminDbInstance = admin.firestore();
-        if (firebaseConfig.firestoreDatabaseId) {
-          try {
-            (adminDbInstance as any).settings({ databaseId: firebaseConfig.firestoreDatabaseId });
-          } catch (e) {
-            // Ignored if settings already locked
-          }
+        const dbId = firebaseConfig.firestoreDatabaseId || "turneroweb";
+        try {
+          adminDbInstance = getAdminFirestore(admin.app(), dbId);
+          console.log(`[Firebase Admin] Successfully connected to database: ${dbId}`);
+        } catch (dbErr) {
+          console.warn(`[Firebase Admin] getAdminFirestore(${dbId}) failed, falling back to default:`, dbErr);
+          adminDbInstance = admin.firestore();
         }
       }
       if (!authInstance) {
@@ -126,7 +127,8 @@ async function startServer() {
         "stocks",
         "profiles",
         "reminder_settings",
-        "staff"
+        "staff",
+        "referrals"
       ];
 
       for (const colName of collectionsToCheck) {
@@ -165,6 +167,25 @@ async function startServer() {
 
     try {
       const { adminDb, auth } = getFirebaseAdmin();
+
+      // Enforce role restriction: non-admins can only assign 'secretary'
+      let assignedRole = (role || 'secretary').toLowerCase();
+      const isMasterAdmin = userId === 'admin_master' || userId === 'tFHvaQo649hwrlQfisr2x8qlv8v2';
+      let isAdminUser = isMasterAdmin;
+      if (!isAdminUser && adminDb) {
+        try {
+          const callerDoc = await adminDb.collection("users").doc(userId).get();
+          if (callerDoc.exists && callerDoc.data()?.role === 'admin') {
+            isAdminUser = true;
+          }
+        } catch {
+          isAdminUser = false;
+        }
+      }
+      if (!isAdminUser && assignedRole !== 'secretary') {
+        assignedRole = 'secretary';
+      }
+
       let authUser;
       let createdInAuth = false;
       let authErrorEncountered = false;
@@ -191,9 +212,9 @@ async function startServer() {
                                        error.message?.includes("PERMISSION_DENIED");
 
         if (isIdentityToolkitError) {
-          console.warn("Auth SDK failed due to disabled Identity Toolkit API:", error.message);
+          console.log("[Auth] Identity Toolkit API not enabled in GCP project; managing staff in Firestore directly.");
           authErrorEncountered = true;
-          authErrorMessage = error.message;
+          authErrorMessage = "Identity Toolkit API not active";
 
           let fallbackUid = staffId;
           if (!fallbackUid) {
@@ -228,7 +249,7 @@ async function startServer() {
             authUser = { uid: signupResponse.data.localId, email };
             createdInAuth = true;
           } catch (restError: any) {
-            console.error("REST Auth Error:", restError.response?.data || restError.message);
+            console.log("[Auth] REST Auth check for staff:", restError.response?.data?.error?.message || restError.message);
             const isRestIdentityToolkitError = restError.response?.data?.error?.message?.includes("Identity Toolkit API") || 
                                               restError.message?.includes("Identity Toolkit API") ||
                                               restError.response?.data?.error?.message?.includes("developer") ||
@@ -319,6 +340,7 @@ async function startServer() {
       res.json({ 
         success: true, 
         uid: authUser?.uid, 
+        role: assignedRole,
         warning: authErrorEncountered ? "Nota: Se guardó en Firestore pero Identity Toolkit API está inactiva en tu consola Google Cloud; por favor actívala." : undefined,
         message: createdInAuth ? "Creado exitosamente" : "Actualizado (si los permisos lo permiten)" 
       });
@@ -420,9 +442,9 @@ async function startServer() {
                                        error.message?.includes("PERMISSION_DENIED");
 
         if (isIdentityToolkitError) {
-          console.warn("Auth SDK failed due to disabled Identity Toolkit API:", error.message);
+          console.log("[Auth] Identity Toolkit API not enabled in GCP project; managing user in Firestore directly.");
           authErrorEncountered = true;
-          authErrorMessage = error.message;
+          authErrorMessage = "Identity Toolkit API not active";
 
           let fallbackUid = id;
           if (!fallbackUid) {
@@ -457,7 +479,7 @@ async function startServer() {
             authUser = { uid: signupResponse.data.localId, email };
             createdInAuth = true;
           } catch (restError: any) {
-            console.error("REST Auth Error:", restError.response?.data || restError.message);
+            console.log("[Auth] REST Auth check for user:", restError.response?.data?.error?.message || restError.message);
             const isRestIdentityToolkitError = restError.response?.data?.error?.message?.includes("Identity Toolkit API") || 
                                               restError.message?.includes("Identity Toolkit API") ||
                                               restError.response?.data?.error?.message?.includes("developer") ||
@@ -564,6 +586,585 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error("User Admin Management Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Helpers for Firestore REST operations with API Key
+  const getFirestoreRestUrl = (subpath: string) => {
+    const dbId = firebaseConfig.firestoreDatabaseId || "turneroweb";
+    return `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${dbId}/documents/${subpath}?key=${firebaseConfig.apiKey}`;
+  };
+
+  function toFirestoreFields(obj: Record<string, any>): Record<string, any> {
+    const fields: Record<string, any> = {};
+    for (const [key, val] of Object.entries(obj)) {
+      if (val === undefined || val === null) continue;
+      if (typeof val === 'string') {
+        fields[key] = { stringValue: val };
+      } else if (typeof val === 'number') {
+        fields[key] = Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
+      } else if (typeof val === 'boolean') {
+        fields[key] = { booleanValue: val };
+      } else if (Array.isArray(val)) {
+        fields[key] = {
+          arrayValue: {
+            values: val.map(item => {
+              if (typeof item === 'object' && item !== null) {
+                return { mapValue: { fields: toFirestoreFields(item) } };
+              }
+              if (typeof item === 'number') {
+                return Number.isInteger(item) ? { integerValue: String(item) } : { doubleValue: item };
+              }
+              if (typeof item === 'boolean') return { booleanValue: item };
+              return { stringValue: String(item) };
+            })
+          }
+        };
+      } else if (typeof val === 'object') {
+        fields[key] = { mapValue: { fields: toFirestoreFields(val) } };
+      }
+    }
+    return fields;
+  }
+
+  function fromFirestoreFields(fields: Record<string, any> = {}): Record<string, any> {
+    const result: Record<string, any> = {};
+    for (const [key, val] of Object.entries(fields)) {
+      if ('stringValue' in val) result[key] = val.stringValue;
+      else if ('integerValue' in val) result[key] = Number(val.integerValue);
+      else if ('doubleValue' in val) result[key] = Number(val.doubleValue);
+      else if ('booleanValue' in val) result[key] = Boolean(val.booleanValue);
+      else if ('timestampValue' in val) result[key] = val.timestampValue;
+      else if ('arrayValue' in val) {
+        result[key] = (val.arrayValue?.values || []).map((item: any) => {
+          if ('mapValue' in item) return fromFirestoreFields(item.mapValue.fields);
+          if ('stringValue' in item) return item.stringValue;
+          if ('integerValue' in item) return Number(item.integerValue);
+          if ('doubleValue' in item) return Number(item.doubleValue);
+          if ('booleanValue' in item) return Boolean(item.booleanValue);
+          return item;
+        });
+      } else if ('mapValue' in val) {
+        result[key] = fromFirestoreFields(val.mapValue.fields);
+      }
+    }
+    return result;
+  }
+
+  // Synchronization of Plans & Bonificaciones with Firebase Firestore
+  app.post("/api/admin/sync-plans", async (req, res) => {
+    try {
+      // 1. Fetch plans via Firestore REST
+      const defaultPlans = [
+        { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, price: 30000 },
+        { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, price: 40000 },
+        { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, price: 50000 }
+      ];
+
+      const plansMap: Record<string, any> = {};
+      try {
+        const plansResponse = await fetch(getFirestoreRestUrl("plans"));
+        if (plansResponse.ok) {
+          const plansData = await plansResponse.json();
+          if (plansData.documents) {
+            plansData.documents.forEach((doc: any) => {
+              const id = doc.name.split("/").pop();
+              const d = fromFirestoreFields(doc.fields || {});
+              plansMap[id] = {
+                id,
+                name: d.name || id,
+                price: Number(d.price) || 0,
+                usersLimit: Number(d.usersLimit) || 1,
+                secretariesLimit: Number(d.secretariesLimit) || 1
+              };
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("Could not query plans via REST:", err);
+      }
+
+      for (const p of defaultPlans) {
+        if (!plansMap[p.id]) plansMap[p.id] = p;
+      }
+
+      // 2. Fetch referrals
+      const referralsList: any[] = [];
+      try {
+        const refResponse = await fetch(getFirestoreRestUrl("referrals"));
+        if (refResponse.ok) {
+          const refData = await refResponse.json();
+          if (refData.documents) {
+            refData.documents.forEach((doc: any) => {
+              const id = doc.name.split("/").pop();
+              referralsList.push({ id, ...fromFirestoreFields(doc.fields || {}) });
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("Could not query referrals via REST:", err);
+      }
+
+      // 3. Fetch users
+      const allUsersMap: Map<string, any> = new Map();
+      try {
+        const usersResponse = await fetch(getFirestoreRestUrl("users"));
+        if (usersResponse.ok) {
+          const usersData = await usersResponse.json();
+          if (usersData.documents) {
+            usersData.documents.forEach((doc: any) => {
+              const id = doc.name.split("/").pop();
+              allUsersMap.set(id, { id, ...fromFirestoreFields(doc.fields || {}) });
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("Could not query users via REST:", err);
+      }
+
+      // Also check staff collection
+      try {
+        const staffResponse = await fetch(getFirestoreRestUrl("staff"));
+        if (staffResponse.ok) {
+          const staffData = await staffResponse.json();
+          if (staffData.documents) {
+            staffData.documents.forEach((doc: any) => {
+              const sId = doc.name.split("/").pop();
+              const sData = fromFirestoreFields(doc.fields || {});
+              const targetUid = sData.authUid || sId;
+              if (!allUsersMap.has(targetUid) && sData.email) {
+                allUsersMap.set(targetUid, {
+                  id: targetUid,
+                  name: sData.name || sData.email,
+                  email: sData.email,
+                  role: sData.role || 'medico',
+                  status: sData.status || 'Activo',
+                  activePlanId: 'plus'
+                });
+              }
+            });
+          }
+        }
+      } catch (staffErr) {
+        // Ignored
+      }
+
+      const syncSummary = {
+        totalUsers: allUsersMap.size,
+        syncedCount: 0,
+        withDiscountsCount: 0,
+        totalMonthlyBilling: 0,
+        users: [] as any[]
+      };
+
+      for (const [userId, userData] of allUsersMap.entries()) {
+        const planKey = (userData.activePlanId || userData.planId || 'plus').toLowerCase();
+        const plan = plansMap[planKey] || plansMap['plus'] || Object.values(plansMap)[0];
+        const basePrice = Math.max(0, Number(plan.price) || 0);
+        const bonificaciones: any[] = [];
+
+        // Welcome discount
+        const isReferred = Boolean(
+          userData.referralInfo?.isReferred ||
+          (userData.referralDiscount?.active && userData.referralInfo?.discountValue !== undefined)
+        );
+
+        if (isReferred && userData.referralDiscount?.active !== false) {
+          const discType = userData.referralInfo?.discountType || userData.referralDiscount?.type || 'percent';
+          const discValue = Number(userData.referralInfo?.discountValue ?? userData.referralDiscount?.value ?? 0);
+          if (discValue > 0) {
+            const discAmount = discType === 'percent'
+              ? Math.round(((basePrice * discValue) / 100) * 100) / 100
+              : Math.min(basePrice, discValue);
+            const referrerLabel = userData.referralInfo?.referrerName || userData.referralInfo?.referrerEmail || 'Colega';
+
+            bonificaciones.push({
+              id: `ref-welcome-${userId}`,
+              title: 'Descuento de Bienvenida por Referido',
+              source: 'referral_welcome',
+              discountType: discType,
+              discountValue: discValue,
+              discountAmount: discAmount,
+              description: `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} (Referido por ${referrerLabel})`,
+              beneficiaryType: 'referred'
+            });
+          }
+        }
+
+        // Referral reward discounts
+        const userReferralsAsReferrer = referralsList.filter(
+          (r: any) => (r.referrerId === userId || r.referrerEmail === userData.email) && r.status === 'active'
+        );
+
+        userReferralsAsReferrer.forEach((ref: any) => {
+          const discType = ref.referrerDiscountType || 'percent';
+          const discValue = Number(ref.referrerDiscountValue) || 0;
+          if (discValue > 0) {
+            const discAmount = discType === 'percent'
+              ? Math.round(((basePrice * discValue) / 100) * 100) / 100
+              : Math.min(basePrice, discValue);
+            const colleagueLabel = ref.referredUserName || ref.referredUserEmail || 'Colega';
+
+            bonificaciones.push({
+              id: `ref-reward-${ref.id}`,
+              title: 'Recompensa por Colega Referido',
+              source: 'referral_reward',
+              discountType: discType,
+              discountValue: discValue,
+              discountAmount: discAmount,
+              description: `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} por recomendar a ${colleagueLabel}`,
+              beneficiaryType: 'referrer',
+              referralId: ref.id
+            });
+          }
+        });
+
+        if (userReferralsAsReferrer.length === 0 && userData.referralReward?.hasReward && userData.referralReward?.discountValue) {
+          const discType = userData.referralReward.discountType || 'percent';
+          const discValue = Number(userData.referralReward.discountValue) || 0;
+          if (discValue > 0) {
+            const discAmount = discType === 'percent'
+              ? Math.round(((basePrice * discValue) / 100) * 100) / 100
+              : Math.min(basePrice, discValue);
+
+            bonificaciones.push({
+              id: `user-reward-direct-${userId}`,
+              title: 'Recompensa por Recomendación',
+              source: 'referral_reward',
+              discountType: discType,
+              discountValue: discValue,
+              discountAmount: discAmount,
+              description: `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} por colega referido (${userData.referralReward.rewardFromUserName || 'Colega'})`,
+              beneficiaryType: 'referrer'
+            });
+          }
+        }
+
+        // Custom administrative bonus
+        if (userData.customBonus?.active && Number(userData.customBonus.discountValue) > 0) {
+          const discType = userData.customBonus.discountType || 'percent';
+          const discValue = Number(userData.customBonus.discountValue) || 0;
+          if (discValue > 0) {
+            const discAmount = discType === 'percent'
+              ? Math.round(((basePrice * discValue) / 100) * 100) / 100
+              : Math.min(basePrice, discValue);
+
+            bonificaciones.push({
+              id: `custom-bonus-${userId}`,
+              title: userData.customBonus.title || 'Bonificación Especial Otorgada por el Administrador',
+              source: 'custom_bonus',
+              discountType: discType,
+              discountValue: discValue,
+              discountAmount: discAmount,
+              description: userData.customBonus.reason || userData.customBonus.description || `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} otorgada por la administración del sistema`,
+              beneficiaryType: 'manual'
+            });
+          }
+        }
+
+        // Include existing custom bonuses if present and not duplicated
+        const existingBonuses = Array.isArray(userData.bonificaciones) 
+          ? userData.bonificaciones 
+          : (Array.isArray(userData.billingDetails?.bonificaciones) ? userData.billingDetails.bonificaciones : []);
+        existingBonuses.forEach((b: any) => {
+          if (b && b.id && !bonificaciones.some((x: any) => x.id === b.id) && (Number(b.discountAmount) > 0 || Number(b.discountValue) > 0)) {
+            const discAmount = Number(b.discountAmount) || (b.discountType === 'percent' ? Math.round(((basePrice * Number(b.discountValue)) / 100) * 100) / 100 : Number(b.discountValue));
+            bonificaciones.push({
+              id: b.id,
+              title: b.title || 'Bonificación Especial',
+              source: b.source || 'custom_bonus',
+              discountType: b.discountType || 'percent',
+              discountValue: Number(b.discountValue) || 0,
+              discountAmount: discAmount,
+              description: b.description || 'Bonificación aplicada',
+              beneficiaryType: b.beneficiaryType || 'manual'
+            });
+          }
+        });
+
+        const totalCalculatedDiscount = bonificaciones.reduce((sum, b) => sum + b.discountAmount, 0);
+        const totalDiscount = Math.min(basePrice, Math.round(totalCalculatedDiscount * 100) / 100);
+        const finalPrice = Math.max(0, Math.round((basePrice - totalDiscount) * 100) / 100);
+        const hasDiscount = totalDiscount > 0;
+
+        syncSummary.totalMonthlyBilling += finalPrice;
+        if (hasDiscount) syncSummary.withDiscountsCount++;
+        syncSummary.syncedCount++;
+
+        syncSummary.users.push({
+          id: userId,
+          name: userData.name || userData.email || 'Sin nombre',
+          email: userData.email || '',
+          planName: plan.name,
+          basePrice,
+          discount: totalDiscount,
+          finalPrice,
+          bonificacionesCount: bonificaciones.length
+        });
+
+        const userUpdatePayload: any = {
+          activePlanId: plan.id,
+          planId: plan.id,
+          planDetails: {
+            id: plan.id,
+            name: plan.name,
+            basePrice: plan.price,
+            usersLimit: plan.usersLimit,
+            secretariesLimit: plan.secretariesLimit
+          },
+          billingDetails: {
+            planId: plan.id,
+            planName: plan.name,
+            basePrice,
+            usersLimit: plan.usersLimit,
+            secretariesLimit: plan.secretariesLimit,
+            totalDiscount,
+            finalPrice,
+            hasDiscount,
+            bonificaciones,
+            syncedAt: new Date().toISOString()
+          },
+          planPrice: finalPrice,
+          basePlanPrice: basePrice,
+          discountApplied: totalDiscount,
+          updatedAt: new Date().toISOString()
+        };
+
+        if (hasDiscount) {
+          userUpdatePayload.referralDiscount = {
+            active: true,
+            totalDiscount,
+            finalPrice,
+            bonificacionesCount: bonificaciones.length,
+            summary: bonificaciones.map((b: any) => b.description).join(', ')
+          };
+        }
+
+        // Persist directly to Firestore via REST
+        try {
+          const updateUrl = `${getFirestoreRestUrl(`users/${userId}`)}&updateMask.fieldPaths=activePlanId&updateMask.fieldPaths=planId&updateMask.fieldPaths=planDetails&updateMask.fieldPaths=billingDetails&updateMask.fieldPaths=planPrice&updateMask.fieldPaths=basePlanPrice&updateMask.fieldPaths=discountApplied&updateMask.fieldPaths=updatedAt${hasDiscount ? '&updateMask.fieldPaths=referralDiscount' : ''}`;
+          await fetch(updateUrl, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fields: toFirestoreFields(userUpdatePayload) })
+          });
+        } catch (uPatchErr) {
+          console.warn(`Could not patch user ${userId} via REST:`, uPatchErr);
+        }
+      }
+
+      // Record sync status in system_stats
+      syncSummary.totalMonthlyBilling = Math.round(syncSummary.totalMonthlyBilling * 100) / 100;
+      try {
+        const statsPayload = {
+          lastSyncedAt: new Date().toISOString(),
+          totalMonthlyBilling: syncSummary.totalMonthlyBilling,
+          totalUsers: syncSummary.totalUsers,
+          syncedCount: syncSummary.syncedCount,
+          withDiscountsCount: syncSummary.withDiscountsCount,
+          breakdown: syncSummary.users,
+          updatedAt: new Date().toISOString()
+        };
+        await fetch(getFirestoreRestUrl("system_stats/billing_summary"), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields: toFirestoreFields(statsPayload) })
+        });
+      } catch (statsErr) {
+        console.warn("Could not save billing summary via REST:", statsErr);
+      }
+
+      res.json({
+        success: true,
+        ...syncSummary
+      });
+    } catch (error: any) {
+      console.error("Sync Plans Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Sync single user
+  app.post("/api/admin/sync-single-user", async (req, res) => {
+    try {
+      const { userId, targetPlanId } = req.body;
+      if (!userId) {
+        return res.status(400).json({ error: "Missing userId" });
+      }
+
+      // Fetch plans
+      const defaultPlans = [
+        { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, price: 30000 },
+        { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, price: 40000 },
+        { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, price: 50000 }
+      ];
+      const plansMap: Record<string, any> = {};
+      try {
+        const plansResponse = await fetch(getFirestoreRestUrl("plans"));
+        if (plansResponse.ok) {
+          const pData = await plansResponse.json();
+          if (pData.documents) {
+            pData.documents.forEach((doc: any) => {
+              const id = doc.name.split("/").pop();
+              const d = fromFirestoreFields(doc.fields || {});
+              plansMap[id] = { id, name: d.name || id, price: Number(d.price) || 0, usersLimit: Number(d.usersLimit) || 1, secretariesLimit: Number(d.secretariesLimit) || 1 };
+            });
+          }
+        }
+      } catch (e) {
+        // Ignored
+      }
+      for (const p of defaultPlans) {
+        if (!plansMap[p.id]) plansMap[p.id] = p;
+      }
+
+      // Fetch referrals
+      const referralsList: any[] = [];
+      try {
+        const refResponse = await fetch(getFirestoreRestUrl("referrals"));
+        if (refResponse.ok) {
+          const rData = await refResponse.json();
+          if (rData.documents) {
+            rData.documents.forEach((doc: any) => {
+              const id = doc.name.split("/").pop();
+              referralsList.push({ id, ...fromFirestoreFields(doc.fields || {}) });
+            });
+          }
+        }
+      } catch (e) {
+        // Ignored
+      }
+
+      // Fetch user doc
+      let userData: any = { id: userId, activePlanId: targetPlanId || 'plus' };
+      try {
+        const userResp = await fetch(getFirestoreRestUrl(`users/${userId}`));
+        if (userResp.ok) {
+          const uDoc = await userResp.json();
+          if (uDoc.fields) {
+            userData = { id: userId, ...fromFirestoreFields(uDoc.fields) };
+          }
+        }
+      } catch (e) {
+        // Ignored
+      }
+
+      const planKey = (targetPlanId || userData.activePlanId || userData.planId || 'plus').toLowerCase();
+      const plan = plansMap[planKey] || plansMap['plus'] || Object.values(plansMap)[0];
+      const basePrice = Math.max(0, Number(plan.price) || 0);
+      const bonificaciones: any[] = [];
+
+      const isReferred = Boolean(
+        userData.referralInfo?.isReferred ||
+        (userData.referralDiscount?.active && userData.referralInfo?.discountValue !== undefined)
+      );
+
+      if (isReferred && userData.referralDiscount?.active !== false) {
+        const discType = userData.referralInfo?.discountType || userData.referralDiscount?.type || 'percent';
+        const discValue = Number(userData.referralInfo?.discountValue ?? userData.referralDiscount?.value ?? 0);
+        if (discValue > 0) {
+          const discAmount = discType === 'percent'
+            ? Math.round(((basePrice * discValue) / 100) * 100) / 100
+            : Math.min(basePrice, discValue);
+          const referrerLabel = userData.referralInfo?.referrerName || userData.referralInfo?.referrerEmail || 'Colega';
+
+          bonificaciones.push({
+            id: `ref-welcome-${userId}`,
+            title: 'Descuento de Bienvenida por Referido',
+            source: 'referral_welcome',
+            discountType: discType,
+            discountValue: discValue,
+            discountAmount: discAmount,
+            description: `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} (Referido por ${referrerLabel})`,
+            beneficiaryType: 'referred'
+          });
+        }
+      }
+
+      const userReferralsAsReferrer = referralsList.filter(
+        (r: any) => (r.referrerId === userId || r.referrerEmail === userData.email) && r.status === 'active'
+      );
+
+      userReferralsAsReferrer.forEach((ref: any) => {
+        const discType = ref.referrerDiscountType || 'percent';
+        const discValue = Number(ref.referrerDiscountValue) || 0;
+        if (discValue > 0) {
+          const discAmount = discType === 'percent'
+            ? Math.round(((basePrice * discValue) / 100) * 100) / 100
+            : Math.min(basePrice, discValue);
+          const colleagueLabel = ref.referredUserName || ref.referredUserEmail || 'Colega';
+
+          bonificaciones.push({
+            id: `ref-reward-${ref.id}`,
+            title: 'Recompensa por Colega Referido',
+            source: 'referral_reward',
+            discountType: discType,
+            discountValue: discValue,
+            discountAmount: discAmount,
+            description: `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} por recomendar a ${colleagueLabel}`,
+            beneficiaryType: 'referrer',
+            referralId: ref.id
+          });
+        }
+      });
+
+      const totalCalculatedDiscount = bonificaciones.reduce((sum, b) => sum + b.discountAmount, 0);
+      const totalDiscount = Math.min(basePrice, Math.round(totalCalculatedDiscount * 100) / 100);
+      const finalPrice = Math.max(0, Math.round((basePrice - totalDiscount) * 100) / 100);
+      const hasDiscount = totalDiscount > 0;
+
+      const userUpdatePayload: any = {
+        activePlanId: plan.id,
+        planId: plan.id,
+        planDetails: {
+          id: plan.id,
+          name: plan.name,
+          basePrice: plan.price,
+          usersLimit: plan.usersLimit,
+          secretariesLimit: plan.secretariesLimit
+        },
+        billingDetails: {
+          planId: plan.id,
+          planName: plan.name,
+          basePrice,
+          usersLimit: plan.usersLimit,
+          secretariesLimit: plan.secretariesLimit,
+          totalDiscount,
+          finalPrice,
+          hasDiscount,
+          bonificaciones,
+          syncedAt: new Date().toISOString()
+        },
+        planPrice: finalPrice,
+        basePlanPrice: basePrice,
+        discountApplied: totalDiscount,
+        updatedAt: new Date().toISOString()
+      };
+
+      if (hasDiscount) {
+        userUpdatePayload.referralDiscount = {
+          active: true,
+          totalDiscount,
+          finalPrice,
+          bonificacionesCount: bonificaciones.length,
+          summary: bonificaciones.map((b: any) => b.description).join(', ')
+        };
+      }
+
+      const updateUrl = `${getFirestoreRestUrl(`users/${userId}`)}&updateMask.fieldPaths=activePlanId&updateMask.fieldPaths=planId&updateMask.fieldPaths=planDetails&updateMask.fieldPaths=billingDetails&updateMask.fieldPaths=planPrice&updateMask.fieldPaths=basePlanPrice&updateMask.fieldPaths=discountApplied&updateMask.fieldPaths=updatedAt${hasDiscount ? '&updateMask.fieldPaths=referralDiscount' : ''}`;
+      await fetch(updateUrl, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: toFirestoreFields(userUpdatePayload) })
+      });
+
+      res.json({
+        success: true,
+        billing: userUpdatePayload.billingDetails
+      });
+    } catch (error: any) {
+      console.error("Sync Single User Error:", error);
       res.status(500).json({ error: error.message });
     }
   });

@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   MessageSquare, Search, Filter, Calendar, Clock, User, Phone, 
   CheckCircle2, AlertCircle, Sparkles, Settings, ExternalLink, 
-  RefreshCw, Check, Copy, ArrowUpDown, Building, MapPin, Eye, Zap, Smile
+  RefreshCw, Check, Copy, ArrowUpDown, Building, MapPin, Eye, Zap, Smile,
+  Smartphone, Globe, Send
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -15,8 +16,8 @@ import {
 import { ReminderModal } from '../components/ReminderModal';
 import { EmojiToolbar } from '../components/EmojiToolbar';
 import { getPatientFirstName } from '../lib/patientNameUtils';
-import { formatDateDDMMAAAA, formatDateFullTextSpanish, formatArgentinePhoneWithPrefix } from '../lib/phoneUtils';
-import { interpretEmojis } from '../lib/whatsappUtils';
+import { formatDateDDMMAAAA, formatDateFullTextSpanish, formatArgentinePhoneWithPrefix, getWhatsAppNumber, cleanArgentineLocalPhone } from '../lib/phoneUtils';
+import { interpretEmojis, dispatchWhatsAppMessage, isMobileDevice, getStoredWhatsAppTarget, setStoredWhatsAppTarget } from '../lib/whatsappUtils';
 
 export function Reminders() {
   const { ownerId, profile, user } = useAuth();
@@ -51,6 +52,13 @@ export function Reminders() {
   const [clinicName, setClinicName] = useState('Nuestra Clínica');
   const [clinicAddress, setClinicAddress] = useState('Av. Libertador 1234');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [preferredTarget, setPreferredTarget] = useState<'app' | 'web'>(getStoredWhatsAppTarget);
+
+  const handleTogglePreferredTarget = (target: 'app' | 'web') => {
+    setPreferredTarget(target);
+    setStoredWhatsAppTarget(target);
+    showToast(target === 'app' ? '📱 Modo WhatsApp: Aplicación Oficial' : '🌐 Modo WhatsApp: WhatsApp Web');
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -244,6 +252,47 @@ export function Reminders() {
     }
   };
 
+  // Quick WhatsApp Dispatch (App on Mobile, Web on PC)
+  const handleQuickSend = async (apt: any) => {
+    const rawPhone = apt.phone;
+    if (!rawPhone || !cleanArgentineLocalPhone(rawPhone)) {
+      showToast('⚠️ El turno no tiene un teléfono celular válido');
+      return;
+    }
+    const cleanPhone = getWhatsAppNumber(rawPhone);
+    if (!cleanPhone || cleanPhone === '549') {
+      showToast('⚠️ Número telefónico no válido');
+      return;
+    }
+
+    const patientFirstName = apt.patientFirstName || getPatientFirstName(apt);
+    const formattedDate = apt.date ? formatDateFullTextSpanish(apt.date) : 'la fecha acordada';
+    const profName = apt.professionalName || apt.professional || loggedProfessionalName;
+
+    const rawMsg = template
+      .replace(/{nombre}/gi, patientFirstName)
+      .replace(/{fecha}/gi, formattedDate)
+      .replace(/{hora}/gi, apt.time || 'su horario')
+      .replace(/{profesional}/gi, profName)
+      .replace(/{clinica}/gi, clinicName)
+      .replace(/{direccion}/gi, clinicAddress)
+      .replace(/{tratamiento}/gi, apt.treatment || 'su consulta');
+
+    const result = dispatchWhatsAppMessage(cleanPhone, rawMsg, preferredTarget);
+
+    try {
+      await updateDoc(doc(db, 'appointments', apt.id), {
+        reminderSent: true,
+        reminderSentAt: serverTimestamp(),
+        reminderPhone: cleanPhone,
+        reminderChannel: result.targetUsed
+      });
+      showToast(result.targetUsed === 'app' ? '📱 Abriendo WhatsApp App...' : '💻 Abriendo WhatsApp Web...');
+    } catch (err) {
+      console.warn('Error updating status after quick send:', err);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Toast */}
@@ -266,7 +315,39 @@ export function Reminders() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* WhatsApp Target Mode Switch (Mobile App / Desktop App vs Web) */}
+          <div className="flex items-center gap-1 bg-surface border border-outline-variant p-1 rounded-xl shadow-2xs">
+            <button
+              type="button"
+              onClick={() => handleTogglePreferredTarget('app')}
+              className={cn(
+                "px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer",
+                preferredTarget === 'app'
+                  ? "bg-emerald-600 text-white shadow-xs"
+                  : "text-on-surface-variant hover:text-on-surface hover:bg-surface-bright"
+              )}
+              title="Abrir directamente la aplicación de WhatsApp (en celular o la app instalada en PC)"
+            >
+              <Smartphone size={13} />
+              <span>App WhatsApp</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleTogglePreferredTarget('web')}
+              className={cn(
+                "px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer",
+                preferredTarget === 'web'
+                  ? "bg-emerald-600 text-white shadow-xs"
+                  : "text-on-surface-variant hover:text-on-surface hover:bg-surface-bright"
+              )}
+              title="Abrir WhatsApp Web en una pestaña nueva del navegador"
+            >
+              <Globe size={13} />
+              <span>WhatsApp Web</span>
+            </button>
+          </div>
+
           <button
             type="button"
             onClick={() => setShowSettings(!showSettings)}
@@ -278,7 +359,8 @@ export function Reminders() {
             )}
           >
             <Settings size={14} />
-            <span>Configurar Plantilla y Clínica</span>
+            <span className="hidden sm:inline">Configurar Plantilla y Clínica</span>
+            <span className="sm:hidden">Plantilla</span>
           </button>
         </div>
       </div>
@@ -653,7 +735,7 @@ export function Reminders() {
                   </div>
 
                   {/* Right: Actions */}
-                  <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                  <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0 flex-wrap justify-end">
                     {/* Toggle Sent/Pending button */}
                     <button
                       type="button"
@@ -669,15 +751,29 @@ export function Reminders() {
                       {isSent ? <CheckCircle2 size={15} className="text-emerald-600" /> : <Clock size={15} />}
                     </button>
 
-                    {/* Open Detailed Customization Modal with verified WhatsApp Web button */}
+                    {/* Quick WhatsApp Send (Mobile app on phones, Web on desktop) */}
+                    {hasPhone && (
+                      <button
+                        type="button"
+                        onClick={() => handleQuickSend(apt)}
+                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs whitespace-nowrap"
+                        title="Enviar recordatorio directamente por WhatsApp (App en celular o Web en PC)"
+                      >
+                        <Send size={13} />
+                        <span className="hidden sm:inline">WhatsApp</span>
+                        <span className="sm:hidden">Enviar</span>
+                      </button>
+                    )}
+
+                    {/* Open Detailed Customization Modal */}
                     <button
                       type="button"
                       onClick={() => setActiveModalAppointment(apt)}
-                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
-                      title="Abrir editor para verificar mensaje, emojis y enviar por WhatsApp Web"
+                      className="px-2.5 sm:px-3 py-2 border border-outline-variant hover:bg-surface-bright text-on-surface rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
+                      title="Abrir editor para verificar mensaje, emojis y personalizar"
                     >
                       <MessageSquare size={13} />
-                      <span>Personalizar y Enviar</span>
+                      <span className="hidden md:inline">Personalizar</span>
                     </button>
                   </div>
                 </div>

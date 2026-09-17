@@ -1,6 +1,7 @@
 import { Outlet } from 'react-router-dom';
 import { SideNavBar } from './SideNavBar';
 import { TopAppBar } from './TopAppBar';
+import { BottomNavBar } from './BottomNavBar';
 import { SidebarProvider, useSidebar } from '../contexts/SidebarContext';
 import { cn } from '../lib/utils';
 
@@ -18,12 +19,13 @@ function LayoutContent() {
         )}
       >
         <TopAppBar />
-        <main className="pt-16 sm:pt-20 pb-16 sm:pb-12 px-3 sm:px-6 lg:px-8 flex-1 w-full max-w-full overflow-x-hidden">
+        <main className="pt-16 sm:pt-20 pb-24 lg:pb-12 px-3 sm:px-6 lg:px-8 flex-1 w-full max-w-full overflow-x-hidden">
           <div className="max-w-7xl mx-auto w-full min-w-0">
             <Outlet />
           </div>
         </main>
       </div>
+      <BottomNavBar />
     </div>
   );
 }

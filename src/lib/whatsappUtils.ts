@@ -274,42 +274,157 @@ export function containsEmojis(str: string): boolean {
 }
 
 /**
+ * Detects whether the current device is a mobile device (smartphone, tablet, or narrow touch screen).
+ */
+export function isMobileDevice(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const uaMatch = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  const touchMatch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  const screenMatch = typeof window.innerWidth !== 'undefined' && window.innerWidth <= 820;
+  return uaMatch || (touchMatch && screenMatch);
+}
+
+export type WhatsAppTarget = 'app' | 'mobile' | 'web' | 'api' | 'wa_me' | 'auto';
+
+const STORAGE_KEY_WHATSAPP_TARGET = 'medturnos_preferred_whatsapp_target';
+
+/**
+ * Gets the user's preferred WhatsApp target from localStorage.
+ * Defaults to 'app' (WhatsApp application) for both mobile and desktop.
+ */
+export function getStoredWhatsAppTarget(): 'app' | 'web' {
+  if (typeof window === 'undefined') return 'app';
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_WHATSAPP_TARGET);
+    if (saved === 'web' || saved === 'app') {
+      return saved;
+    }
+  } catch {
+    // fallback to app
+  }
+  return 'app';
+}
+
+/**
+ * Saves the user's preferred WhatsApp target to localStorage.
+ */
+export function setStoredWhatsAppTarget(target: 'app' | 'web'): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY_WHATSAPP_TARGET, target);
+  } catch (e) {
+    console.warn('Could not save WhatsApp target preference', e);
+  }
+}
+
+export interface WhatsAppUrlResult {
+  url: string;
+  fallbackUrl: string;
+  targetUsed: 'app' | 'web';
+  interpretedMessage: string;
+  cleanPhone: string;
+  isMobile: boolean;
+}
+
+/**
  * Builds the URL for sending a message to WhatsApp with guaranteed emoji preservation.
- *
- * NOTE: `web.whatsapp.com/send?phone=...&text=...` is the ONLY URL on desktop that reliably
- * decodes and inserts UTF-8 emojis into the message box without passing through WhatsApp's
- * intermediate landing pages (api.whatsapp.com / wa.me), which have a known bug of
- * corrupting or stripping emoji characters during page redirects.
+ * 
+ * Target modes:
+ * - 'app': WhatsApp native application (iOS/Android mobile app or WhatsApp Desktop on PC)
+ * - 'web': WhatsApp Web in a browser tab
+ * - 'auto': Uses the stored preference (defaults to 'app')
  */
 export function buildWhatsAppUrl(
   phone: string | undefined | null,
   rawMessage: string,
-  target: 'web' | 'mobile' | 'api' | 'wa_me' | 'auto' = 'web'
-): { url: string; interpretedMessage: string; cleanPhone: string } {
+  target: WhatsAppTarget = 'auto'
+): WhatsAppUrlResult {
   const cleanPhone = getWhatsAppNumber(phone);
   const interpretedMessage = interpretEmojis(rawMessage);
   const encodedText = encodeURIComponent(interpretedMessage);
+  const isMobile = isMobileDevice();
 
-  const isMobile = typeof navigator !== 'undefined' && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  let targetUsed: 'app' | 'web' = 'app';
+  if (target === 'web') {
+    targetUsed = 'web';
+  } else if (target === 'mobile' || target === 'app') {
+    targetUsed = 'app';
+  } else if (target === 'auto') {
+    // User requested to prioritize the WhatsApp application on mobile and allow it on desktop PC
+    targetUsed = getStoredWhatsAppTarget();
+  }
 
   let url: string;
-  if (target === 'mobile') {
+  const fallbackUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
+
+  if (targetUsed === 'app') {
+    // Native app protocol: directly launches WhatsApp application on iOS, Android, and Desktop PC WhatsApp app
     url = `whatsapp://send?phone=${cleanPhone}&text=${encodedText}`;
-  } else if (target === 'api') {
-    url = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
-  } else if (target === 'wa_me') {
-    url = `https://wa.me/${cleanPhone}?text=${encodedText}`;
-  } else if (target === 'auto') {
-    if (isMobile) {
-      url = `whatsapp://send?phone=${cleanPhone}&text=${encodedText}`;
-    } else {
-      url = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
-    }
   } else {
-    // Default: 'web' (https://web.whatsapp.com/send?phone=...&text=...)
-    // This directly opens WhatsApp Web on desktop with emojis 100% intact.
+    // Desktop WhatsApp Web
     url = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
   }
 
-  return { url, interpretedMessage, cleanPhone };
+  return { 
+    url, 
+    fallbackUrl, 
+    targetUsed, 
+    interpretedMessage, 
+    cleanPhone, 
+    isMobile 
+  };
 }
+
+/**
+ * Dispatches a WhatsApp message appropriately based on the selected target:
+ * - 'app': invokes the native WhatsApp application (mobile or PC desktop).
+ * - 'web': opens WhatsApp Web in a new tab.
+ */
+export function dispatchWhatsAppMessage(
+  phone: string | undefined | null,
+  rawMessage: string,
+  target: WhatsAppTarget = 'auto'
+): { success: boolean; targetUsed: 'app' | 'web'; interpretedMessage: string; cleanPhone: string; url: string } {
+  const result = buildWhatsAppUrl(phone, rawMessage, target);
+
+  if (!result.cleanPhone || result.cleanPhone === '549') {
+    return { 
+      success: false, 
+      targetUsed: result.targetUsed, 
+      interpretedMessage: result.interpretedMessage, 
+      cleanPhone: result.cleanPhone,
+      url: result.url
+    };
+  }
+
+  if (result.targetUsed === 'app') {
+    // Native WhatsApp App protocol
+    try {
+      const link = document.createElement('a');
+      link.href = result.url;
+      link.target = '_top';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        if (document.body.contains(link)) {
+          document.body.removeChild(link);
+        }
+      }, 500);
+    } catch {
+      window.location.href = result.url;
+    }
+  } else {
+    // WhatsApp Web: open in new tab
+    window.open(result.url, '_blank', 'noopener,noreferrer');
+  }
+
+  return { 
+    success: true, 
+    targetUsed: result.targetUsed, 
+    interpretedMessage: result.interpretedMessage, 
+    cleanPhone: result.cleanPhone,
+    url: result.url
+  };
+}
+

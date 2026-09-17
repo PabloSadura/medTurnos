@@ -38,7 +38,7 @@ export function Agenda() {
   const [appointments, setAppointments] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
   const [treatments, setTreatments] = useState<any[]>([]);
-  const [view, setView] = useState<'day' | 'week' | 'month'>('month');
+  const [view, setView] = useState<'day' | 'week' | 'month'>(() => typeof window !== 'undefined' && window.innerWidth < 768 ? 'day' : 'month');
   const [workingHours, setWorkingHours] = useState<any>(null);
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
 
@@ -56,7 +56,7 @@ export function Agenda() {
       setNewPatientData({ firstName: '', lastName: '', name: '', phone: '', idNumber: '', birthDate: '' });
       setSearchTerm('');
     }
-  }, [isNewAppointmentOpen]);
+  }, [isNewAppointmentOpen, ownerId]);
 
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [reminderModalApt, setReminderModalApt] = useState<any | null>(null);
@@ -880,17 +880,17 @@ export function Agenda() {
               </div>
             </div>
 
-            <div className="sm:hidden flex items-center gap-2 bg-surface border border-outline-variant rounded-lg p-1">
+            <div className="sm:hidden flex items-center gap-1 bg-surface border border-outline-variant rounded-lg p-1">
               {(['day', 'week', 'month'] as const).map((v) => (
                 <button
                   key={v}
                   onClick={() => setView(v)}
                   className={cn(
-                    "px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest whitespace-nowrap",
-                    view === v ? "bg-primary text-white" : "text-on-surface-variant"
+                    "px-2.5 py-1 rounded text-[11px] font-bold tracking-tight whitespace-nowrap transition-colors",
+                    view === v ? "bg-primary text-white shadow-2xs" : "text-on-surface-variant hover:text-on-surface"
                   )}
                 >
-                  {v === 'day' ? 'D' : v === 'week' ? 'S' : 'M'}
+                  {v === 'day' ? 'Día' : v === 'week' ? 'Semana' : 'Mes'}
                 </button>
               ))}
             </div>

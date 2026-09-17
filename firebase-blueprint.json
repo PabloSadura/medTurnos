@@ -284,9 +284,37 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["patientId", "userId", "imageUrl", "date"]
+    },
+    "Referral": {
+      "title": "Referral",
+      "description": "Referral program record linking a newly created user with the referring professional and their respective discounts",
+      "type": "object",
+      "properties": {
+        "referrerId": { "type": "string" },
+        "referrerName": { "type": "string" },
+        "referrerEmail": { "type": "string" },
+        "referredUserId": { "type": "string" },
+        "referredUserName": { "type": "string" },
+        "referredUserEmail": { "type": "string" },
+        "referredPlanId": { "type": "string" },
+        "referredPlanName": { "type": "string" },
+        "newDiscountType": { "type": "string", "enum": ["percent", "fixed"] },
+        "newDiscountValue": { "type": "number" },
+        "referrerDiscountType": { "type": "string", "enum": ["percent", "fixed"] },
+        "referrerDiscountValue": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "applied", "revoked"] },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["referrerId", "referredUserId", "newDiscountValue", "referrerDiscountValue"]
     }
   },
   "firestore": {
+    "/referrals": {
+      "schema": "Referral",
+      "description": "History and status of referred users and reward discounts"
+    },
     "/patient_photos": {
       "schema": "PatientPhoto",
       "description": "Collection of clinical evolution and before/after photos"

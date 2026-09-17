@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageCircle, Send, Check, Copy, ExternalLink, 
-  Clock, Calendar, User, Phone, Sparkles, AlertTriangle, Globe
+  Clock, Calendar, User, Phone, Sparkles, AlertTriangle, Globe, Smartphone, Monitor
 } from 'lucide-react';
 import { Modal } from './Modal';
+import { cn } from '../lib/utils';
 import { getPatientFirstName } from '../lib/patientNameUtils';
 import { formatDateDDMMAAAA, formatDateFullTextSpanish, getWhatsAppNumber, cleanArgentineLocalPhone } from '../lib/phoneUtils';
-import { buildWhatsAppUrl, interpretEmojis, containsEmojis } from '../lib/whatsappUtils';
+import { buildWhatsAppUrl, dispatchWhatsAppMessage, isMobileDevice, interpretEmojis, containsEmojis, getStoredWhatsAppTarget, setStoredWhatsAppTarget } from '../lib/whatsappUtils';
 import { EmojiToolbar } from './EmojiToolbar';
 import { PhoneInputArgentina } from './PhoneInputArgentina';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -65,6 +66,14 @@ export function ReminderModal({
   const [isUpdating, setIsUpdating] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const isMobile = isMobileDevice();
+  const [sendTarget, setSendTarget] = useState<'app' | 'web'>(getStoredWhatsAppTarget);
+
+  const handleSelectTarget = (target: 'app' | 'web') => {
+    setSendTarget(target);
+    setStoredWhatsAppTarget(target);
+  };
+
   // Clinic metadata fallback
   const clinicName = propClinicName || profile?.clinicName || 'nuestra clínica';
   const clinicAddress = propClinicAddress || profile?.clinicAddress || profile?.address || 'nuestra sede';
@@ -79,16 +88,14 @@ export function ReminderModal({
   const loggedInProfessional = (profile?.name && profile.name.trim())
     || (profile?.displayName && profile.displayName.trim())
     || (user?.displayName && user.displayName.trim())
-    || (user?.email ? user.email.split('@')[0] : '')
-    || 'Profesional';
+    || (user?.email ? user.email.split('@')[0] : '');
 
   // Professional name resolution:
-  // When {profesional} is requested, it must output the logged-in professional's name
-  const professionalName = (propProfessionalName && propProfessionalName.trim())
-    || (profile?.role !== 'secretaria' && loggedInProfessional ? loggedInProfessional : '')
+  // User directive: "cuando ponemos la variable {profesional}, debe salir el nombre del profesional logueado"
+  const professionalName = (loggedInProfessional && loggedInProfessional.trim())
+    || (propProfessionalName && propProfessionalName.trim())
     || (appointment?.professionalName && appointment.professionalName.trim())
     || (appointment?.professional && appointment.professional.trim())
-    || loggedInProfessional
     || 'Profesional';
 
   const treatmentName = appointment.treatment || appointment.treatmentName || 'su consulta';
@@ -185,16 +192,15 @@ export function ReminderModal({
     }
   };
 
-  const handleOpenWhatsApp = async (target: 'web' | 'mobile' | 'auto' = 'web') => {
+  const handleOpenWhatsApp = async (preferredTarget?: 'app' | 'web') => {
+    const targetToUse = preferredTarget || sendTarget;
     const cleanPhone = getWhatsAppNumber(phone);
     if (!cleanPhone || cleanPhone === '549') {
       return;
     }
 
     const finalMessage = replaceVariables(message);
-    // Generate reliable WhatsApp Web URL with interpreted Unicode emojis and UTF-8 encoding
-    const { url, interpretedMessage } = buildWhatsAppUrl(cleanPhone, finalMessage, target);
-    window.open(url, '_blank', 'noopener,noreferrer');
+    const { interpretedMessage } = dispatchWhatsAppMessage(cleanPhone, finalMessage, targetToUse);
 
     // Mark as sent in Firestore if appointment ID is present
     if (appointment.id) {
@@ -203,7 +209,8 @@ export function ReminderModal({
         await updateDoc(doc(db, 'appointments', appointment.id), {
           reminderSent: true,
           reminderSentAt: serverTimestamp(),
-          reminderPhone: cleanPhone
+          reminderPhone: cleanPhone,
+          reminderChannel: targetToUse
         });
       } catch (err) {
         console.warn('Error updating appointment reminder status:', err);
@@ -398,8 +405,46 @@ export function ReminderModal({
           </div>
         </div>
 
+        {/* Sending Method / Channel Selector */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 p-2.5 bg-surface-bright rounded-xl border border-outline-variant text-xs">
+          <span className="text-[11px] font-bold text-on-surface-variant flex items-center gap-1.5">
+            <Send size={13} className="text-primary" />
+            <span>Destino de envío:</span>
+          </span>
+          <div className="grid grid-cols-2 gap-1 bg-surface p-1 rounded-xl border border-outline-variant w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => handleSelectTarget('app')}
+              className={cn(
+                "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer",
+                sendTarget === 'app'
+                  ? "bg-emerald-600 text-white shadow-xs"
+                  : "text-on-surface-variant hover:text-on-surface hover:bg-surface-bright"
+              )}
+              title="Abrir la aplicación de WhatsApp directamente en el celular o PC"
+            >
+              <Smartphone size={13} />
+              <span>App WhatsApp</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectTarget('web')}
+              className={cn(
+                "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer",
+                sendTarget === 'web'
+                  ? "bg-emerald-600 text-white shadow-xs"
+                  : "text-on-surface-variant hover:text-on-surface hover:bg-surface-bright"
+              )}
+              title="Abrir WhatsApp Web en una nueva pestaña"
+            >
+              <Globe size={13} />
+              <span>WhatsApp Web</span>
+            </button>
+          </div>
+        </div>
+
         {/* Action Buttons */}
-        <div className="flex items-center gap-2 pt-2 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-2 pt-1 flex-wrap sm:flex-nowrap">
           <button
             type="button"
             onClick={handleCopyMessage}
@@ -413,12 +458,12 @@ export function ReminderModal({
           <button
             type="button"
             disabled={!cleanArgentineLocalPhone(phone) || isUpdating}
-            onClick={() => handleOpenWhatsApp('web')}
-            className="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer uppercase tracking-wider"
-            title="Abrir directamente en WhatsApp Web con todos los emojis interpretados y garantizados"
+            onClick={() => handleOpenWhatsApp(sendTarget)}
+            className="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer uppercase tracking-wider min-h-[42px]"
+            title={sendTarget === 'app' ? "Abrir directamente en la app de WhatsApp" : "Abrir directamente en WhatsApp Web"}
           >
-            <Globe size={15} />
-            <span>WhatsApp Web</span>
+            {sendTarget === 'app' ? <Smartphone size={15} /> : <Globe size={15} />}
+            <span>{sendTarget === 'app' ? 'Abrir en App WhatsApp' : 'Abrir en WhatsApp Web'}</span>
             <ExternalLink size={13} />
           </button>
         </div>

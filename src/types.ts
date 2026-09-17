@@ -166,3 +166,33 @@ export interface Appointment {
   updatedAt?: any;
 }
 
+export type DiscountType = 'percent' | 'fixed';
+
+export interface ReferralDiscount {
+  type: DiscountType;
+  value: number; // e.g. 20 for 20% or 10 for $10
+  description?: string;
+  active?: boolean;
+}
+
+export interface ReferralRecord {
+  id: string;
+  referrerId: string;
+  referrerName: string;
+  referrerEmail: string;
+  referredUserId: string;
+  referredUserName: string;
+  referredUserEmail: string;
+  referredPlanId?: string;
+  referredPlanName?: string;
+  newDiscountType: DiscountType;
+  newDiscountValue: number;
+  referrerDiscountType: DiscountType;
+  referrerDiscountValue: number;
+  status: 'active' | 'applied' | 'revoked';
+  notes?: string;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
+

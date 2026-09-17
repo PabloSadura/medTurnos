@@ -4,7 +4,7 @@ import {
   Trash2, Save, UserCheck, UserMinus, Clock, Activity,
   ChevronRight, Search, Filter, MoreVertical, CreditCard,
   Check, Database, RefreshCw, Lock, Unlock, AlertTriangle,
-  AlertCircle, CheckCircle2, Calendar
+  AlertCircle, CheckCircle2, Calendar, Gift, Award, Tag, Sparkles, UserPlus, CheckCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -13,18 +13,27 @@ import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../lib/firebase';
-import { doc, deleteDoc, serverTimestamp, collection, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, deleteDoc, serverTimestamp, collection, getDocs, setDoc, updateDoc, addDoc, increment } from 'firebase/firestore';
 import { seedAllCollections } from '../lib/dbSeeder';
+import { ReferralRecord } from '../types';
+import { syncAllUsersPlanValues, syncSingleUserPlan, calculateUserPlanBilling } from '../lib/planSyncService';
 
 export function SystemAdmin() {
   const { showToast } = useToast();
   const [professionals, setProfessionals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
+  const [isSyncingPlans, setIsSyncingPlans] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<'all' | 'al_dia' | 'incumplido' | 'bloqueado'>('all');
-  const [activeAdminTab, setActiveAdminTab] = useState<'users' | 'plans'>('users');
+  const [activeAdminTab, setActiveAdminTab] = useState<'users' | 'plans' | 'referrals'>('users');
   
+  // Referrals state
+  const [referrals, setReferrals] = useState<ReferralRecord[]>([]);
+  const [referralsLoading, setReferralsLoading] = useState(false);
+  const [referralFilter, setReferralFilter] = useState<'all' | 'active' | 'applied'>('all');
+  const [referralSearch, setReferralSearch] = useState('');
+
   // Plans states
   const [plans, setPlans] = useState<any[]>([]);
   const [plansLoading, setPlansLoading] = useState(true);
@@ -47,13 +56,83 @@ export function SystemAdmin() {
     role: 'medico',
     status: 'Activo',
     activePlanId: 'plus',
-    paymentStatus: 'al_dia'
+    paymentStatus: 'al_dia',
+    // Programa de referidos
+    isReferred: false,
+    referrerId: '',
+    referredDiscountType: 'percent' as 'percent' | 'fixed',
+    referredDiscountValue: 20,
+    referrerDiscountType: 'percent' as 'percent' | 'fixed',
+    referrerDiscountValue: 15,
+    referralNotes: ''
   });
+
+  const openUserModal = (prof: any = null, forceReferral: boolean = false) => {
+    setSelectedProf(prof);
+    if (prof) {
+      setForm({
+        name: prof.name || '',
+        email: prof.email || '',
+        password: '',
+        role: prof.role || 'medico',
+        status: prof.status || 'Activo',
+        activePlanId: prof.activePlanId || 'plus',
+        paymentStatus: prof.paymentStatus || 'al_dia',
+        isReferred: Boolean(prof.referralInfo?.isReferred || prof.referredBy),
+        referrerId: prof.referralInfo?.referrerId || prof.referredBy?.referrerId || '',
+        referredDiscountType: prof.referralInfo?.discountType || 'percent',
+        referredDiscountValue: prof.referralInfo?.discountValue !== undefined ? prof.referralInfo.discountValue : 20,
+        referrerDiscountType: prof.referralInfo?.referrerDiscountType || 'percent',
+        referrerDiscountValue: prof.referralInfo?.referrerDiscountValue !== undefined ? prof.referralInfo.referrerDiscountValue : 15,
+        referralNotes: prof.referralInfo?.notes || ''
+      });
+    } else {
+      setForm({
+        name: '',
+        email: '',
+        password: '',
+        role: 'medico',
+        status: 'Activo',
+        activePlanId: 'plus',
+        paymentStatus: 'al_dia',
+        isReferred: forceReferral,
+        referrerId: '',
+        referredDiscountType: 'percent',
+        referredDiscountValue: 20,
+        referrerDiscountType: 'percent',
+        referrerDiscountValue: 15,
+        referralNotes: ''
+      });
+    }
+    setIsModalOpen(true);
+  };
 
   useEffect(() => {
     fetchProfessionals();
     fetchPlans();
+    fetchReferrals();
   }, []);
+
+  const fetchReferrals = async () => {
+    try {
+      setReferralsLoading(true);
+      const qSnapshot = await getDocs(collection(db, 'referrals'));
+      const list: any[] = [];
+      qSnapshot.forEach((doc) => {
+        list.push({ id: doc.id, ...doc.data() });
+      });
+      list.sort((a, b) => {
+        const timeA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+        const timeB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+        return timeB - timeA;
+      });
+      setReferrals(list);
+    } catch (error: any) {
+      console.warn('Error fetching referrals:', error);
+    } finally {
+      setReferralsLoading(false);
+    }
+  };
 
   const fetchProfessionals = async () => {
     try {
@@ -142,6 +221,35 @@ export function SystemAdmin() {
     setIsPlanModalOpen(true);
   };
 
+  const handleSyncAllPlansAndBonuses = async () => {
+    setIsSyncingPlans(true);
+    try {
+      const res = await syncAllUsersPlanValues(db);
+      showToast(
+        `¡Sincronización exitosa! ${res.syncedCount} usuarios actualizados (${res.withDiscountsCount} con bonificaciones aplicadas). Facturación total: $${res.totalMonthlyBilling} USD/mes`,
+        'success'
+      );
+      await Promise.all([fetchProfessionals(), fetchPlans(), fetchReferrals()]);
+    } catch (err: any) {
+      showToast('Error al sincronizar planes: ' + err.message, 'error');
+    } finally {
+      setIsSyncingPlans(false);
+    }
+  };
+
+  const handleSyncSingleUser = async (userId: string) => {
+    try {
+      const billing = await syncSingleUserPlan(db, userId);
+      showToast(
+        `Usuario sincronizado: Plan ${billing.planName}, Monto: $${billing.finalPrice}/mes (${billing.bonificaciones.length} bonif.)`,
+        'success'
+      );
+      await fetchProfessionals();
+    } catch (err: any) {
+      showToast('Error al sincronizar usuario: ' + err.message, 'error');
+    }
+  };
+
   const handleSavePlan = async () => {
     if (!selectedPlan) return;
     try {
@@ -153,9 +261,15 @@ export function SystemAdmin() {
         updatedAt: serverTimestamp()
       }, { merge: true });
 
-      showToast(`Plan ${planForm.name} actualizado exitosamente`, 'success');
+      // Automatically synchronize all users with the updated plan values and bonificaciones
+      const syncRes = await syncAllUsersPlanValues(db);
+
+      showToast(
+        `Plan ${planForm.name} actualizado. Sincronizados ${syncRes.syncedCount} usuarios con los nuevos importes.`,
+        'success'
+      );
       setIsPlanModalOpen(false);
-      fetchPlans();
+      await Promise.all([fetchPlans(), fetchProfessionals()]);
     } catch (error: any) {
       showToast('Error al guardar el plan: ' + error.message, 'error');
     }
@@ -167,9 +281,15 @@ export function SystemAdmin() {
       return;
     }
 
+    if (form.isReferred && !form.referrerId) {
+      showToast('Debe seleccionar el profesional que realizó la referencia', 'error');
+      return;
+    }
+
     try {
       const targetId = selectedProf?.id || doc(collection(db, 'users')).id;
       const isBlocked = form.status === 'Bloqueado' || form.status === 'Inactivo';
+      const referrer = form.referrerId ? professionals.find(p => p.id === form.referrerId) : null;
 
       // Use the exact same /api/staff/manage service endpoint
       const res = await fetch('/api/staff/manage', {
@@ -199,8 +319,12 @@ export function SystemAdmin() {
         showToast(data.warning, 'info');
       }
 
+      const isReferred = Boolean(form.isReferred && form.referrerId && referrer);
+      const newDiscountValue = Number(form.referredDiscountValue) || 0;
+      const referrerDiscountValue = Number(form.referrerDiscountValue) || 0;
+
       // Sync user data to users collection client-side
-      await setDoc(doc(db, 'users', authUid), {
+      const userPayload: any = {
         name: form.name,
         email: form.email,
         role: form.role,
@@ -210,13 +334,120 @@ export function SystemAdmin() {
         activePlanId: form.activePlanId || 'plus',
         planId: form.activePlanId || 'plus',
         updatedAt: serverTimestamp()
-      }, { merge: true });
+      };
 
-      showToast(selectedProf ? 'Usuario actualizado exitosamente' : 'Nuevo usuario creado exitosamente');
+      if (isReferred && referrer) {
+        userPayload.referralInfo = {
+          isReferred: true,
+          referrerId: form.referrerId,
+          referrerName: referrer.name || referrer.email,
+          referrerEmail: referrer.email,
+          discountType: form.referredDiscountType,
+          discountValue: newDiscountValue,
+          referrerDiscountType: form.referrerDiscountType,
+          referrerDiscountValue: referrerDiscountValue,
+          appliedAt: new Date().toISOString(),
+          notes: form.referralNotes || ''
+        };
+        userPayload.referralDiscount = {
+          type: form.referredDiscountType,
+          value: newDiscountValue,
+          active: true,
+          reason: `Descuento por referido del Dr./Dra. ${referrer.name || referrer.email}`
+        };
+      } else if (!form.isReferred && selectedProf?.referralInfo) {
+        userPayload.referralInfo = null;
+        userPayload.referralDiscount = null;
+      }
+
+      await setDoc(doc(db, 'users', authUid), userPayload, { merge: true });
+
+      // Grant rewards to referrer and log in referrals collection if this is a new referral
+      const isNewReferralAction = isReferred && referrer && (!selectedProf || !selectedProf.referralInfo?.isReferred);
+
+      if (isNewReferralAction) {
+        // 1. Grant reward discount to referring professional and increment count
+        await updateDoc(doc(db, 'users', form.referrerId), {
+          referralReward: {
+            hasReward: true,
+            discountType: form.referrerDiscountType,
+            discountValue: referrerDiscountValue,
+            rewardFromUserName: form.name,
+            rewardFromUserEmail: form.email,
+            rewardFromUserId: authUid,
+            date: new Date().toISOString()
+          },
+          referralDiscount: {
+            type: form.referrerDiscountType,
+            value: referrerDiscountValue,
+            active: true,
+            reason: `Recompensa por referir a ${form.name}`
+          },
+          referralsCount: increment(1),
+          updatedAt: serverTimestamp()
+        });
+
+        // 2. Add record in referrals collection
+        const planObj = plans.find(p => p.id === form.activePlanId);
+        await addDoc(collection(db, 'referrals'), {
+          referrerId: form.referrerId,
+          referrerName: referrer.name || referrer.email,
+          referrerEmail: referrer.email,
+          referredUserId: authUid,
+          referredUserName: form.name,
+          referredUserEmail: form.email,
+          referredPlanId: form.activePlanId || 'plus',
+          referredPlanName: planObj?.name || form.activePlanId || 'Plus',
+          newDiscountType: form.referredDiscountType,
+          newDiscountValue: newDiscountValue,
+          referrerDiscountType: form.referrerDiscountType,
+          referrerDiscountValue: referrerDiscountValue,
+          status: 'active',
+          notes: form.referralNotes || '',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      if (isReferred && referrer) {
+        showToast(
+          selectedProf
+            ? 'Usuario actualizado. Programa de referidos registrado.'
+            : `¡Usuario creado! Descuento otorgado al nuevo usuario (${newDiscountValue}${form.referredDiscountType === 'percent' ? '%' : '$'}) y al Dr./Dra. ${referrer.name || referrer.email} (${referrerDiscountValue}${form.referrerDiscountType === 'percent' ? '%' : '$'}).`,
+          'success'
+        );
+      } else {
+        showToast(selectedProf ? 'Usuario actualizado exitosamente' : 'Nuevo usuario creado exitosamente');
+      }
+
       setIsModalOpen(false);
       fetchProfessionals();
+      fetchReferrals();
     } catch (error: any) {
       showToast(error.message, 'error');
+    }
+  };
+
+  const handleToggleReferralStatus = async (referral: any) => {
+    const newStatus = referral.status === 'applied' ? 'active' : 'applied';
+    try {
+      await updateDoc(doc(db, 'referrals', referral.id), {
+        status: newStatus,
+        updatedAt: serverTimestamp()
+      });
+
+      // Synchronize both referred user and referring doctor immediately
+      if (referral.referredUserId) {
+        await syncSingleUserPlan(db, referral.referredUserId);
+      }
+      if (referral.referrerId) {
+        await syncSingleUserPlan(db, referral.referrerId);
+      }
+
+      showToast(`Estado de referencia actualizado a: ${newStatus === 'applied' ? 'Aplicado / Bonificado' : 'Activo'}. Valores sincronizados.`);
+      await Promise.all([fetchReferrals(), fetchProfessionals()]);
+    } catch (error: any) {
+      showToast('Error al actualizar estado: ' + error.message, 'error');
     }
   };
 
@@ -342,23 +573,34 @@ export function SystemAdmin() {
           <h1 className="headline-lg text-on-surface">Administración del Sistema</h1>
           <p className="body-md text-on-surface-variant">Vista global de usuarios, planes y configuración central de la plataforma.</p>
         </div>
-        <button
-          onClick={handleSeedDatabase}
-          disabled={seeding}
-          className="w-full sm:w-auto justify-center flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-[12px] font-bold tracking-wide hover:bg-primary/90 transition-all shadow-sm cursor-pointer disabled:opacity-50"
-        >
-          {seeding ? (
-            <>
-              <RefreshCw size={16} className="animate-spin" />
-              <span>Cargando colecciones...</span>
-            </>
-          ) : (
-            <>
-              <Database size={16} />
-              <span>Cargar Todas las Colecciones en Firestore</span>
-            </>
-          )}
-        </button>
+        <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
+          <button
+            onClick={handleSyncAllPlansAndBonuses}
+            disabled={isSyncingPlans}
+            className="w-full sm:w-auto justify-center flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-[12px] font-bold tracking-wide hover:bg-emerald-700 transition-all shadow-sm cursor-pointer disabled:opacity-50"
+            title="Sincronizar valores de planes y bonificaciones para todos los usuarios"
+          >
+            <RefreshCw size={15} className={cn(isSyncingPlans && "animate-spin")} />
+            <span>{isSyncingPlans ? "Sincronizando..." : "Sincronizar Planes y Bonificaciones"}</span>
+          </button>
+          <button
+            onClick={handleSeedDatabase}
+            disabled={seeding}
+            className="w-full sm:w-auto justify-center flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-[12px] font-bold tracking-wide hover:bg-primary/90 transition-all shadow-sm cursor-pointer disabled:opacity-50"
+          >
+            {seeding ? (
+              <>
+                <RefreshCw size={16} className="animate-spin" />
+                <span>Cargando colecciones...</span>
+              </>
+            ) : (
+              <>
+                <Database size={16} />
+                <span>Cargar Todas las Colecciones en Firestore</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Tab Selector */}
@@ -384,6 +626,23 @@ export function SystemAdmin() {
           )}
         >
           Configuración de Planes
+        </button>
+        <button
+          onClick={() => setActiveAdminTab('referrals')}
+          className={cn(
+            "px-4 sm:px-6 py-2.5 sm:py-3 text-[11px] font-bold uppercase tracking-widest border-b-2 font-sans transition-all cursor-pointer whitespace-nowrap flex items-center gap-2",
+            activeAdminTab === 'referrals'
+              ? "border-primary text-primary"
+              : "border-transparent text-on-surface-variant hover:text-on-surface hover:border-outline-variant"
+          )}
+        >
+          <Gift size={15} />
+          <span>Programa de Referidos</span>
+          {referrals.length > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-primary/10 text-primary">
+              {referrals.length}
+            </span>
+          )}
         </button>
       </div>
 
@@ -547,25 +806,23 @@ export function SystemAdmin() {
                         className="w-full pl-10 pr-4 py-2 bg-surface-bright border border-outline-variant rounded-lg text-sm outline-none focus:border-primary transition-all font-sans"
                       />
                     </div>
-                    <button 
-                      onClick={() => {
-                        setSelectedProf(null);
-                        setForm({ 
-                          name: '', 
-                          email: '', 
-                          password: '', 
-                          role: 'medico', 
-                          status: 'Activo', 
-                          activePlanId: 'plus',
-                          paymentStatus: 'al_dia'
-                        });
-                        setIsModalOpen(true);
-                      }}
-                      className="flex items-center justify-center gap-2 px-4 py-2 bg-primary text-white text-[11px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans whitespace-nowrap cursor-pointer shadow-sm"
-                    >
-                      <Plus size={14} />
-                      Añadir Usuario
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => openUserModal(null, false)}
+                        className="flex items-center justify-center gap-2 px-3.5 py-2 bg-primary text-white text-[11px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans whitespace-nowrap cursor-pointer shadow-sm"
+                      >
+                        <Plus size={14} />
+                        Añadir Usuario
+                      </button>
+                      <button 
+                        onClick={() => openUserModal(null, true)}
+                        className="flex items-center justify-center gap-2 px-3.5 py-2 bg-emerald-600 text-white text-[11px] font-bold uppercase tracking-widest rounded-lg hover:bg-emerald-700 transition-all font-sans whitespace-nowrap cursor-pointer shadow-sm"
+                        title="Dar de alta otorgando descuentos al nuevo usuario y a su profesional referente"
+                      >
+                        <Gift size={14} />
+                        Alta con Referido
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -645,19 +902,14 @@ export function SystemAdmin() {
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button 
-                            onClick={() => {
-                              setSelectedProf(p);
-                              setForm({
-                                name: p.name || '',
-                                email: p.email || '',
-                                password: '',
-                                role: p.role || 'medico',
-                                status: p.status || 'Activo',
-                                activePlanId: p.activePlanId || 'plus',
-                                paymentStatus: p.paymentStatus || 'al_dia'
-                              });
-                              setIsModalOpen(true);
-                            }}
+                            onClick={() => handleSyncSingleUser(p.id)}
+                            className="p-2 hover:bg-emerald-50 rounded-lg text-emerald-600 transition-colors cursor-pointer"
+                            title="Sincronizar Plan y Bonificaciones"
+                          >
+                            <RefreshCw size={17} />
+                          </button>
+                          <button 
+                            onClick={() => openUserModal(p)}
                             className="p-2 hover:bg-surface rounded-lg text-on-surface-variant transition-colors cursor-pointer"
                             title="Configurar"
                           >
@@ -678,6 +930,20 @@ export function SystemAdmin() {
                         <span className="text-[10px] font-bold px-2 py-0.5 bg-surface rounded-full text-on-surface-variant uppercase tracking-tighter">
                           {p.role === 'medico' ? 'Profesional' : p.role === 'secretary' ? 'Secretaria' : 'Admin'}
                         </span>
+
+                        {p.referralInfo?.isReferred && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full">
+                            <Gift size={10} />
+                            Ref: -{p.referralInfo.discountValue}{p.referralInfo.discountType === 'percent' ? '%' : '$'}
+                          </span>
+                        )}
+
+                        {(p.referralsCount && p.referralsCount > 0) ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded-full">
+                            <Award size={10} />
+                            {p.referralsCount} ref.
+                          </span>
+                        ) : null}
 
                         {/* Account Access Status */}
                         <span className={cn(
@@ -773,6 +1039,20 @@ export function SystemAdmin() {
                               <div>
                                 <p className="text-[13px] font-bold text-on-surface">{p.name || 'Sin nombre'}</p>
                                 <p className="text-[11px] text-on-surface-variant">{p.email}</p>
+                                <div className="flex items-center gap-1 flex-wrap mt-0.5">
+                                  {p.referralInfo?.isReferred && (
+                                    <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded">
+                                      <Gift size={9} />
+                                      Ref: -{p.referralInfo.discountValue}{p.referralInfo.discountType === 'percent' ? '%' : '$'} ({p.referralInfo.referrerName || 'Colega'})
+                                    </span>
+                                  )}
+                                  {(p.referralsCount && p.referralsCount > 0) ? (
+                                    <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded">
+                                      <Award size={9} />
+                                      {p.referralsCount} ref.
+                                    </span>
+                                  ) : null}
+                                </div>
                               </div>
                             </div>
                           </td>
@@ -845,20 +1125,15 @@ export function SystemAdmin() {
                                 {isPaymentDefault ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
                               </button>
 
+                              <button
+                                onClick={() => handleSyncSingleUser(p.id)}
+                                className="p-1.5 hover:bg-emerald-50 rounded-lg text-emerald-600 transition-colors cursor-pointer"
+                                title="Sincronizar Plan y Bonificaciones con Firebase"
+                              >
+                                <RefreshCw size={16} />
+                              </button>
                               <button 
-                                onClick={() => {
-                                  setSelectedProf(p);
-                                  setForm({
-                                    name: p.name || '',
-                                    email: p.email || '',
-                                    password: '',
-                                    role: p.role || 'medico',
-                                    status: p.status || 'Activo',
-                                    activePlanId: p.activePlanId || 'plus',
-                                    paymentStatus: p.paymentStatus || 'al_dia'
-                                  });
-                                  setIsModalOpen(true);
-                                }}
+                                onClick={() => openUserModal(p)}
                                 className="p-1.5 hover:bg-surface rounded-lg text-on-surface-variant transition-colors cursor-pointer"
                                 title="Configurar Usuario"
                               >
@@ -888,7 +1163,7 @@ export function SystemAdmin() {
               </div>
             </div>
           </motion.div>
-        ) : (
+        ) : activeAdminTab === 'plans' ? (
           <motion.div
             key="plans-tab"
             initial={{ opacity: 0, y: 15 }}
@@ -998,6 +1273,339 @@ export function SystemAdmin() {
               })}
             </div>
           </motion.div>
+        ) : (
+          <motion.div
+            key="referrals-tab"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.15 }}
+            className="space-y-6 font-sans"
+          >
+            {/* Header / Intro */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider flex items-center gap-2">
+                  <Gift className="text-primary" size={18} />
+                  Gestión del Programa de Referidos
+                </h3>
+                <p className="text-[11px] text-on-surface-variant">
+                  Supervise los médicos que traen nuevos colegas a la plataforma, consulte descuentos otorgados y liquide bonificaciones.
+                </p>
+              </div>
+              <button
+                onClick={() => openUserModal(null, true)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-sm cursor-pointer whitespace-nowrap"
+              >
+                <Plus size={14} />
+                Alta con Referido
+              </button>
+            </div>
+
+            {/* Metrics cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+              <div className="p-4 sm:p-5 bg-white rounded-2xl border border-outline-variant shadow-xs">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Total Referidos</span>
+                  <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                    <Users size={16} />
+                  </div>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl sm:text-3xl font-black text-on-surface tracking-tight">{referrals.length}</span>
+                  <span className="text-[11px] font-bold text-tertiary">altas</span>
+                </div>
+                <p className="text-[10px] text-on-surface-variant mt-1">Usuarios ingresados por recomendación</p>
+              </div>
+
+              <div className="p-4 sm:p-5 bg-white rounded-2xl border border-outline-variant shadow-xs">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Beneficios Activos</span>
+                  <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
+                    <Sparkles size={16} />
+                  </div>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl sm:text-3xl font-black text-emerald-700 tracking-tight">
+                    {referrals.filter(r => r.status === 'active').length}
+                  </span>
+                  <span className="text-[11px] font-bold text-emerald-600">vigentes</span>
+                </div>
+                <p className="text-[10px] text-on-surface-variant mt-1">Descuentos vigentes en facturación</p>
+              </div>
+
+              <div className="p-4 sm:p-5 bg-white rounded-2xl border border-outline-variant shadow-xs">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Médicos Referentes</span>
+                  <div className="p-2 rounded-xl bg-purple-50 text-purple-600">
+                    <Award size={16} />
+                  </div>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl sm:text-3xl font-black text-purple-700 tracking-tight">
+                    {new Set(referrals.map(r => r.referrerId)).size}
+                  </span>
+                  <span className="text-[11px] font-bold text-purple-600">profesionales</span>
+                </div>
+                <p className="text-[10px] text-on-surface-variant mt-1">Colegas activos que recomiendan</p>
+              </div>
+
+              <div className="p-4 sm:p-5 bg-white rounded-2xl border border-outline-variant shadow-xs">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Bonificados</span>
+                  <div className="p-2 rounded-xl bg-blue-50 text-blue-600">
+                    <CheckCircle size={16} />
+                  </div>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl sm:text-3xl font-black text-blue-700 tracking-tight">
+                    {referrals.filter(r => r.status === 'applied').length}
+                  </span>
+                  <span className="text-[11px] font-bold text-blue-600">liquidados</span>
+                </div>
+                <p className="text-[10px] text-on-surface-variant mt-1">Descuentos ya consumidos o aplicados</p>
+              </div>
+            </div>
+
+            {/* Referrals Table Container */}
+            <div className="bg-white rounded-2xl border border-outline-variant shadow-xs overflow-hidden">
+              <div className="p-4 sm:p-6 border-b border-outline-variant space-y-4">
+                <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-on-surface">Historial de Referencias y Beneficios Cruzados</h3>
+                    <p className="text-[11px] text-on-surface-variant">Detalle de cada usuario referido, su plan y las bonificaciones otorgadas.</p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1 md:w-64">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/40" size={16} />
+                      <input 
+                        type="text"
+                        placeholder="Buscar por usuario o referente..."
+                        value={referralSearch}
+                        onChange={(e) => setReferralSearch(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 bg-surface-bright border border-outline-variant rounded-lg text-sm outline-none focus:border-primary transition-all font-sans"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filter Pills */}
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 font-sans">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant shrink-0 mr-1">Estado:</span>
+                  <button
+                    onClick={() => setReferralFilter('all')}
+                    className={cn(
+                      "px-3 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer",
+                      referralFilter === 'all'
+                        ? "bg-primary text-white"
+                        : "bg-surface text-on-surface-variant hover:bg-outline-variant"
+                    )}
+                  >
+                    Todos ({referrals.length})
+                  </button>
+                  <button
+                    onClick={() => setReferralFilter('active')}
+                    className={cn(
+                      "px-3 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer",
+                      referralFilter === 'active'
+                        ? "bg-emerald-600 text-white"
+                        : "bg-surface text-on-surface-variant hover:bg-outline-variant"
+                    )}
+                  >
+                    Activos ({referrals.filter(r => r.status === 'active').length})
+                  </button>
+                  <button
+                    onClick={() => setReferralFilter('applied')}
+                    className={cn(
+                      "px-3 py-1 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer",
+                      referralFilter === 'applied'
+                        ? "bg-blue-600 text-white"
+                        : "bg-surface text-on-surface-variant hover:bg-outline-variant"
+                    )}
+                  >
+                    Liquidados / Aplicados ({referrals.filter(r => r.status === 'applied').length})
+                  </button>
+                </div>
+              </div>
+
+              {referralsLoading ? (
+                <div className="p-12 text-center text-on-surface-variant text-sm font-sans animate-pulse">
+                  Cargando programa de referidos...
+                </div>
+              ) : referrals.length === 0 ? (
+                <div className="p-12 text-center space-y-3 font-sans">
+                  <div className="w-14 h-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto">
+                    <Gift size={28} />
+                  </div>
+                  <h4 className="text-base font-bold text-on-surface">No hay altas por programa de referidos</h4>
+                  <p className="text-xs text-on-surface-variant max-w-md mx-auto">
+                    Cuando el administrador da de alta a un profesional y marca que viene por referido, se registrará aquí otorgando descuentos automáticos tanto al nuevo usuario como al colega que lo recomendó.
+                  </p>
+                  <button
+                    onClick={() => openUserModal(null, true)}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-primary/90 transition-all cursor-pointer shadow-sm mt-2"
+                  >
+                    <Plus size={14} />
+                    Dar de Alta Primer Referido
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Mobile Referrals View */}
+                  <div className="divide-y divide-surface block md:hidden font-sans">
+                    {referrals
+                      .filter(r => {
+                        const term = referralSearch.toLowerCase();
+                        const matches = 
+                          (r.referredUserName && r.referredUserName.toLowerCase().includes(term)) ||
+                          (r.referredUserEmail && r.referredUserEmail.toLowerCase().includes(term)) ||
+                          (r.referrerName && r.referrerName.toLowerCase().includes(term)) ||
+                          (r.referrerEmail && r.referrerEmail.toLowerCase().includes(term));
+                        if (!matches) return false;
+                        if (referralFilter === 'active') return r.status === 'active';
+                        if (referralFilter === 'applied') return r.status === 'applied';
+                        return true;
+                      })
+                      .map((ref) => {
+                        const isApplied = ref.status === 'applied';
+                        return (
+                          <div key={ref.id} className="p-4 space-y-3">
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <p className="text-sm font-bold text-on-surface">{ref.referredUserName || 'Sin nombre'}</p>
+                                <p className="text-xs text-on-surface-variant">{ref.referredUserEmail}</p>
+                              </div>
+                              <span className={cn(
+                                "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider",
+                                isApplied ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              )}>
+                                {isApplied ? "Aplicado / Liquidado" : "Activo"}
+                              </span>
+                            </div>
+
+                            <div className="p-3 bg-surface rounded-xl space-y-2 text-xs">
+                              <div className="flex items-center justify-between">
+                                <span className="text-on-surface-variant">Descuento nuevo usuario:</span>
+                                <span className="font-bold text-emerald-700">
+                                  {ref.newDiscountValue}{ref.newDiscountType === 'percent' ? '%' : '$'} OFF
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-on-surface-variant">Referido por:</span>
+                                <span className="font-bold text-purple-700">
+                                  {ref.referrerName || ref.referrerEmail}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-on-surface-variant">Recompensa referente:</span>
+                                <span className="font-bold text-purple-700">
+                                  {ref.referrerDiscountValue}{ref.referrerDiscountType === 'percent' ? '%' : '$'} OFF
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex justify-end">
+                              <button
+                                onClick={() => handleToggleReferralStatus(ref)}
+                                className="text-xs font-bold text-primary hover:underline cursor-pointer"
+                              >
+                                {isApplied ? "Reactivar como Activo" : "Marcar como Liquidado"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+
+                  {/* Desktop Referrals Table */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-left font-sans">
+                      <thead className="bg-surface-bright border-b border-outline-variant">
+                        <tr>
+                          <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Nuevo Usuario (Referido)</th>
+                          <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Descuento Nuevo Usuario</th>
+                          <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Profesional Referente</th>
+                          <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Recompensa Referente</th>
+                          <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Estado</th>
+                          <th className="px-6 py-3 text-[10px] font-black text-on-surface-variant uppercase tracking-widest text-right">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-surface">
+                        {referrals
+                          .filter(r => {
+                            const term = referralSearch.toLowerCase();
+                            const matches = 
+                              (r.referredUserName && r.referredUserName.toLowerCase().includes(term)) ||
+                              (r.referredUserEmail && r.referredUserEmail.toLowerCase().includes(term)) ||
+                              (r.referrerName && r.referrerName.toLowerCase().includes(term)) ||
+                              (r.referrerEmail && r.referrerEmail.toLowerCase().includes(term));
+                            if (!matches) return false;
+                            if (referralFilter === 'active') return r.status === 'active';
+                            if (referralFilter === 'applied') return r.status === 'applied';
+                            return true;
+                          })
+                          .map((ref) => {
+                            const isApplied = ref.status === 'applied';
+                            return (
+                              <tr key={ref.id} className="hover:bg-surface/30 transition-colors">
+                                <td className="px-6 py-4">
+                                  <div>
+                                    <p className="text-[13px] font-bold text-on-surface">{ref.referredUserName || 'Sin nombre'}</p>
+                                    <p className="text-[11px] text-on-surface-variant">{ref.referredUserEmail}</p>
+                                    {ref.referredPlanName && (
+                                      <span className="text-[9px] font-bold text-on-surface-variant/80 uppercase">
+                                        Plan: {ref.referredPlanName}
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    <Sparkles size={12} />
+                                    {ref.newDiscountValue}{ref.newDiscountType === 'percent' ? '%' : '$'} OFF
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <div>
+                                    <p className="text-[13px] font-bold text-on-surface">{ref.referrerName || 'Dr. Colega'}</p>
+                                    <p className="text-[11px] text-on-surface-variant">{ref.referrerEmail}</p>
+                                  </div>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                                    <Award size={12} />
+                                    {ref.referrerDiscountValue}{ref.referrerDiscountType === 'percent' ? '%' : '$'} Bonificación
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className={cn(
+                                    "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                                    isApplied ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                  )}>
+                                    {isApplied ? <CheckCircle size={11} /> : <Sparkles size={11} />}
+                                    {isApplied ? "Aplicado / Liquidado" : "Activo"}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 text-right">
+                                  <button
+                                    onClick={() => handleToggleReferralStatus(ref)}
+                                    className="px-3 py-1.5 text-[11px] font-bold rounded-lg border border-outline-variant hover:bg-surface text-on-surface-variant transition-colors cursor-pointer"
+                                    title={isApplied ? "Reactivar como vigente" : "Marcar como consumido/liquidado"}
+                                  >
+                                    {isApplied ? "Reactivar" : "Liquidar"}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -1006,7 +1614,7 @@ export function SystemAdmin() {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title={selectedProf ? "Editar Profesional" : "Alta de Profesional"}
-        className="max-w-md font-sans"
+        className="max-w-xl font-sans"
       >
         <div className="space-y-4">
           <div className="space-y-1.5">
@@ -1097,6 +1705,127 @@ export function SystemAdmin() {
                   <option key={p.id} value={p.id}>Plan {p.name} (${p.price || 0}/mes)</option>
                 ))}
               </select>
+            </div>
+          </div>
+
+          {/* Programa de Referidos Section */}
+          <div className="pt-2 border-t border-outline-variant/60">
+            <div className="p-3.5 rounded-xl border border-emerald-200/80 bg-emerald-50/40 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={form.isReferred}
+                    onChange={(e) => setForm({ ...form, isReferred: e.target.checked })}
+                    className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                    <Gift size={14} className="text-emerald-600" />
+                    ¿Viene por Programa de Referidos?
+                  </span>
+                </label>
+                {form.isReferred && (
+                  <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                    Beneficio Doble
+                  </span>
+                )}
+              </div>
+
+              {form.isReferred && (
+                <div className="space-y-3 pt-2 border-t border-emerald-200/60 font-sans">
+                  {/* Select Referrer */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-emerald-900 uppercase tracking-wider flex items-center gap-1">
+                      <Users size={11} />
+                      Profesional Referente (Quien lo recomendó)
+                    </label>
+                    <select
+                      value={form.referrerId}
+                      onChange={(e) => setForm({ ...form, referrerId: e.target.value })}
+                      className="w-full px-3 py-2 bg-white border border-emerald-300 rounded-lg text-xs outline-none focus:ring-1 focus:ring-emerald-500 font-medium text-on-surface"
+                    >
+                      <option value="">Seleccione el profesional referente...</option>
+                      {professionals
+                        .filter(p => !selectedProf || p.id !== selectedProf.id)
+                        .map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.name || p.email} ({p.role === 'medico' ? 'Médico' : p.role} - {p.email})
+                          </option>
+                        ))}
+                    </select>
+                    {professionals.filter(p => !selectedProf || p.id !== selectedProf.id).length === 0 && (
+                      <p className="text-[10px] text-error font-medium">No hay otros usuarios registrados en el sistema para seleccionar como referente.</p>
+                    )}
+                  </div>
+
+                  {/* Dual Discount Config */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* New user discount */}
+                    <div className="p-2.5 bg-white/90 rounded-lg border border-emerald-200 space-y-1.5">
+                      <span className="text-[10px] font-extrabold text-emerald-900 uppercase tracking-tight block">
+                        Descuento Nuevo Usuario
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          value={form.referredDiscountValue}
+                          onChange={(e) => setForm({ ...form, referredDiscountValue: parseFloat(e.target.value) || 0 })}
+                          className="w-20 px-2 py-1.5 border border-emerald-300 rounded text-xs text-center font-bold outline-none"
+                        />
+                        <select
+                          value={form.referredDiscountType}
+                          onChange={(e) => setForm({ ...form, referredDiscountType: e.target.value as 'percent' | 'fixed' })}
+                          className="flex-1 px-2 py-1.5 border border-emerald-300 rounded text-xs font-bold outline-none bg-white"
+                        >
+                          <option value="percent">% Porcentaje</option>
+                          <option value="fixed">$ Monto Fijo</option>
+                        </select>
+                      </div>
+                      <p className="text-[10px] text-on-surface-variant">Otorgado en su suscripción inicial.</p>
+                    </div>
+
+                    {/* Referrer doctor discount/reward */}
+                    <div className="p-2.5 bg-white/90 rounded-lg border border-purple-200 space-y-1.5">
+                      <span className="text-[10px] font-extrabold text-purple-900 uppercase tracking-tight block">
+                        Recompensa Colega Referente
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          value={form.referrerDiscountValue}
+                          onChange={(e) => setForm({ ...form, referrerDiscountValue: parseFloat(e.target.value) || 0 })}
+                          className="w-20 px-2 py-1.5 border border-purple-300 rounded text-xs text-center font-bold outline-none"
+                        />
+                        <select
+                          value={form.referrerDiscountType}
+                          onChange={(e) => setForm({ ...form, referrerDiscountType: e.target.value as 'percent' | 'fixed' })}
+                          className="flex-1 px-2 py-1.5 border border-purple-300 rounded text-xs font-bold outline-none bg-white"
+                        >
+                          <option value="percent">% Porcentaje</option>
+                          <option value="fixed">$ Monto Fijo</option>
+                        </select>
+                      </div>
+                      <p className="text-[10px] text-on-surface-variant">Bonificación en su próximo abono.</p>
+                    </div>
+                  </div>
+
+                  {/* Notes */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-emerald-900 uppercase tracking-wider">
+                      Observación / Motivo (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ej: Recomendado por congreso médico anual"
+                      value={form.referralNotes}
+                      onChange={(e) => setForm({ ...form, referralNotes: e.target.value })}
+                      className="w-full px-3 py-1.5 bg-white border border-emerald-200 rounded-lg text-xs outline-none"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

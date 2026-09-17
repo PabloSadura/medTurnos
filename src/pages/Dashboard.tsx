@@ -187,10 +187,18 @@ export function Dashboard() {
         setUpcomingAppointments(upcoming);
         setLoading(false);
       },
-      (error) => handleFirestoreError(error, OperationType.LIST, 'appointments')
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'appointments');
+        setLoading(false);
+      }
     );
 
+    const safetyTimer = setTimeout(() => {
+      setLoading(false);
+    }, 1200);
+
     return () => {
+      clearTimeout(safetyTimer);
       unsubscribeTreatments();
       unsubscribeEvolutions();
       unsubscribePackages();

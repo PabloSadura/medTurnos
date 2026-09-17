@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { NavLink } from 'react-router-dom';
 import { 
   LogOut, 
@@ -5,18 +6,23 @@ import {
   ChevronLeft, 
   ChevronRight, 
   X, 
-  PanelLeftClose, 
-  PanelLeftOpen 
+  LayoutDashboard,
+  CalendarDays,
+  Users,
+  Stethoscope,
+  Package,
+  MessageSquare,
+  Settings,
+  Terminal,
+  Shield
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { auth } from '../lib/firebase';
-import { signOut } from 'firebase/auth';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { NAV_ITEMS } from '../lib/navigation';
 
 export function SideNavBar() {
-  const { permissions } = useAuth();
+  const { permissions, logout, profile, user } = useAuth();
   const { 
     isCollapsed, 
     toggleCollapsed, 
@@ -24,15 +30,36 @@ export function SideNavBar() {
     closeMobile 
   } = useSidebar();
 
-  const handleLogout = () => signOut(auth);
+  const handleLogout = () => logout();
 
-  const filteredItems = NAV_ITEMS.filter(item => {
-    if (permissions.includes(item.id)) return true;
-    if (permissions.includes('all')) {
-      return !item.id.startsWith('sys_');
+  const filteredItems = useMemo(() => {
+    const isAdmin = profile?.role === 'admin';
+    if (isAdmin) {
+      return [
+        { icon: Terminal, label: 'Control Maestro', path: '/system/dashboard', id: 'sys_dashboard' },
+        { icon: CalendarDays, label: 'Agenda Diaria', path: '/agenda', id: 'agenda' },
+        { icon: Users, label: 'Pacientes', path: '/patients', id: 'patients' },
+        { icon: Stethoscope, label: 'Tratamientos', path: '/treatments', id: 'treatments' },
+        { icon: Package, label: 'Inventario', path: '/inventory', id: 'inventory' },
+        { icon: MessageSquare, label: 'Recordatorios', path: '/reminders', id: 'reminders' },
+        { icon: LayoutDashboard, label: 'Panel Clínico', path: '/medical/dashboard', id: 'dashboard' },
+        { icon: Settings, label: 'Administración', path: '/admin', id: 'admin' },
+      ];
     }
-    return false;
-  });
+    return NAV_ITEMS.filter(item => {
+      if (permissions.includes(item.id)) return true;
+      if (permissions.includes('all')) {
+        return !item.id.startsWith('sys_');
+      }
+      return false;
+    });
+  }, [permissions, profile?.role]);
+
+  const userRoleLabel = useMemo(() => {
+    if (profile?.role === 'admin') return 'Administrador';
+    if (profile?.role === 'secretary') return 'Secretaría';
+    return 'Profesional';
+  }, [profile?.role]);
 
   return (
     <>
@@ -62,27 +89,27 @@ export function SideNavBar() {
         {/* Sidebar Header & Brand */}
         <div className={cn(
           "border-b border-surface-bright bg-white transition-all duration-300 flex items-center justify-between",
-          isCollapsed ? "p-3 lg:flex-col lg:gap-2" : "p-5"
+          isCollapsed ? "p-3 lg:flex-col lg:gap-2" : "p-4 sm:p-5"
         )}>
           {/* Brand Info */}
           {!isCollapsed ? (
             <div className="overflow-hidden">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center text-white font-black text-xs shadow-xs shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center text-white font-black text-xs shadow-xs shrink-0">
                   MT
                 </div>
                 <div>
-                  <h1 className="text-xs font-black text-on-surface tracking-[0.18em] uppercase leading-none">
+                  <h1 className="text-xs font-black text-on-surface tracking-[0.16em] uppercase leading-none">
                     MedTurnos
                   </h1>
-                  <p className="text-[8px] text-on-surface-variant/60 font-black uppercase tracking-widest mt-0.5 leading-none">
-                    Clinic Intelligence
+                  <p className="text-[9px] text-primary font-bold uppercase tracking-wider mt-1 leading-none">
+                    Salud Digital
                   </p>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center text-white font-black text-xs shadow-xs shrink-0" title="MedTurnos Clinic Intelligence">
+            <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center text-white font-black text-xs shadow-xs shrink-0" title="MedTurnos Salud Digital">
               MT
             </div>
           )}
@@ -117,14 +144,14 @@ export function SideNavBar() {
         </div>
 
         {/* Navigation Items */}
-        <nav className="flex-1 py-3 overflow-y-auto overflow-x-hidden bg-white/50 backdrop-blur-sm">
+        <nav className="flex-1 py-3 overflow-y-auto overflow-x-hidden bg-white">
           {!isCollapsed && (
-            <div className="px-5 mb-2 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-40">
-              Menú Principal
+            <div className="px-5 mb-2 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-50">
+              Navegación
             </div>
           )}
 
-          <div className="space-y-0.5">
+          <div className="space-y-1">
             {filteredItems.map((item) => (
               <NavLink
                 key={item.path}
@@ -132,17 +159,13 @@ export function SideNavBar() {
                 onClick={closeMobile}
                 title={isCollapsed ? item.label : undefined}
                 className={({ isActive }) => cn(
-                  "flex items-center text-[12px] font-bold transition-all duration-200 border-l-[3px]",
+                  "flex items-center text-[12px] font-bold transition-all duration-200 rounded-xl",
                   isCollapsed
-                    ? "justify-center px-0 py-3 mx-1.5 rounded-xl border-l-0"
-                    : "px-5 py-2.5 border-l-[3px]",
+                    ? "justify-center p-2.5 mx-1.5"
+                    : "px-3.5 py-2.5 mx-2.5",
                   isActive 
-                    ? isCollapsed
-                      ? "bg-primary text-white shadow-xs"
-                      : "bg-primary/5 text-primary border-primary shadow-[inset_4px_0_10px_rgba(0,71,141,0.02)]" 
-                    : isCollapsed
-                      ? "text-on-surface-variant hover:bg-surface hover:text-on-surface"
-                      : "text-on-surface-variant hover:bg-surface border-transparent"
+                    ? "bg-primary text-white shadow-xs"
+                    : "text-on-surface-variant hover:bg-surface hover:text-on-surface"
                 )}
               >
                 {({ isActive }) => (
@@ -152,8 +175,8 @@ export function SideNavBar() {
                         "w-4 h-4 shrink-0 transition-colors",
                         !isCollapsed && "mr-3",
                         isActive 
-                          ? isCollapsed ? "text-white" : "text-primary" 
-                          : "text-on-surface-variant opacity-60"
+                          ? "text-white" 
+                          : "text-on-surface-variant opacity-70"
                       )} 
                     />
                     {!isCollapsed && (
@@ -166,11 +189,31 @@ export function SideNavBar() {
           </div>
         </nav>
 
-        {/* User Footer: Profile & Logout */}
+        {/* User Footer: Profile, Role Badge & Logout */}
         <div className={cn(
-          "mt-auto border-t border-outline-variant bg-surface-bright transition-all duration-300",
-          isCollapsed ? "p-2 space-y-1" : "px-4 py-3 space-y-1"
+          "mt-auto border-t border-outline-variant bg-surface/50 transition-all duration-300",
+          isCollapsed ? "p-2 space-y-1" : "p-3 space-y-2"
         )}>
+          {!isCollapsed && (
+            <div className="px-2 py-1 flex items-center justify-between">
+              <div className="truncate pr-1">
+                <p className="text-[11px] font-bold text-on-surface truncate leading-tight">
+                  {profile?.name || user?.displayName || 'Usuario'}
+                </p>
+                <span className={cn(
+                  "inline-block mt-0.5 text-[8px] font-black uppercase tracking-wider px-1.5 py-0.2 rounded-md",
+                  profile?.role === 'admin' 
+                    ? "bg-primary/10 text-primary"
+                    : profile?.role === 'secretary'
+                      ? "bg-amber-100 text-amber-800"
+                      : "bg-teal-100 text-teal-800"
+                )}>
+                  {userRoleLabel}
+                </span>
+              </div>
+            </div>
+          )}
+
           <NavLink
             to="/profile"
             onClick={closeMobile}
@@ -179,7 +222,7 @@ export function SideNavBar() {
               "flex items-center text-[12px] font-bold rounded-lg transition-all duration-200",
               isCollapsed ? "justify-center p-2" : "px-3 py-1.5",
               isActive 
-                ? "bg-primary text-white shadow-sm" 
+                ? "bg-primary text-white shadow-xs" 
                 : "text-on-surface-variant hover:bg-surface hover:text-on-surface"
             )}
           >
@@ -203,11 +246,11 @@ export function SideNavBar() {
             onClick={handleLogout}
             title={isCollapsed ? "Cerrar Sesión" : undefined}
             className={cn(
-              "flex items-center w-full text-[12px] font-bold rounded-lg text-error hover:bg-error/5 transition-all duration-200 cursor-pointer",
+              "flex items-center w-full text-[12px] font-bold rounded-lg text-error hover:bg-error/10 transition-all duration-200 cursor-pointer",
               isCollapsed ? "justify-center p-2" : "px-3 py-1.5 text-left"
             )}
           >
-            <LogOut className={cn("w-4 h-4 shrink-0 text-error/60", !isCollapsed && "mr-2.5")} />
+            <LogOut className={cn("w-4 h-4 shrink-0 text-error/80", !isCollapsed && "mr-2.5")} />
             {!isCollapsed && <span className="truncate">Cerrar Sesión</span>}
           </button>
         </div>

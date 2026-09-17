@@ -3,7 +3,8 @@ import {
   Settings, Users, Shield, Database, Bell, Layout, CreditCard, 
   ChevronRight, Plus, Trash2, Download, CheckCircle2, AlertCircle,
   Palette, Smartphone, Mail, Eye, Save, ExternalLink, MessageSquare,
-  Lock, Unlock, ChevronDown, UserPlus, Calendar
+  Lock, Unlock, ChevronDown, UserPlus, Calendar, Gift, Award,
+  Percent, Sparkles, RefreshCw, Tag, Info
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -16,6 +17,7 @@ import {
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { comparePatientsByLastName } from '../lib/patientNameUtils';
+import { syncSingleUserPlan } from '../lib/planSyncService';
 
 type AdminTab = 'overview' | 'users' | 'notifications' | 'backup' | 'theme' | 'billing';
 
@@ -31,18 +33,36 @@ const AVAILABLE_MODULES = [
 
 export function Administration() {
   const { showToast } = useToast();
-  const { ownerId } = useAuth();
+  const { ownerId, profile, user } = useAuth();
+  const isAdmin = profile?.role === 'admin' || user?.email === 'admin@mail.com' || user?.email === 'pablosadura@gmail.com';
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [patientsCount, setPatientsCount] = useState(0);
   const [appointmentsCount, setAppointmentsCount] = useState(0);
   const [staff, setStaff] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Plans Management
+  // Plans & Billing Management
   const [dbPlans, setDbPlans] = useState<any[]>([]);
   const [activePlan, setActivePlan] = useState<any>({ name: 'Cargando Plan...', price: 0 });
   const [isPlanSelectorOpen, setIsPlanSelectorOpen] = useState(false);
   const [userPaymentStatus, setUserPaymentStatus] = useState<'al_dia' | 'incumplido'>('al_dia');
+  const [isRefreshingBilling, setIsRefreshingBilling] = useState(false);
+  const [userBilling, setUserBilling] = useState<{
+    basePrice: number;
+    totalDiscount: number;
+    finalPrice: number;
+    hasDiscount: boolean;
+    bonificaciones: any[];
+    planName: string;
+    lastSyncedAt?: string;
+  }>({
+    basePrice: 0,
+    totalDiscount: 0,
+    finalPrice: 0,
+    hasDiscount: false,
+    bonificaciones: [],
+    planName: 'Plan Profesional'
+  });
 
   const getDueDateInfo = () => {
     const now = new Date();
@@ -83,7 +103,7 @@ export function Administration() {
     name: '',
     email: '',
     password: '',
-    role: 'Secretary',
+    role: 'secretary',
     permissions: ['agenda', 'patients'] as string[],
     status: 'Activo'
   });
@@ -143,7 +163,7 @@ export function Administration() {
       list.sort((a, b) => (orderMap[a.id] || 99) - (orderMap[b.id] || 99));
       setDbPlans(list);
 
-      // Load theme and plan details from profile in real time
+      // Load theme, plan, and billing details from profile in real time
       unsubscribeUser = onSnapshot(doc(db, 'users', ownerId), (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
@@ -151,17 +171,102 @@ export function Administration() {
           if (data.darkMode !== undefined) setIsDarkMode(data.darkMode);
           if (data.paymentStatus) setUserPaymentStatus(data.paymentStatus);
           
-          const activePlanKey = data.activePlanId || data.planId;
-          if (activePlanKey) {
-            const userPlan = list.find(p => p.id === activePlanKey);
-            if (userPlan) {
-              setActivePlan(userPlan);
-              return;
-            }
+          const activePlanKey = (data.activePlanId || data.planId || 'plus').toLowerCase();
+          const userPlan = list.find(p => p.id.toLowerCase() === activePlanKey) || list.find(l => l.id === 'plus') || list[0] || { name: 'Plus', price: 40000, usersLimit: 3, secretariesLimit: 2 };
+          setActivePlan(userPlan);
+
+          // Extract or compute bonificaciones granted by administrator or referrals
+          const catalogPrice = Number(userPlan.price) || 0;
+          let bonos: any[] = [];
+
+          if (Array.isArray(data.billingDetails?.bonificaciones) && data.billingDetails.bonificaciones.length > 0) {
+            bonos = [...data.billingDetails.bonificaciones];
           }
-          // Default fallbacks back to database-driven Plus/Básico
-          const fallbackPlan = list.find(l => l.id === 'plus') || list[0] || { name: 'Plus', price: 39, usersLimit: 3, secretariesLimit: 2 };
-          setActivePlan(fallbackPlan);
+
+          // Welcome discount for referred user
+          if (data.referralInfo?.isReferred && data.referralDiscount?.active !== false && !bonos.some(b => b.source === 'referral_welcome')) {
+            const dType = data.referralInfo.discountType || 'percent';
+            const dVal = Number(data.referralInfo.discountValue) || 20;
+            const bPrice = Number(data.basePlanPrice) || catalogPrice;
+            const dAmount = dType === 'percent' ? Math.round(((bPrice * dVal) / 100) * 100) / 100 : Math.min(bPrice, dVal);
+            bonos.push({
+              id: 'ref-welcome-client',
+              title: 'Descuento de Bienvenida por Referido',
+              source: 'referral_welcome',
+              discountType: dType,
+              discountValue: dVal,
+              discountAmount: dAmount,
+              description: `Bonificación del ${dVal}${dType === 'percent' ? '%' : '$'} (Referido por ${data.referralInfo.referrerName || data.referralInfo.referrerEmail || 'Colega'})`,
+              beneficiaryType: 'referred'
+            });
+          }
+
+          // Referrer reward discount
+          if (data.referralReward?.hasReward && Number(data.referralReward.discountValue) > 0 && !bonos.some(b => b.source === 'referral_reward')) {
+            const dType = data.referralReward.discountType || 'percent';
+            const dVal = Number(data.referralReward.discountValue) || 15;
+            const bPrice = Number(data.basePlanPrice) || catalogPrice;
+            const dAmount = dType === 'percent' ? Math.round(((bPrice * dVal) / 100) * 100) / 100 : Math.min(bPrice, dVal);
+            bonos.push({
+              id: 'ref-reward-client',
+              title: 'Recompensa por Colega Referido',
+              source: 'referral_reward',
+              discountType: dType,
+              discountValue: dVal,
+              discountAmount: dAmount,
+              description: `Bonificación del ${dVal}${dType === 'percent' ? '%' : '$'} por recomendar a ${data.referralReward.rewardFromUserName || 'Colega'}`,
+              beneficiaryType: 'referrer'
+            });
+          }
+
+          // Custom / Administrative bonus granted by administrator
+          if (data.customBonus?.active && Number(data.customBonus.discountValue) > 0 && !bonos.some(b => b.source === 'custom_bonus')) {
+            const dType = data.customBonus.discountType || 'percent';
+            const dVal = Number(data.customBonus.discountValue) || 0;
+            const bPrice = Number(data.basePlanPrice) || catalogPrice;
+            const dAmount = dType === 'percent' ? Math.round(((bPrice * dVal) / 100) * 100) / 100 : Math.min(bPrice, dVal);
+            bonos.push({
+              id: 'custom-bonus-client',
+              title: data.customBonus.title || 'Bonificación Especial Otorgada por el Administrador',
+              source: 'custom_bonus',
+              discountType: dType,
+              discountValue: dVal,
+              discountAmount: dAmount,
+              description: data.customBonus.reason || data.customBonus.description || `Bonificación del ${dVal}${dType === 'percent' ? '%' : '$'} otorgada por la administración del sistema`,
+              beneficiaryType: 'manual'
+            });
+          }
+
+          // Check if there are raw bonificaciones in user document
+          if (Array.isArray(data.bonificaciones)) {
+            data.bonificaciones.forEach((rawB: any) => {
+              if (rawB && !bonos.some(b => b.id === rawB.id)) {
+                bonos.push(rawB);
+              }
+            });
+          }
+
+          const baseP = Number(data.basePlanPrice ?? data.billingDetails?.basePrice ?? catalogPrice);
+          const totalBonosSum = bonos.reduce((s, b) => s + (Number(b.discountAmount) || 0), 0);
+          const totalDisc = Math.min(baseP, Math.round(Number(data.discountApplied ?? data.billingDetails?.totalDiscount ?? totalBonosSum) * 100) / 100);
+          
+          let finalP = baseP - totalDisc;
+          if (data.planPrice !== undefined) {
+            finalP = Number(data.planPrice);
+          } else if (data.billingDetails?.finalPrice !== undefined) {
+            finalP = Number(data.billingDetails.finalPrice);
+          }
+          finalP = Math.max(0, Math.round(finalP * 100) / 100);
+
+          setUserBilling({
+            basePrice: baseP,
+            totalDiscount: totalDisc,
+            finalPrice: finalP,
+            hasDiscount: totalDisc > 0 || bonos.length > 0,
+            bonificaciones: bonos,
+            planName: userPlan.name || data.billingDetails?.planName || 'Profesional',
+            lastSyncedAt: data.billingDetails?.syncedAt || data.updatedAt
+          });
         }
       }, (error) => console.warn("Failed listening to user doc:", error));
     }).catch(err => {
@@ -180,7 +285,10 @@ export function Administration() {
   const handleSaveUser = async () => {
     if (!ownerId) return;
 
-    const isBecomingSecretary = userForm.role?.toLowerCase() === 'secretary';
+    // Non-admins can only create or manage 'secretary'
+    const targetRole = isAdmin ? (userForm.role || 'secretary').toLowerCase() : 'secretary';
+
+    const isBecomingSecretary = targetRole === 'secretary';
     const wasSecretary = selectedUser?.role?.toLowerCase() === 'secretary';
 
     if (isBecomingSecretary && !wasSecretary) {
@@ -197,12 +305,19 @@ export function Administration() {
       return;
     }
 
+    // Sanitize permissions: professionals cannot grant 'admin' permission
+    const sanitizedPermissions = isAdmin 
+      ? userForm.permissions 
+      : userForm.permissions.filter(p => p !== 'admin');
+
     try {
       const response = await fetch('/api/staff/manage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...userForm,
+          role: targetRole,
+          permissions: sanitizedPermissions,
           userId: ownerId,
           staffId: selectedUser?.id
         })
@@ -224,6 +339,8 @@ export function Administration() {
       if (selectedUser) {
         await updateDoc(doc(db, 'staff', selectedUser.id), {
           ...userForm,
+          role: targetRole,
+          permissions: sanitizedPermissions,
           authUid,
           updatedAt: serverTimestamp()
         });
@@ -231,6 +348,8 @@ export function Administration() {
         // Use authUid as doc ID for easier lookup in rules
         await setDoc(doc(db, 'staff', authUid), {
           ...userForm,
+          role: targetRole,
+          permissions: sanitizedPermissions,
           authUid,
           userId: ownerId,
           createdAt: serverTimestamp()
@@ -241,7 +360,7 @@ export function Administration() {
       await setDoc(doc(db, 'users', authUid), {
         name: userForm.name,
         email: userForm.email,
-        role: userForm.role.toLowerCase(),
+        role: targetRole,
         status: userForm.status,
         userId: ownerId,
         updatedAt: serverTimestamp()
@@ -250,7 +369,10 @@ export function Administration() {
       setIsUserModalOpen(false);
       setSelectedUser(null);
       resetUserForm();
-      showToast(selectedUser ? 'Usuario actualizado' : 'Usuario creado y acceso configurado');
+      showToast(selectedUser 
+        ? (isAdmin ? 'Usuario actualizado' : 'Secretaria actualizada') 
+        : (isAdmin ? 'Usuario creado y acceso configurado' : 'Secretaria creada y acceso configurado')
+      );
     } catch (error: any) {
       showToast(error.message, 'error');
       console.error(error);
@@ -371,6 +493,24 @@ export function Administration() {
     }
   };
 
+  const handleRefreshBilling = async () => {
+    if (!ownerId) return;
+    setIsRefreshingBilling(true);
+    try {
+      const billing = await syncSingleUserPlan(db, ownerId);
+      showToast(
+        billing.hasDiscount 
+          ? `Facturación actualizada: Plan ${billing.planName}, Abono bonificado: $${billing.finalPrice.toLocaleString()}/mes (-$${billing.totalDiscount.toLocaleString()})`
+          : `Facturación actualizada: Plan ${billing.planName}, Abono: $${billing.finalPrice.toLocaleString()}/mes`,
+        'success'
+      );
+    } catch (err: any) {
+      showToast('No se pudo sincronizar facturación: ' + err.message, 'error');
+    } finally {
+      setIsRefreshingBilling(false);
+    }
+  };
+
   const handleSelectPlan = async (plan: any) => {
     if (!ownerId) return;
     try {
@@ -379,6 +519,9 @@ export function Administration() {
         planId: plan.id
       });
       setActivePlan(plan);
+      try {
+        await syncSingleUserPlan(db, ownerId, plan.id);
+      } catch (_) {}
       showToast(`Plan cambiado a ${plan.name} exitosamente`, 'success');
       setIsPlanSelectorOpen(false);
     } catch (e: any) {
@@ -463,8 +606,22 @@ export function Administration() {
                 
                 <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-6 border-t border-outline-variant bg-white/40 p-4 rounded-xl font-sans">
                   <div className="space-y-1">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant">Valor del Plan Convenido</p>
-                    <p className="text-[16px] font-extrabold text-on-surface">${activePlan?.price || 0} / mes</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant">Valor del Abono Mensual</p>
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <p className="text-[16px] font-extrabold text-on-surface">
+                        ${(userBilling.hasDiscount ? userBilling.finalPrice : (activePlan?.price || 0)).toLocaleString()} / mes
+                      </p>
+                      {userBilling.hasDiscount && (
+                        <span className="text-[11px] font-bold text-on-surface-variant line-through">
+                          ${userBilling.basePrice.toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                    {userBilling.hasDiscount && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full mt-0.5">
+                        <Gift size={10} /> -${userBilling.totalDiscount.toLocaleString()} Bonificado
+                      </span>
+                    )}
                   </div>
                   <div className="space-y-1">
                     <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant">Secretarias Permitidas</p>
@@ -515,7 +672,9 @@ export function Administration() {
             <div className="bg-white rounded-xl border border-outline-variant shadow-sm overflow-hidden">
               <div className="px-4 sm:px-6 py-4 border-b border-outline-variant flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                 <div className="space-y-0.5">
-                  <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">Gestión de Personal</h3>
+                  <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider">
+                    {isAdmin ? "Gestión de Personal y Equipo" : "Gestión de Secretarias"}
+                  </h3>
                   <p className="text-[11px] text-on-surface-variant font-sans flex items-center gap-1.5">
                     Límite del Plan: <strong className="text-on-surface font-extrabold">{staff.filter(s => s.role?.toLowerCase() === 'secretary').length} de {activePlan?.secretariesLimit || 0}</strong> Secretarias registradas.
                   </p>
@@ -529,7 +688,7 @@ export function Administration() {
                   className="flex items-center justify-center gap-2 px-3 py-1.5 bg-primary text-white text-[10px] font-bold uppercase tracking-widest rounded-lg hover:bg-primary/90 transition-all font-sans cursor-pointer w-full sm:w-auto"
                 >
                   <Plus size={14} />
-                  Invitar Secretario
+                  {isAdmin ? "Invitar Usuario" : "Invitar Secretaria"}
                 </button>
               </div>
 
@@ -567,7 +726,7 @@ export function Administration() {
                               name: p.name,
                               email: p.email,
                               password: '',
-                              role: p.role,
+                              role: isAdmin ? (p.role || 'secretary') : 'secretary',
                               permissions: p.permissions || [],
                               status: p.status
                             });
@@ -676,7 +835,7 @@ export function Administration() {
                                   name: p.name,
                                   email: p.email,
                                   password: '',
-                                  role: p.role,
+                                  role: isAdmin ? (p.role || 'secretary') : 'secretary',
                                   permissions: p.permissions || [],
                                   status: p.status
                                 });
@@ -886,29 +1045,45 @@ export function Administration() {
               )}
 
               {/* Plan Disponible Card */}
-              <div className="bg-white p-8 rounded-xl border border-primary/20 bg-primary/5 shadow-sm flex flex-col md:flex-row items-center gap-8">
-                <div className="w-20 h-20 bg-primary text-white rounded-2xl flex items-center justify-center shadow-xl shadow-primary/20">
+              <div className="bg-white p-6 sm:p-8 rounded-xl border border-primary/20 bg-primary/5 shadow-sm flex flex-col md:flex-row items-center gap-8">
+                <div className="w-20 h-20 bg-primary text-white rounded-2xl flex items-center justify-center shadow-xl shadow-primary/20 shrink-0">
                   <CreditCard size={40} />
                 </div>
                 <div className="flex-1 text-center md:text-left">
                   <div className="flex flex-col md:flex-row md:items-baseline gap-2 mb-1">
-                    <h3 className="text-xl font-black text-on-surface">Plan {activePlan?.name || 'Profesional'}</h3>
-                    <span className="text-[11px] font-bold bg-primary text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">Plan Disponible</span>
+                    <h3 className="text-xl font-black text-on-surface">Plan {userBilling.planName || activePlan?.name || 'Profesional'}</h3>
+                    <span className="text-[11px] font-bold bg-primary text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">Plan Activo</span>
+                    {userBilling.hasDiscount && (
+                      <span className="text-[11px] font-bold bg-emerald-600 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter flex items-center gap-1 w-fit mx-auto md:mx-0">
+                        <Sparkles size={11} /> Con Bonificación
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm text-on-surface-variant font-sans">
                     Vencimiento de la suscripción: <strong className="text-on-surface font-bold">los días 15 de cada mes</strong>
                   </p>
-                  <div className="mt-4 flex items-center justify-center md:justify-start gap-6 font-sans">
+                  <div className="mt-4 flex flex-wrap items-center justify-center md:justify-start gap-6 font-sans">
                     <div>
-                      <p className="text-[20px] font-bold text-on-surface">${activePlan?.price || 0}</p>
-                      <p className="text-[10px] text-on-surface-variant uppercase font-black">Al Mes</p>
+                      <div className="flex items-baseline gap-2">
+                        <p className="text-[24px] font-black text-on-surface">
+                          ${(userBilling.hasDiscount ? userBilling.finalPrice : (activePlan?.price || 0)).toLocaleString()}
+                        </p>
+                        {userBilling.hasDiscount && (
+                          <span className="text-xs font-bold text-on-surface-variant line-through">
+                            ${userBilling.basePrice.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-on-surface-variant uppercase font-black">
+                        {userBilling.hasDiscount ? "Al Mes (Con Bonificación)" : "Al Mes"}
+                      </p>
                     </div>
-                    <div className="h-8 w-[1px] bg-outline-variant"></div>
+                    <div className="h-8 w-[1px] bg-outline-variant hidden sm:block"></div>
                     <div>
                       <p className="text-[20px] font-bold text-on-surface">{activePlan?.usersLimit || 1}</p>
                       <p className="text-[10px] text-on-surface-variant uppercase font-black">Usuarios Prof.</p>
                     </div>
-                    <div className="h-8 w-[1px] bg-outline-variant"></div>
+                    <div className="h-8 w-[1px] bg-outline-variant hidden sm:block"></div>
                     <div>
                       <p className="text-[20px] font-bold text-on-surface">{activePlan?.secretariesLimit || 1}</p>
                       <p className="text-[10px] text-on-surface-variant uppercase font-black">Secretarias</p>
@@ -918,12 +1093,151 @@ export function Administration() {
                 <div className="flex flex-col gap-2 w-full md:w-auto font-sans">
                   <button 
                     onClick={() => setIsPlanSelectorOpen(true)}
-                    className="px-6 py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-primary/90 transition-all cursor-pointer shadow-sm"
+                    className="px-6 py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-primary/90 transition-all cursor-pointer shadow-sm text-center"
                   >
                     Cambiar Plan
                   </button>
+                  <button 
+                    onClick={handleRefreshBilling}
+                    disabled={isRefreshingBilling}
+                    className="px-4 py-2 bg-white border border-outline-variant text-on-surface rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-surface transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} className={cn(isRefreshingBilling && "animate-spin text-primary")} />
+                    {isRefreshingBilling ? "Actualizando..." : "Actualizar Facturación"}
+                  </button>
                 </div>
               </div>
+
+              {/* Bonificaciones y Descuentos Otorgados por la Administración */}
+              {userBilling.hasDiscount ? (
+                <div className="bg-white border-2 border-emerald-500/20 rounded-2xl p-6 shadow-sm overflow-hidden relative">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-bl-full pointer-events-none" />
+                  
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-5 border-b border-outline-variant/60">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 shadow-xs">
+                        <Gift size={20} />
+                      </div>
+                      <div>
+                        <h4 className="text-base font-extrabold text-on-surface flex items-center gap-2">
+                          Bonificaciones y Descuentos Otorgados por la Administración
+                          <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                            Activo
+                          </span>
+                        </h4>
+                        <p className="text-xs text-on-surface-variant font-sans">
+                          Descuentos especiales aplicados directamente por el administrador sobre tu suscripción mensual.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="sm:text-right">
+                      <span className="text-[10px] uppercase font-black tracking-widest text-emerald-700 block">Ahorro Mensual</span>
+                      <span className="text-lg font-black text-emerald-700">-${userBilling.totalDiscount.toLocaleString()} / mes</span>
+                    </div>
+                  </div>
+
+                  {/* List of Bonificaciones */}
+                  <div className="mt-5 space-y-3 font-sans">
+                    {userBilling.bonificaciones.map((bono: any, idx: number) => {
+                      const isReferralWelcome = bono.source === 'referral_welcome';
+                      const isReferralReward = bono.source === 'referral_reward';
+                      const isManualBonus = bono.source === 'custom_bonus' || bono.beneficiaryType === 'manual';
+
+                      return (
+                        <div 
+                          key={bono.id || idx}
+                          className="bg-surface/50 border border-outline-variant/60 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:border-emerald-300 transition-colors"
+                        >
+                          <div className="flex items-start gap-3.5">
+                            <div className={cn(
+                              "w-9 h-9 rounded-lg flex items-center justify-center shrink-0 mt-0.5",
+                              isReferralWelcome ? "bg-blue-100 text-blue-700" :
+                              isReferralReward ? "bg-purple-100 text-purple-700" :
+                              "bg-emerald-100 text-emerald-700"
+                            )}>
+                              {isReferralWelcome ? <Sparkles size={18} /> :
+                               isReferralReward ? <Award size={18} /> :
+                               <Tag size={18} />}
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h5 className="text-sm font-bold text-on-surface">{bono.title}</h5>
+                                <span className={cn(
+                                  "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider",
+                                  isReferralWelcome ? "bg-blue-50 text-blue-700 border border-blue-200" :
+                                  isReferralReward ? "bg-purple-50 text-purple-700 border border-purple-200" :
+                                  "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                )}>
+                                  {isReferralWelcome ? "Colega Referido" :
+                                   isReferralReward ? "Recompensa por Recomendar" :
+                                   "Bonificación Administrativa"}
+                                </span>
+                              </div>
+                              <p className="text-xs text-on-surface-variant leading-relaxed">
+                                {bono.description}
+                              </p>
+                              <div className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 pt-0.5">
+                                <CheckCircle2 size={13} />
+                                <span>Aplicado directamente en tu abono mensual</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="sm:text-right shrink-0 bg-white/80 sm:bg-transparent p-2.5 sm:p-0 rounded-lg border sm:border-0 border-outline-variant/50">
+                            <div className="text-sm font-black text-emerald-700">
+                              -${(Number(bono.discountAmount) || 0).toLocaleString()}
+                            </div>
+                            <div className="text-[10px] font-bold text-on-surface-variant uppercase">
+                              {bono.discountValue}{bono.discountType === 'percent' ? '% de descuento' : ' fijos bonificados'}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Resumen Financiero del Abono */}
+                  <div className="mt-5 pt-5 border-t border-outline-variant/60 bg-emerald-50/40 -mx-6 -mb-6 p-6 font-sans">
+                    <h5 className="text-[11px] font-black uppercase tracking-widest text-on-surface-variant mb-3">
+                      Liquidación del Abono Mensual
+                    </h5>
+                    <div className="space-y-2 text-xs">
+                      <div className="flex justify-between items-center text-on-surface-variant">
+                        <span>Precio base de lista ({userBilling.planName || 'Plan'}):</span>
+                        <span className="font-semibold">${userBilling.basePrice.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-emerald-700 font-medium">
+                        <span className="flex items-center gap-1">
+                          <Gift size={12} /> Total de bonificaciones y descuentos aplicados:
+                        </span>
+                        <span className="font-bold">-${userBilling.totalDiscount.toLocaleString()}</span>
+                      </div>
+                      <div className="pt-2 border-t border-outline-variant flex justify-between items-center text-sm">
+                        <span className="font-extrabold text-on-surface">Total mensual a abonar:</span>
+                        <div className="text-right">
+                          <span className="font-black text-primary text-base">${userBilling.finalPrice.toLocaleString()}</span>
+                          <span className="text-[10px] text-on-surface-variant block uppercase font-bold">Vence el 15 de cada mes</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Banner informativo si no tiene descuento activo */
+                <div className="bg-white border border-outline-variant rounded-xl p-5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 font-sans">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                      <Gift size={20} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-on-surface">Programa de Bonificaciones y Referidos</h4>
+                      <p className="text-xs text-on-surface-variant mt-0.5 max-w-2xl">
+                        Recomendá TurneroWeb a otros profesionales médicos para obtener descuentos automáticos y bonificaciones acumulables en tu suscripción mensual. Las bonificaciones otorgadas por la administración se reflejan directamente aquí.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Vencimiento y Estado de Pago */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 font-sans">
@@ -980,7 +1294,11 @@ export function Administration() {
       <Modal
         isOpen={isUserModalOpen}
         onClose={() => setIsUserModalOpen(false)}
-        title={selectedUser ? "Editar Acceso" : "Nuevo Acceso"}
+        title={
+          isAdmin 
+            ? (selectedUser ? "Editar Acceso" : "Nuevo Acceso")
+            : (selectedUser ? "Editar Secretaria" : "Nueva Secretaria")
+        }
         className="max-w-md font-sans"
       >
         <div className="space-y-5">
@@ -991,7 +1309,7 @@ export function Administration() {
               value={userForm.name}
               onChange={(e) => setUserForm({ ...userForm, name: e.target.value })}
               className="w-full px-4 py-2.5 bg-white border border-outline-variant rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary/10 focus:border-primary transition-all"
-              placeholder="Ej. Marta Rodriguez"
+              placeholder={isAdmin ? "Ej. Marta Rodriguez" : "Ej. Secretaria María Gómez"}
             />
           </div>
           
@@ -1004,7 +1322,7 @@ export function Administration() {
                 value={userForm.email}
                 onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
                 className="w-full pl-10 pr-4 py-2.5 bg-white border border-outline-variant rounded-xl text-sm outline-none focus:ring-2 focus:ring-primary/10 focus:border-primary transition-all"
-                placeholder="email@ejemplo.com"
+                placeholder="secretaria@ejemplo.com"
               />
             </div>
           </div>
@@ -1028,15 +1346,27 @@ export function Administration() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-2">
               <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Rol</label>
-              <select 
-                value={userForm.role}
-                onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}
-                className="w-full px-4 py-2.5 bg-white border border-outline-variant rounded-xl text-sm outline-none focus:border-primary transition-all appearance-none"
-              >
-                <option value="secretary">Secretaría</option>
-                <option value="admin">Administrador</option>
-                <option value="medico">Médico / Profesional</option>
-              </select>
+              {isAdmin ? (
+                <select 
+                  value={userForm.role}
+                  onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}
+                  className="w-full px-4 py-2.5 bg-white border border-outline-variant rounded-xl text-sm outline-none focus:border-primary transition-all appearance-none"
+                >
+                  <option value="secretary">Secretaría</option>
+                  <option value="admin">Administrador</option>
+                  <option value="medico">Médico / Profesional</option>
+                </select>
+              ) : (
+                <div className="w-full px-4 py-2.5 bg-surface border border-outline-variant rounded-xl text-sm font-semibold text-on-surface flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-primary shrink-0"></span>
+                    Secretaría
+                  </span>
+                  <span className="text-[9px] uppercase font-black text-primary bg-primary/10 px-2 py-0.5 rounded-full tracking-wider">
+                    Exclusivo
+                  </span>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Estado</label>
@@ -1057,7 +1387,7 @@ export function Administration() {
               <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Permisos de Acceso</label>
             </div>
             <div className="grid grid-cols-1 gap-2 p-3 bg-surface-bright rounded-xl border border-outline-variant">
-              {AVAILABLE_MODULES.map((module) => (
+              {(isAdmin ? AVAILABLE_MODULES : AVAILABLE_MODULES.filter(m => m.id !== 'admin')).map((module) => (
                 <div 
                   key={module.id} 
                   onClick={() => handleToggleModule(module.id)}
@@ -1090,7 +1420,7 @@ export function Administration() {
               className="flex-1 py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-primary/90 transition-all flex items-center justify-center gap-2"
             >
               <Save size={14} />
-              {selectedUser ? "Actualizar" : "Crear Acceso"}
+              {selectedUser ? "Actualizar" : (isAdmin ? "Crear Acceso" : "Crear Secretaria")}
             </button>
           </div>
         </div>

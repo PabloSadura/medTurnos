@@ -45,8 +45,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useGoogleDrive } from '../contexts/GoogleDriveContext';
 
 export function Profile() {
-  const { isStaff, profile: authProfile } = useAuth();
-  const user = auth.currentUser;
+  const { isStaff, profile: authProfile, user: contextUser } = useAuth();
+  const user = auth.currentUser || contextUser;
   const { showToast } = useToast();
   const { 
     isConnected: isDriveConnected, 
