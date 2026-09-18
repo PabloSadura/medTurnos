@@ -32,9 +32,57 @@ export function calculateEndTime(startTime: string, durationMinutes: number): st
   return minutesToTime(startMin + safeDuration);
 }
 
+/**
+ * Calculates the effective duration in minutes for an appointment.
+ * 1. If treatment exists and has a positive duration, defaults to that duration.
+ * 2. If the user provides a positive manual duration, uses that.
+ * 3. Fallback: 30 minutes.
+ */
+export function getEffectiveDuration(
+  treatmentNameOrObj?: string | { duration?: number | string; name?: string } | null,
+  manualDuration?: number | string | null,
+  treatmentsList?: any[],
+  fallbackMinutes: number = 30
+): number {
+  const parsedManual = Number(manualDuration);
+  if (parsedManual > 0) {
+    return parsedManual;
+  }
+  if (treatmentNameOrObj) {
+    if (typeof treatmentNameOrObj === 'object' && Number(treatmentNameOrObj.duration) > 0) {
+      return Number(treatmentNameOrObj.duration);
+    }
+    if (typeof treatmentNameOrObj === 'string' && treatmentsList && treatmentsList.length > 0) {
+      const matched = treatmentsList.find(t => t.name === treatmentNameOrObj || t.id === treatmentNameOrObj);
+      if (matched && Number(matched.duration) > 0) {
+        return Number(matched.duration);
+      }
+    }
+  }
+  return fallbackMinutes > 0 ? fallbackMinutes : 30;
+}
+
+export interface DetailedConflict {
+  id: string;
+  patientName: string;
+  time: string;
+  endTime: string;
+  duration: number;
+  treatment: string;
+  status: string;
+  isOverturn?: boolean;
+}
+
 export interface ConflictResult {
   hasConflict: boolean;
+  isOverturn: boolean;
+  overturnReason: 'time_overlap' | 'outside_hours' | 'manual' | null;
   conflictingAppointment?: any;
+  overlappingAppointments: any[];
+  overlappingAppointmentIds: string[];
+  overlapCount: number;
+  detailedConflicts: DetailedConflict[];
+  conflictSummary: string;
   message?: string;
 }
 
@@ -43,63 +91,112 @@ export interface ConflictResult {
  * Two appointments overlap if:
  * [newStart, newEnd) overlaps with [existStart, existEnd)
  * => newStart < existEnd && existStart < newEnd
+ *
+ * Excluded from collision:
+ * - The appointment being edited (excludeAppointmentId)
+ * - Cancelled, annulled or absent appointments ('cancelado', 'cancelled', 'anulado', 'ausente')
  */
 export function checkScheduleCollision(
   date: string,
   time: string,
   durationMinutes: number,
   existingAppointments: any[],
-  excludeAppointmentId?: string
+  excludeAppointmentId?: string,
+  professionalId?: string
 ): ConflictResult {
-  if (!date || !time) return { hasConflict: false };
+  const emptyResult: ConflictResult = {
+    hasConflict: false,
+    isOverturn: false,
+    overturnReason: null,
+    conflictingAppointment: undefined,
+    overlappingAppointments: [],
+    overlappingAppointmentIds: [],
+    overlapCount: 0,
+    detailedConflicts: [],
+    conflictSummary: '',
+    message: ''
+  };
+
+  if (!date || !time) return emptyResult;
 
   const newStart = timeToMinutes(time);
   const safeDuration = Number(durationMinutes) > 0 ? Number(durationMinutes) : 30;
   const newEnd = newStart + safeDuration;
 
-  // Filter appointments for the same date, excluding cancelled/cancelados and the current appointment being edited
+  // Filter appointments for the same date and same professional, excluding cancelled/anulado/ausente and the current appointment
   const dayAppointments = (existingAppointments || []).filter((apt) => {
     if (!apt || !apt.date || !apt.time) return false;
     if (apt.date !== date) return false;
     if (excludeAppointmentId && (apt.id === excludeAppointmentId || apt.id === String(excludeAppointmentId))) {
       return false;
     }
-    const status = (apt.status || '').toLowerCase();
-    if (status === 'cancelado' || status === 'cancelled') {
+    if (professionalId) {
+      const aptOwner = apt.userId || apt.doctorId;
+      if (aptOwner && aptOwner !== professionalId) {
+        return false;
+      }
+    }
+    const status = (apt.status || '').toLowerCase().trim();
+    if (status === 'cancelado' || status === 'cancelled' || status === 'anulado' || status === 'ausente') {
       return false;
     }
     return true;
   });
+
+  const overlappingAppointments: any[] = [];
+  const detailedConflicts: DetailedConflict[] = [];
 
   for (const apt of dayAppointments) {
     const aptStart = timeToMinutes(apt.time);
     const aptDuration = Number(apt.duration) > 0 ? Number(apt.duration) : 30;
     const aptEnd = aptStart + aptDuration;
 
-    // Strict overlapping interval check
+    // Semi-open interval overlap check: newStart < aptEnd && aptStart < newEnd
     if (newStart < aptEnd && aptStart < newEnd) {
-      const aptEndFormatted = minutesToTime(aptEnd);
-      const treatmentName = apt.type || apt.treatment || 'Consulta';
-      const patientName = apt.patientName || 'Paciente';
-
-      let reason = '';
-      if (newStart === aptStart) {
-        reason = `Ya existe un turno agendado exactamente a las ${apt.time} hs`;
-      } else if (newStart > aptStart && newStart < aptEnd) {
-        reason = `El tratamiento anterior de ${patientName} (${treatmentName}) comenzó a las ${apt.time} hs y aún no terminó (finaliza a las ${aptEndFormatted} hs)`;
-      } else {
-        reason = `El tratamiento propuesto duraría hasta las ${minutesToTime(newEnd)} hs, superponiéndose con el turno de ${patientName} que inicia a las ${apt.time} hs`;
-      }
-
-      return {
-        hasConflict: true,
-        conflictingAppointment: apt,
-        message: `Horario Bloqueado: ${reason}. No se pueden dar 2 turnos en el mismo horario.`
-      };
+      overlappingAppointments.push(apt);
+      detailedConflicts.push({
+        id: apt.id,
+        patientName: apt.patientName || 'Paciente',
+        time: apt.time,
+        endTime: apt.endTime || minutesToTime(aptEnd),
+        duration: aptDuration,
+        treatment: apt.type || apt.treatment || 'Consulta',
+        status: apt.status || 'pendiente',
+        isOverturn: Boolean(apt.isOverturn)
+      });
     }
   }
 
-  return { hasConflict: false };
+  if (overlappingAppointments.length > 0) {
+    const overlapCount = overlappingAppointments.length;
+    const firstApt = overlappingAppointments[0];
+    const firstConflict = detailedConflicts[0];
+
+    let conflictSummary = '';
+    if (overlapCount === 1) {
+      conflictSummary = `Superposición detectada: ${firstConflict.time}–${firstConflict.endTime} hs · Paciente: ${firstConflict.patientName} · Tratamiento: ${firstConflict.treatment}`;
+    } else {
+      const detailsList = detailedConflicts.map(c => `${c.patientName} (${c.time}–${c.endTime} hs)`).join(', ');
+      conflictSummary = `Superposición detectada con ${overlapCount} turnos: ${detailsList}`;
+    }
+
+    const message = `Superposición de horarios detectada con ${overlapCount} turno(s) existente(s). Se guardará automáticamente como SOBRETURNO sin bloquear la agenda.`;
+
+    return {
+      hasConflict: true,
+      isOverturn: true,
+      overturnReason: 'time_overlap',
+      conflictingAppointment: firstApt,
+      overlappingAppointments,
+      overlappingAppointmentIds: overlappingAppointments.map(a => a.id).filter(Boolean),
+      overlapCount,
+      detailedConflicts,
+      conflictSummary,
+      message
+    };
+  }
+
+  return emptyResult;
 }
 
 export interface WorkingHoursCheck {
@@ -256,6 +353,8 @@ export interface SuggestedSlot {
   time: string;
   endTime: string;
   isOverturn: boolean;
+  isConflict: boolean;
+  conflictSummary?: string;
   label: string;
   shift: 'morning' | 'afternoon';
 }
@@ -335,13 +434,9 @@ export function getWorkingHoursDayInfo(
 }
 
 /**
- * Suggests available starting time slots for a given date and treatment duration.
- * Strictly respects working hours:
- * - Does NOT suggest any slots that would be a Sobre Turno.
- * - Does NOT suggest slots outside working days.
- * - Respects lunch break recess.
- * - Ensures the entire treatment duration fits within morning or afternoon shift.
- * - Ensures no collision with existing appointments.
+ * Suggests starting time slots for a given date and treatment duration.
+ * Provides both collision-free slots and slots with overturn/superposición
+ * so the practitioner can choose with full transparency and zero blocking.
  */
 export function getSuggestedAvailableSlots(
   date: string,
@@ -395,19 +490,19 @@ export function getSuggestedAvailableSlots(
     for (let m = mStartMin; m <= mEndMin - safeDuration; m += STEP_MINUTES) {
       const timeStr = minutesToTime(m);
       const collision = checkScheduleCollision(date, timeStr, safeDuration, appointments, excludeAppointmentId);
-      if (!collision.hasConflict) {
-        const outside = checkIsOutsideWorkingHours(date, timeStr, effectiveHours, safeDuration);
-        if (!outside.isOutside) {
-          const endTime = calculateEndTime(timeStr, safeDuration);
-          suggested.push({
-            time: timeStr,
-            endTime,
-            isOverturn: false,
-            label: `${timeStr} - ${endTime} hs`,
-            shift: 'morning'
-          });
-        }
-      }
+      const outside = checkIsOutsideWorkingHours(date, timeStr, effectiveHours, safeDuration);
+      const endTime = calculateEndTime(timeStr, safeDuration);
+      const isOverturn = collision.hasConflict || outside.isOutside;
+
+      suggested.push({
+        time: timeStr,
+        endTime,
+        isOverturn,
+        isConflict: collision.hasConflict,
+        conflictSummary: collision.conflictSummary,
+        label: `${timeStr} - ${endTime} hs`,
+        shift: 'morning'
+      });
     }
   }
 
@@ -416,21 +511,132 @@ export function getSuggestedAvailableSlots(
     for (let m = aStartMin; m <= aEndMin - safeDuration; m += STEP_MINUTES) {
       const timeStr = minutesToTime(m);
       const collision = checkScheduleCollision(date, timeStr, safeDuration, appointments, excludeAppointmentId);
-      if (!collision.hasConflict) {
-        const outside = checkIsOutsideWorkingHours(date, timeStr, effectiveHours, safeDuration);
-        if (!outside.isOutside) {
-          const endTime = calculateEndTime(timeStr, safeDuration);
-          suggested.push({
-            time: timeStr,
-            endTime,
-            isOverturn: false,
-            label: `${timeStr} - ${endTime} hs`,
-            shift: 'afternoon'
-          });
-        }
-      }
+      const outside = checkIsOutsideWorkingHours(date, timeStr, effectiveHours, safeDuration);
+      const endTime = calculateEndTime(timeStr, safeDuration);
+      const isOverturn = collision.hasConflict || outside.isOutside;
+
+      suggested.push({
+        time: timeStr,
+        endTime,
+        isOverturn,
+        isConflict: collision.hasConflict,
+        conflictSummary: collision.conflictSummary,
+        label: `${timeStr} - ${endTime} hs`,
+        shift: 'afternoon'
+      });
     }
   }
 
   return suggested;
+}
+
+export interface AppointmentLayoutInfo {
+  colIndex: number;
+  totalCols: number;
+  leftPercent: number;
+  widthPercent: number;
+}
+
+/**
+ * Computes parallel layout columns for appointments on the same day.
+ * If multiple appointments overlap in time (e.g. Sobreturnos), assigns side-by-side columns
+ * so that all cards remain clearly visible, legible, and interactive without covering each other.
+ */
+export function computeOverlappingLayout(
+  appointments: any[]
+): Record<string, AppointmentLayoutInfo> {
+  const layout: Record<string, AppointmentLayoutInfo> = {};
+  if (!appointments || appointments.length === 0) return layout;
+
+  // Filter valid appointments with date and time, excluding cancelled
+  const valid = appointments.filter((apt) => {
+    if (!apt || !apt.time) return false;
+    const status = (apt.status || '').toLowerCase().trim();
+    return status !== 'cancelado' && status !== 'cancelled' && status !== 'anulado';
+  });
+
+  if (valid.length === 0) return layout;
+
+  // Sort by start time in minutes, then by duration descending
+  const sorted = [...valid].sort((a, b) => {
+    const startA = timeToMinutes(a.time);
+    const startB = timeToMinutes(b.time);
+    if (startA !== startB) return startA - startB;
+    const durA = Number(a.duration) > 0 ? Number(a.duration) : 30;
+    const durB = Number(b.duration) > 0 ? Number(b.duration) : 30;
+    return durB - durA;
+  });
+
+  // Group into connected components (clusters of overlapping intervals)
+  const clusters: any[][] = [];
+  let currentCluster: any[] = [];
+  let clusterEnd = -1;
+
+  for (const apt of sorted) {
+    const start = timeToMinutes(apt.time);
+    const dur = Number(apt.duration) > 0 ? Number(apt.duration) : 30;
+    const end = start + dur;
+
+    if (currentCluster.length === 0) {
+      currentCluster.push(apt);
+      clusterEnd = end;
+    } else {
+      // If this appointment starts before the cluster ends, it overlaps and belongs to this cluster
+      if (start < clusterEnd) {
+        currentCluster.push(apt);
+        clusterEnd = Math.max(clusterEnd, end);
+      } else {
+        clusters.push(currentCluster);
+        currentCluster = [apt];
+        clusterEnd = end;
+      }
+    }
+  }
+  if (currentCluster.length > 0) {
+    clusters.push(currentCluster);
+  }
+
+  // For each cluster, greedily assign columns
+  for (const cluster of clusters) {
+    const colEndTimes: number[] = [];
+    const aptCols: { apt: any; col: number }[] = [];
+
+    for (const apt of cluster) {
+      const start = timeToMinutes(apt.time);
+      const dur = Number(apt.duration) > 0 ? Number(apt.duration) : 30;
+      const end = start + dur;
+
+      let placedCol = -1;
+      for (let c = 0; c < colEndTimes.length; c++) {
+        if (colEndTimes[c] <= start) {
+          placedCol = c;
+          colEndTimes[c] = end;
+          break;
+        }
+      }
+
+      if (placedCol === -1) {
+        placedCol = colEndTimes.length;
+        colEndTimes.push(end);
+      }
+
+      aptCols.push({ apt, col: placedCol });
+    }
+
+    const totalCols = Math.max(1, colEndTimes.length);
+    for (const item of aptCols) {
+      const colIndex = item.col;
+      const widthPercent = 100 / totalCols;
+      const leftPercent = colIndex * widthPercent;
+
+      layout[item.apt.id] = {
+        colIndex,
+        totalCols,
+        leftPercent,
+        widthPercent
+      };
+    }
+  }
+
+  return layout;
 }

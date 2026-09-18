@@ -17,6 +17,8 @@ import { doc, deleteDoc, serverTimestamp, collection, getDocs, setDoc, updateDoc
 import { seedAllCollections } from '../lib/dbSeeder';
 import { ReferralRecord } from '../types';
 import { syncAllUsersPlanValues, syncSingleUserPlan, calculateUserPlanBilling } from '../lib/planSyncService';
+import { apiFetch } from '../lib/apiClient';
+import { validatePassword } from '../lib/security';
 
 export function SystemAdmin() {
   const { showToast } = useToast();
@@ -64,7 +66,13 @@ export function SystemAdmin() {
     referredDiscountValue: 20,
     referrerDiscountType: 'percent' as 'percent' | 'fixed',
     referrerDiscountValue: 15,
-    referralNotes: ''
+    referralNotes: '',
+    // Bonificación especial administrativa
+    hasCustomBonus: false,
+    customBonusTitle: 'Bonificación Especial Otorgada por el Administrador',
+    customBonusType: 'percent' as 'percent' | 'fixed',
+    customBonusValue: 0,
+    customBonusReason: ''
   });
 
   const openUserModal = (prof: any = null, forceReferral: boolean = false) => {
@@ -84,7 +92,12 @@ export function SystemAdmin() {
         referredDiscountValue: prof.referralInfo?.discountValue !== undefined ? prof.referralInfo.discountValue : 20,
         referrerDiscountType: prof.referralInfo?.referrerDiscountType || 'percent',
         referrerDiscountValue: prof.referralInfo?.referrerDiscountValue !== undefined ? prof.referralInfo.referrerDiscountValue : 15,
-        referralNotes: prof.referralInfo?.notes || ''
+        referralNotes: prof.referralInfo?.notes || '',
+        hasCustomBonus: Boolean(prof.customBonus?.active && Number(prof.customBonus?.discountValue) > 0),
+        customBonusTitle: prof.customBonus?.title || 'Bonificación Especial Otorgada por el Administrador',
+        customBonusType: prof.customBonus?.discountType || 'percent',
+        customBonusValue: prof.customBonus?.discountValue !== undefined ? Number(prof.customBonus.discountValue) : 0,
+        customBonusReason: prof.customBonus?.reason || prof.customBonus?.description || ''
       });
     } else {
       setForm({
@@ -101,7 +114,12 @@ export function SystemAdmin() {
         referredDiscountValue: 20,
         referrerDiscountType: 'percent',
         referrerDiscountValue: 15,
-        referralNotes: ''
+        referralNotes: '',
+        hasCustomBonus: false,
+        customBonusTitle: 'Bonificación Especial Otorgada por el Administrador',
+        customBonusType: 'percent',
+        customBonusValue: 0,
+        customBonusReason: ''
       });
     }
     setIsModalOpen(true);
@@ -281,6 +299,14 @@ export function SystemAdmin() {
       return;
     }
 
+    if (form.password) {
+      const pwdRes = validatePassword(form.password);
+      if (!pwdRes.isValid) {
+        showToast(pwdRes.feedback[0] || 'La contraseña debe tener al menos 12 caracteres, mayúsculas, minúsculas, números y símbolos.', 'error');
+        return;
+      }
+    }
+
     if (form.isReferred && !form.referrerId) {
       showToast('Debe seleccionar el profesional que realizó la referencia', 'error');
       return;
@@ -291,10 +317,9 @@ export function SystemAdmin() {
       const isBlocked = form.status === 'Bloqueado' || form.status === 'Inactivo';
       const referrer = form.referrerId ? professionals.find(p => p.id === form.referrerId) : null;
 
-      // Use the exact same /api/staff/manage service endpoint
-      const res = await fetch('/api/staff/manage', {
+      // Use protected API endpoint with verified ID token
+      const { ok, status, data } = await apiFetch('/api/staff/manage', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: form.email,
           password: form.password,
@@ -302,17 +327,15 @@ export function SystemAdmin() {
           role: form.role,
           permissions: form.role === 'medico' ? ['all'] : [],
           status: form.status,
-          userId: targetId, // Use target ID as userId (required field for staff/manage)
+          userId: targetId,
           staffId: selectedProf?.id
         })
       });
 
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Error al guardar profesional');
+      if (!ok) {
+        throw new Error(data?.error || 'Error al guardar profesional');
       }
 
-      const data = await res.json();
       const authUid = data.uid;
 
       if (data.warning) {
@@ -323,7 +346,7 @@ export function SystemAdmin() {
       const newDiscountValue = Number(form.referredDiscountValue) || 0;
       const referrerDiscountValue = Number(form.referrerDiscountValue) || 0;
 
-      // Sync user data to users collection client-side
+      // Sync user data to users collection
       const userPayload: any = {
         name: form.name,
         email: form.email,
@@ -358,6 +381,21 @@ export function SystemAdmin() {
       } else if (!form.isReferred && selectedProf?.referralInfo) {
         userPayload.referralInfo = null;
         userPayload.referralDiscount = null;
+      }
+
+      // Administrative Custom Bonus / Descuento Especial
+      if (form.hasCustomBonus && Number(form.customBonusValue) > 0) {
+        userPayload.customBonus = {
+          active: true,
+          title: form.customBonusTitle || 'Bonificación Especial Otorgada por el Administrador',
+          discountType: form.customBonusType,
+          discountValue: Number(form.customBonusValue),
+          reason: form.customBonusReason || `Bonificación del ${form.customBonusValue}${form.customBonusType === 'percent' ? '%' : '$'} otorgada por la administración`,
+          description: form.customBonusReason || `Bonificación del ${form.customBonusValue}${form.customBonusType === 'percent' ? '%' : '$'} otorgada por la administración`,
+          grantedAt: new Date().toISOString()
+        };
+      } else if (!form.hasCustomBonus) {
+        userPayload.customBonus = null;
       }
 
       await setDoc(doc(db, 'users', authUid), userPayload, { merge: true });
@@ -409,13 +447,25 @@ export function SystemAdmin() {
         });
       }
 
+      // Synchronize plan billing values and bonificaciones immediately
+      try {
+        await syncSingleUserPlan(db, authUid, form.activePlanId);
+        if (isNewReferralAction && form.referrerId) {
+          await syncSingleUserPlan(db, form.referrerId);
+        }
+      } catch (syncErr) {
+        console.warn("[SystemAdmin] Note during syncSingleUserPlan:", syncErr);
+      }
+
       if (isReferred && referrer) {
         showToast(
           selectedProf
-            ? 'Usuario actualizado. Programa de referidos registrado.'
+            ? 'Usuario actualizado. Bonificaciones y descuentos sincronizados.'
             : `¡Usuario creado! Descuento otorgado al nuevo usuario (${newDiscountValue}${form.referredDiscountType === 'percent' ? '%' : '$'}) y al Dr./Dra. ${referrer.name || referrer.email} (${referrerDiscountValue}${form.referrerDiscountType === 'percent' ? '%' : '$'}).`,
           'success'
         );
+      } else if (form.hasCustomBonus && Number(form.customBonusValue) > 0) {
+        showToast(`Usuario guardado. Bonificación especial del ${form.customBonusValue}${form.customBonusType === 'percent' ? '%' : '$'} aplicada y reflejada en la administración del profesional.`, 'success');
       } else {
         showToast(selectedProf ? 'Usuario actualizado exitosamente' : 'Nuevo usuario creado exitosamente');
       }
@@ -938,6 +988,13 @@ export function SystemAdmin() {
                           </span>
                         )}
 
+                        {p.customBonus?.active && Number(p.customBonus?.discountValue) > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full">
+                            <Tag size={10} />
+                            Bonif: -{p.customBonus.discountValue}{p.customBonus.discountType === 'percent' ? '%' : '$'}
+                          </span>
+                        )}
+
                         {(p.referralsCount && p.referralsCount > 0) ? (
                           <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded-full">
                             <Award size={10} />
@@ -1044,6 +1101,12 @@ export function SystemAdmin() {
                                     <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded">
                                       <Gift size={9} />
                                       Ref: -{p.referralInfo.discountValue}{p.referralInfo.discountType === 'percent' ? '%' : '$'} ({p.referralInfo.referrerName || 'Colega'})
+                                    </span>
+                                  )}
+                                  {p.customBonus?.active && Number(p.customBonus?.discountValue) > 0 && (
+                                    <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded">
+                                      <Tag size={9} />
+                                      Bonif. Admin: -{p.customBonus.discountValue}{p.customBonus.discountType === 'percent' ? '%' : '$'}
                                     </span>
                                   )}
                                   {(p.referralsCount && p.referralsCount > 0) ? (
@@ -1823,6 +1886,94 @@ export function SystemAdmin() {
                       onChange={(e) => setForm({ ...form, referralNotes: e.target.value })}
                       className="w-full px-3 py-1.5 bg-white border border-emerald-200 rounded-lg text-xs outline-none"
                     />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Direct Administrative Bonus (Bonificación Otorgada por el Administrador) */}
+            <div className="p-3.5 rounded-xl border border-blue-200 bg-blue-50/50 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Gift size={16} className="text-blue-600" />
+                  <span className="text-xs font-bold text-blue-900">
+                    Bonificación Especial Otorgada por el Administrador
+                  </span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.hasCustomBonus}
+                    onChange={(e) => setForm({ ...form, hasCustomBonus: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+
+              {form.hasCustomBonus && (
+                <div className="space-y-3 pt-2 border-t border-blue-200">
+                  <p className="text-[11px] text-blue-950 leading-relaxed">
+                    Esta bonificación se refleja directamente en la pestaña de <strong>Administración y Facturación</strong> del profesional, reduciendo el monto de su abono mensual en tiempo real.
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-blue-900 uppercase tracking-wider">
+                        Título de la Bonificación
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Bonificación Especial Convenio"
+                        value={form.customBonusTitle}
+                        onChange={(e) => setForm({ ...form, customBonusTitle: e.target.value })}
+                        className="w-full px-3 py-1.5 bg-white border border-blue-200 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-blue-900 uppercase tracking-wider">
+                        Valor del Descuento
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          value={form.customBonusValue}
+                          onChange={(e) => setForm({ ...form, customBonusValue: parseFloat(e.target.value) || 0 })}
+                          className="w-24 px-2 py-1.5 bg-white border border-blue-200 rounded-lg text-xs text-center font-bold outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                        <select
+                          value={form.customBonusType}
+                          onChange={(e) => setForm({ ...form, customBonusType: e.target.value as 'percent' | 'fixed' })}
+                          className="flex-1 px-2 py-1.5 bg-white border border-blue-200 rounded-lg text-xs font-bold outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                          <option value="percent">% Porcentaje</option>
+                          <option value="fixed">$ Monto Fijo</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-blue-900 uppercase tracking-wider">
+                      Motivo o Justificación Administrativa
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ej: Autorizado por gerencia / acuerdo institucional"
+                      value={form.customBonusReason}
+                      onChange={(e) => setForm({ ...form, customBonusReason: e.target.value })}
+                      className="w-full px-3 py-1.5 bg-white border border-blue-200 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  {/* Summary badge */}
+                  <div className="p-2 bg-blue-100/60 rounded-lg flex items-center justify-between text-[11px] text-blue-900">
+                    <span>Descuento a aplicar al plan:</span>
+                    <span className="font-extrabold text-blue-800">
+                      -{form.customBonusValue}{form.customBonusType === 'percent' ? '%' : ' USD'}
+                    </span>
                   </div>
                 </div>
               )}

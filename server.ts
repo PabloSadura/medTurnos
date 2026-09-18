@@ -5,6 +5,8 @@ import { getFirestore as getAdminFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 import axios from "axios";
 import dotenv from "dotenv";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 
 dotenv.config();
 
@@ -41,7 +43,7 @@ function getFirebaseAdmin() {
           adminDbInstance = getAdminFirestore(admin.app(), dbId);
           console.log(`[Firebase Admin] Successfully connected to database: ${dbId}`);
         } catch (dbErr) {
-          console.warn(`[Firebase Admin] getAdminFirestore(${dbId}) failed, falling back to default:`, dbErr);
+          console.warn(`[Firebase Admin] getAdminFirestore(${dbId}) fallback to default:`, dbErr);
           adminDbInstance = admin.firestore();
         }
       }
@@ -63,19 +65,187 @@ process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception thrown:", err);
 });
 
+// Password validation according to clinical policy
+function validateServerPassword(password: string): string | null {
+  if (!password || password.trim().length < 12) {
+    return "La contraseña debe tener al menos 12 caracteres.";
+  }
+  if (!/[A-Z]/.test(password)) {
+    return "La contraseña debe incluir al menos una letra mayúscula.";
+  }
+  if (!/[a-z]/.test(password)) {
+    return "La contraseña debe incluir al menos una letra minúscula.";
+  }
+  if (!/[0-9]/.test(password)) {
+    return "La contraseña debe incluir al menos un número.";
+  }
+  if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password)) {
+    return "La contraseña debe incluir al menos un carácter especial (!@#$%^&*...).";
+  }
+  return null;
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  // Defensive HTTP Headers via Helmet
+  app.disable("x-powered-by");
 
-  // API Routes
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok" });
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: [
+            "'self'",
+            "'unsafe-inline'",
+            "'unsafe-eval'",
+            "https://apis.google.com",
+            "https://accounts.google.com",
+            "https://*.googleapis.com"
+          ],
+          styleSrc: [
+            "'self'",
+            "'unsafe-inline'",
+            "https://fonts.googleapis.com"
+          ],
+          fontSrc: [
+            "'self'",
+            "https://fonts.gstatic.com",
+            "data:"
+          ],
+          imgSrc: [
+            "'self'",
+            "data:",
+            "blob:",
+            "https://*.googleusercontent.com",
+            "https://*.gstatic.com",
+            "https://*.googleapis.com"
+          ],
+          connectSrc: [
+            "'self'",
+            "https://*.googleapis.com",
+            "https://identitytoolkit.googleapis.com",
+            "https://securetoken.googleapis.com",
+            "https://firestore.googleapis.com",
+            "https://*.firebaseio.com",
+            "wss://*.firebaseio.com",
+            "https://accounts.google.com",
+            "https://apis.google.com",
+            "https://*.run.app"
+          ],
+          frameSrc: [
+            "'self'",
+            "https://accounts.google.com",
+            "https://*.firebaseapp.com"
+          ],
+          frameAncestors: [
+            "'self'",
+            "https://*.google.com",
+            "https://*.run.app",
+            "https://ai.studio"
+          ]
+        }
+      },
+      crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+      xContentTypeOptions: true
+    })
+  );
+
+  // Parse JSON payloads with strict size limit
+  app.use(express.json({ limit: "500kb" }));
+
+  // Cache-Control headers for all API responses to prevent storing clinical/session data
+  app.use("/api", (req, res, next) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    next();
   });
 
-  // Database Initialization Endpoint based on firebase-blueprint.json
-  app.post("/api/database/init", async (req, res) => {
+  // Rate Limiting
+  const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Demasiadas peticiones. Por favor intente nuevamente en unos minutos." }
+  });
+
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 40,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Límite de solicitudes de autenticación alcanzado. Espere 15 minutos." }
+  });
+
+  app.use("/api/", generalLimiter);
+  app.use("/api/staff/manage", authLimiter);
+  app.use("/api/admin/", authLimiter);
+
+  // ------------------------------------------------------------
+  // Authentication & Authorization Middleware
+  // ------------------------------------------------------------
+  async function authenticateToken(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Acceso no autorizado: Token de sesión ausente." });
+    }
+    const idToken = authHeader.substring(7).trim();
+    if (!idToken) {
+      return res.status(401).json({ error: "Acceso no autorizado: Token inválido." });
+    }
+
+    try {
+      const { auth } = getFirebaseAdmin();
+      if (!auth) {
+        return res.status(503).json({ error: "Servicio de autenticación no inicializado en el servidor." });
+      }
+      const decoded = await auth.verifyIdToken(idToken);
+      (req as any).user = decoded;
+      next();
+    } catch (err: any) {
+      return res.status(401).json({ error: "Sesión expirada o token no válido. Inicie sesión nuevamente." });
+    }
+  }
+
+  async function requireAdminRole(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const user = (req as any).user;
+    if (!user || !user.uid) {
+      return res.status(401).json({ error: "Usuario no autenticado." });
+    }
+
+    try {
+      const { adminDb } = getFirebaseAdmin();
+      if (!adminDb) {
+        return res.status(503).json({ error: "Base de datos no disponible." });
+      }
+      const userDoc = await adminDb.collection("users").doc(user.uid).get();
+      if (!userDoc.exists || userDoc.data()?.role !== "admin") {
+        return res.status(403).json({ error: "Acceso denegado: Se requieren privilegios de Administrador del Sistema." });
+      }
+      (req as any).userProfile = userDoc.data();
+      next();
+    } catch (err: any) {
+      return res.status(500).json({ error: "Error al verificar autorización de administrador." });
+    }
+  }
+
+  // ------------------------------------------------------------
+  // Public Health Endpoint
+  // ------------------------------------------------------------
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // ------------------------------------------------------------
+  // Protected Database Initialization (Admin Only)
+  // ------------------------------------------------------------
+  app.post("/api/database/init", authenticateToken, requireAdminRole, async (req, res) => {
     try {
       const { adminDb } = getFirebaseAdmin();
       if (!adminDb) {
@@ -85,9 +255,9 @@ async function startServer() {
 
       // 1. Initialize Plans collection
       const defaultPlans = [
-        { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, price: 19 },
-        { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, price: 39 },
-        { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, price: 79 }
+        { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, price: 30000 },
+        { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, price: 40000 },
+        { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, price: 50000 }
       ];
 
       for (const p of defaultPlans) {
@@ -101,23 +271,7 @@ async function startServer() {
       }
       results.plans = defaultPlans.map(p => p.id);
 
-      // 2. Ensure admin user in 'users' collection
-      const adminUsersSnap = await adminDb.collection("users").where("email", "==", "admin@mail.com").get();
-      if (adminUsersSnap.empty) {
-        await adminDb.collection("users").doc("admin_root").set({
-          email: "admin@mail.com",
-          name: "Administrador del Sistema",
-          role: "admin",
-          status: "Activo",
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-        results.adminUser = "created (admin_root)";
-      } else {
-        results.adminUser = "exists";
-      }
-
-      // 3. Ensure system metadata / initial documents for blueprint collections
+      // 2. Ensure initial collection documents
       const collectionsToCheck = [
         "appointments",
         "patients",
@@ -148,93 +302,93 @@ async function startServer() {
 
       res.json({
         success: true,
-        message: "Base de datos y colecciones inicializadas de acuerdo a firebase-blueprint.json",
+        message: "Base de datos inicializada de forma segura",
         results
       });
     } catch (error: any) {
-      console.error("Database initialization error:", error);
       res.status(500).json({ error: error.message });
     }
   });
 
-  // User Management API
-  app.post("/api/staff/manage", async (req, res) => {
+  // ------------------------------------------------------------
+  // User & Staff Management API (Authenticated & Role-Enforced)
+  // ------------------------------------------------------------
+  app.post("/api/staff/manage", authenticateToken, async (req, res) => {
+    const callerUid = (req as any).user.uid;
     const { email, password, name, role, permissions, status, userId, staffId } = req.body;
 
-    if (!email || !name || !userId) {
-      return res.status(400).json({ error: "Missing required fields" });
+    if (!email || !name) {
+      return res.status(400).json({ error: "Faltan campos obligatorios (nombre y email)" });
     }
 
     try {
       const { adminDb, auth } = getFirebaseAdmin();
 
-      // Enforce role restriction: non-admins can only assign 'secretary'
-      let assignedRole = (role || 'secretary').toLowerCase();
-      const isMasterAdmin = userId === 'admin_master' || userId === 'tFHvaQo649hwrlQfisr2x8qlv8v2';
-      let isAdminUser = isMasterAdmin;
-      if (!isAdminUser && adminDb) {
+      // Check caller role in Firestore
+      let isCallerAdmin = false;
+      if (adminDb) {
         try {
-          const callerDoc = await adminDb.collection("users").doc(userId).get();
-          if (callerDoc.exists && callerDoc.data()?.role === 'admin') {
-            isAdminUser = true;
-          }
+          const callerDoc = await adminDb.collection("users").doc(callerUid).get();
+          isCallerAdmin = callerDoc.exists && callerDoc.data()?.role === "admin";
         } catch {
-          isAdminUser = false;
+          isCallerAdmin = false;
         }
       }
-      if (!isAdminUser && assignedRole !== 'secretary') {
-        assignedRole = 'secretary';
+
+      // Non-admins can ONLY manage staff under their own practitioner account and role must be 'secretary'
+      if (!isCallerAdmin) {
+        if (userId && userId !== callerUid) {
+          return res.status(403).json({ error: "No tiene permisos para gestionar personal de otro profesional." });
+        }
+      }
+
+      const assignedRole = isCallerAdmin ? (role || "secretary").toLowerCase() : "secretary";
+      const targetUserId = isCallerAdmin ? (userId || callerUid) : callerUid;
+
+      // Validate password policy if password is provided
+      if (password && password.trim().length > 0) {
+        const pwdError = validateServerPassword(password);
+        if (pwdError) {
+          return res.status(400).json({ error: pwdError });
+        }
       }
 
       let authUser;
       let createdInAuth = false;
       let authErrorEncountered = false;
-      let authErrorMessage = "";
-      
+
       try {
         if (!auth) {
-          throw new Error("Identity Toolkit API / Auth SDK not available");
+          throw new Error("Servicio de autenticación no disponible.");
         }
-        // Try to use Admin SDK first
         authUser = await auth.getUserByEmail(email);
-        
-        // Update password if provided
+
         if (password && password.trim().length > 0) {
           await auth.updateUser(authUser.uid, { password });
         }
-        
-        // Update display name
         await auth.updateUser(authUser.uid, { displayName: name });
       } catch (error: any) {
-        const isIdentityToolkitError = error.message?.includes("identitytoolkit.googleapis.com") || 
-                                       error.message?.includes("Identity Toolkit API") || 
-                                       error.code === "auth/insufficient-permission" ||
-                                       error.message?.includes("PERMISSION_DENIED");
+        const isIdentityToolkitError =
+          error.message?.includes("identitytoolkit.googleapis.com") ||
+          error.message?.includes("Identity Toolkit API") ||
+          error.code === "auth/insufficient-permission" ||
+          error.message?.includes("PERMISSION_DENIED");
 
         if (isIdentityToolkitError) {
-          console.log("[Auth] Identity Toolkit API not enabled in GCP project; managing staff in Firestore directly.");
           authErrorEncountered = true;
-          authErrorMessage = "Identity Toolkit API not active";
-
           let fallbackUid = staffId;
           if (!fallbackUid) {
-            try {
-              const existingSnap = await adminDb.collection("users").where("email", "==", email).get();
-              if (!existingSnap.empty) {
-                fallbackUid = existingSnap.docs[0].id;
-              } else {
-                fallbackUid = adminDb.collection("users").doc().id;
-              }
-            } catch (fsErr) {
-              console.warn("Firestore fallback lookup failed, generating local unique ID instead:", fsErr);
-              fallbackUid = `u_${Math.random().toString(36).substring(2, 12)}_${Date.now().toString(36)}`;
+            const existingSnap = await adminDb.collection("users").where("email", "==", email).get();
+            if (!existingSnap.empty) {
+              fallbackUid = existingSnap.docs[0].id;
+            } else {
+              fallbackUid = adminDb.collection("users").doc().id;
             }
           }
           authUser = { uid: fallbackUid, email };
-        } else if (error.code === 'auth/user-not-found') {
-          // Create new user using REST API as fallback
+        } else if (error.code === "auth/user-not-found") {
           if (!password || password.trim().length === 0) {
-            throw new Error("La contraseña es obligatoria para nuevos usuarios");
+            return res.status(400).json({ error: "La contraseña es obligatoria para nuevos usuarios." });
           }
           try {
             const signupResponse = await axios.post(
@@ -249,154 +403,93 @@ async function startServer() {
             authUser = { uid: signupResponse.data.localId, email };
             createdInAuth = true;
           } catch (restError: any) {
-            console.log("[Auth] REST Auth check for staff:", restError.response?.data?.error?.message || restError.message);
-            const isRestIdentityToolkitError = restError.response?.data?.error?.message?.includes("Identity Toolkit API") || 
-                                              restError.message?.includes("Identity Toolkit API") ||
-                                              restError.response?.data?.error?.message?.includes("developer") ||
-                                              restError.message?.includes("developer");
+            const isRestIdentityToolkitError =
+              restError.response?.data?.error?.message?.includes("Identity Toolkit API") ||
+              restError.message?.includes("Identity Toolkit API");
             if (isRestIdentityToolkitError) {
               authErrorEncountered = true;
-              authErrorMessage = restError.response?.data?.error?.message || restError.message;
-              
-              let fallbackUid = staffId;
-              if (!fallbackUid) {
-                try {
-                  const existingSnap = await adminDb.collection("users").where("email", "==", email).get();
-                  if (!existingSnap.empty) {
-                    fallbackUid = existingSnap.docs[0].id;
-                  } else {
-                    fallbackUid = adminDb.collection("users").doc().id;
-                  }
-                } catch (fsErr) {
-                  console.warn("Firestore fallback lookup failed, generating local unique ID instead:", fsErr);
-                  fallbackUid = `u_${Math.random().toString(36).substring(2, 12)}_${Date.now().toString(36)}`;
-                }
-              }
+              let fallbackUid = staffId || adminDb.collection("users").doc().id;
               authUser = { uid: fallbackUid, email };
             } else {
-              throw new Error(`Auth Error: ${restError.response?.data?.error?.message || restError.message}`);
+              return res.status(400).json({ error: `Error de autenticación: ${restError.response?.data?.error?.message || restError.message}` });
             }
           }
         } else {
-          // If SDK failed for other reasons (like restricted environment), try to find by email in Firestore or proceed with cautious dummy UID
-          console.warn("Admin SDK check failed, falling back to basic checks", error.message);
-          
-          if (password && password.trim().length > 0) {
-            // If we have a password, we can try to "sign up" which will fail with EMAIL_EXISTS if they are already there
-            try {
-              const signupResponse = await axios.post(
-                `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`,
-                {
-                  email,
-                  password,
-                  displayName: name,
-                  returnSecureToken: true
-                }
-              );
-              authUser = { uid: signupResponse.data.localId, email };
-              createdInAuth = true;
-            } catch (restError: any) {
-               if (restError.response?.data?.error?.message === 'EMAIL_EXISTS') {
-                  // If email exists, we can't get the UID without Admin SDK, but we know they exist.
-                  // For now, we'll return a special flag or dummy UID if we are editing
-                  authUser = { uid: staffId || `pending_${Date.now()}`, email };
-               } else {
-                  const isRestIdentityToolkitError = restError.response?.data?.error?.message?.includes("Identity Toolkit API") || 
-                                                    restError.message?.includes("Identity Toolkit API");
-                  if (isRestIdentityToolkitError) {
-                    authErrorEncountered = true;
-                    authErrorMessage = restError.response?.data?.error?.message || restError.message;
-                    
-                    let fallbackUid = staffId;
-                    if (!fallbackUid) {
-                      try {
-                        const existingSnap = await adminDb.collection("users").where("email", "==", email).get();
-                        if (!existingSnap.empty) {
-                          fallbackUid = existingSnap.docs[0].id;
-                        } else {
-                          fallbackUid = adminDb.collection("users").doc().id;
-                        }
-                      } catch (fsErr) {
-                        console.warn("Firestore fallback lookup failed, generating local unique ID instead:", fsErr);
-                        fallbackUid = `u_${Math.random().toString(36).substring(2, 12)}_${Date.now().toString(36)}`;
-                      }
-                    }
-                    authUser = { uid: fallbackUid, email };
-                  } else {
-                    throw new Error(`Auth Error: ${restError.response?.data?.error?.message || restError.message}`);
-                  }
-               }
-            }
-          } else if (staffId) {
-            // If we are editing (have staffId) but no password, we just assume auth is OK
-            authUser = { uid: staffId, email };
-          } else {
-            throw new Error("Se requiere contraseña para configurar el acceso por primera vez");
-          }
+          return res.status(500).json({ error: "Error al procesar la cuenta de usuario." });
         }
       }
 
-      // Return the UID so the frontend can sync with Firestore using the user's own credentials
-      res.json({ 
-        success: true, 
-        uid: authUser?.uid, 
+      res.json({
+        success: true,
+        uid: authUser?.uid,
         role: assignedRole,
-        warning: authErrorEncountered ? "Nota: Se guardó en Firestore pero Identity Toolkit API está inactiva en tu consola Google Cloud; por favor actívala." : undefined,
-        message: createdInAuth ? "Creado exitosamente" : "Actualizado (si los permisos lo permiten)" 
+        targetUserId,
+        warning: authErrorEncountered ? "Nota: Identity Toolkit API no está activa en su consola Google Cloud." : undefined,
+        message: createdInAuth ? "Usuario creado exitosamente" : "Usuario actualizado exitosamente"
       });
     } catch (error: any) {
-      console.error("User Management Error:", error);
       res.status(500).json({ error: error.message });
     }
   });
 
-  // Get Patients
-  app.get("/api/patients", async (req, res) => {
+  // ------------------------------------------------------------
+  // Clinical / Data APIs (Scoped to Authenticated User)
+  // ------------------------------------------------------------
+  app.get("/api/patients", authenticateToken, async (req, res) => {
     try {
       const { adminDb } = getFirebaseAdmin();
       if (!adminDb) {
-        return res.status(503).json({ error: "Database not available" });
+        return res.status(503).json({ error: "Base de datos no disponible" });
       }
-      console.log("Fetching patients from Firestore (Admin)...");
-      const snapshot = await adminDb.collection("patients").orderBy("name", "asc").get();
+      const callerUid = (req as any).user.uid;
+      const callerDoc = await adminDb.collection("users").doc(callerUid).get();
+      const isAdmin = callerDoc.exists && callerDoc.data()?.role === "admin";
+
+      let query = adminDb.collection("patients");
+      if (!isAdmin) {
+        // Scoped to practitioner
+        query = query.where("userId", "==", callerUid);
+      }
+      const snapshot = await query.orderBy("name", "asc").get();
       const patients = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-      console.log(`Successfully fetched ${patients.length} patients.`);
       res.json(patients);
     } catch (error: any) {
-      console.error("Error fetching patients:", error);
       res.status(500).json({ error: error.message });
     }
   });
 
-  // Get Stocks
-  app.get("/api/stocks", async (req, res) => {
+  app.get("/api/stocks", authenticateToken, async (req, res) => {
     try {
       const { adminDb } = getFirebaseAdmin();
       if (!adminDb) {
-        return res.status(503).json({ error: "Database not available" });
+        return res.status(503).json({ error: "Base de datos no disponible" });
       }
-      console.log("Fetching stocks from Firestore (Admin)...");
-      const snapshot = await adminDb.collection("stocks").orderBy("name", "asc").get();
+      const callerUid = (req as any).user.uid;
+      const callerDoc = await adminDb.collection("users").doc(callerUid).get();
+      const isAdmin = callerDoc.exists && callerDoc.data()?.role === "admin";
+
+      let query = adminDb.collection("stocks");
+      if (!isAdmin) {
+        query = query.where("userId", "==", callerUid);
+      }
+      const snapshot = await query.orderBy("name", "asc").get();
       const stocks = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-      console.log(`Successfully fetched ${stocks.length} items.`);
       res.json(stocks);
     } catch (error: any) {
-      console.error("Error fetching stocks:", error);
       res.status(500).json({ error: error.message });
     }
   });
 
-  // --- System Admin Endpoints ---
-
-  // Get all users (for system admin except admins)
-  app.get("/api/admin/professionals", async (req, res) => {
+  // ------------------------------------------------------------
+  // System Admin Endpoints (Strictly Admin-Only)
+  // ------------------------------------------------------------
+  app.get("/api/admin/professionals", authenticateToken, requireAdminRole, async (req, res) => {
     try {
       const { adminDb } = getFirebaseAdmin();
       if (!adminDb) {
-        return res.status(503).json({ error: "Database not available" });
+        return res.status(503).json({ error: "Base de datos no disponible" });
       }
       const snapshot = await adminDb.collection("users").get();
-      
       const professionals = snapshot.docs
         .map((doc: any) => ({ id: doc.id, ...doc.data() as any }))
         .filter((user: any) => user.role !== "admin");
@@ -406,65 +499,52 @@ async function startServer() {
     }
   });
 
-  // Manage professional (create/update)
-  app.post("/api/admin/professionals/manage", async (req, res) => {
+  app.post("/api/admin/professionals/manage", authenticateToken, requireAdminRole, async (req, res) => {
     const { id, name, email, password, role, status } = req.body;
 
     if (!email || !name) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return res.status(400).json({ error: "Nombre y email son requeridos." });
     }
-    
+
+    if (password && password.trim().length > 0) {
+      const pwdError = validateServerPassword(password);
+      if (pwdError) {
+        return res.status(400).json({ error: pwdError });
+      }
+    }
+
     try {
       const { adminDb, auth } = getFirebaseAdmin();
       let authUser;
       let createdInAuth = false;
       let authErrorEncountered = false;
-      let authErrorMessage = "";
-      
+
       try {
-        if (!auth) {
-          throw new Error("Identity Toolkit API / Auth SDK not available");
-        }
-        // Try to use Admin SDK first
+        if (!auth) throw new Error("Auth service unavailable");
         authUser = await auth.getUserByEmail(email);
-        
-        // Update password if provided
+
         if (password && password.trim().length > 0) {
           await auth.updateUser(authUser.uid, { password });
         }
-        
-        // Update display name
         await auth.updateUser(authUser.uid, { displayName: name });
       } catch (error: any) {
-        const isIdentityToolkitError = error.message?.includes("identitytoolkit.googleapis.com") || 
-                                       error.message?.includes("Identity Toolkit API") || 
-                                       error.code === "auth/insufficient-permission" ||
-                                       error.message?.includes("PERMISSION_DENIED");
+        const isIdentityToolkitError =
+          error.message?.includes("identitytoolkit.googleapis.com") ||
+          error.message?.includes("Identity Toolkit API") ||
+          error.code === "auth/insufficient-permission" ||
+          error.message?.includes("PERMISSION_DENIED");
 
         if (isIdentityToolkitError) {
-          console.log("[Auth] Identity Toolkit API not enabled in GCP project; managing user in Firestore directly.");
           authErrorEncountered = true;
-          authErrorMessage = "Identity Toolkit API not active";
-
           let fallbackUid = id;
           if (!fallbackUid) {
-            try {
-              const existingSnap = await adminDb.collection("users").where("email", "==", email).get();
-              if (!existingSnap.empty) {
-                fallbackUid = existingSnap.docs[0].id;
-              } else {
-                fallbackUid = adminDb.collection("users").doc().id;
-              }
-            } catch (fsErr) {
-              console.warn("Firestore fallback lookup failed, generating local unique ID instead:", fsErr);
-              fallbackUid = `u_${Math.random().toString(36).substring(2, 12)}_${Date.now().toString(36)}`;
-            }
+            const existingSnap = await adminDb.collection("users").where("email", "==", email).get();
+            fallbackUid = !existingSnap.empty ? existingSnap.docs[0].id : adminDb.collection("users").doc().id;
           }
           authUser = { uid: fallbackUid, email };
-        } else if (error.code === 'auth/user-not-found') {
-          // Create new user using REST API as fallback
+        } else if (error.code === "auth/user-not-found") {
           if (!password || password.trim().length === 0) {
-            throw new Error("La contraseña es obligatoria para nuevos usuarios");
+            return res.status(400).json({ error: "La contraseña es obligatoria para nuevos profesionales." });
           }
           try {
             const signupResponse = await axios.post(
@@ -479,113 +559,44 @@ async function startServer() {
             authUser = { uid: signupResponse.data.localId, email };
             createdInAuth = true;
           } catch (restError: any) {
-            console.log("[Auth] REST Auth check for user:", restError.response?.data?.error?.message || restError.message);
-            const isRestIdentityToolkitError = restError.response?.data?.error?.message?.includes("Identity Toolkit API") || 
-                                              restError.message?.includes("Identity Toolkit API") ||
-                                              restError.response?.data?.error?.message?.includes("developer") ||
-                                              restError.message?.includes("developer");
+            const isRestIdentityToolkitError =
+              restError.response?.data?.error?.message?.includes("Identity Toolkit API") ||
+              restError.message?.includes("Identity Toolkit API");
             if (isRestIdentityToolkitError) {
               authErrorEncountered = true;
-              authErrorMessage = restError.response?.data?.error?.message || restError.message;
-              
-              let fallbackUid = id;
-              if (!fallbackUid) {
-                try {
-                  const existingSnap = await adminDb.collection("users").where("email", "==", email).get();
-                  if (!existingSnap.empty) {
-                    fallbackUid = existingSnap.docs[0].id;
-                  } else {
-                    fallbackUid = adminDb.collection("users").doc().id;
-                  }
-                } catch (fsErr) {
-                  console.warn("Firestore fallback lookup failed, generating local unique ID instead:", fsErr);
-                  fallbackUid = `u_${Math.random().toString(36).substring(2, 12)}_${Date.now().toString(36)}`;
-                }
-              }
+              let fallbackUid = id || adminDb.collection("users").doc().id;
               authUser = { uid: fallbackUid, email };
             } else {
-              throw new Error(`Auth Error: ${restError.response?.data?.error?.message || restError.message}`);
+              return res.status(400).json({ error: `Error de autenticación: ${restError.response?.data?.error?.message || restError.message}` });
             }
           }
         } else {
-          // If SDK failed for other reasons, try to find by email in Firestore or proceed with cautious dummy UID
-          console.warn("Admin SDK check failed, falling back to basic checks", error.message);
-          
-          if (password && password.trim().length > 0) {
-            try {
-              const signupResponse = await axios.post(
-                `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`,
-                {
-                  email,
-                  password,
-                  displayName: name,
-                  returnSecureToken: true
-                }
-              );
-              authUser = { uid: signupResponse.data.localId, email };
-              createdInAuth = true;
-            } catch (restError: any) {
-               if (restError.response?.data?.error?.message === 'EMAIL_EXISTS') {
-                  authUser = { uid: id || `pending_${Date.now()}`, email };
-               } else {
-                  const isRestIdentityToolkitError = restError.response?.data?.error?.message?.includes("Identity Toolkit API") || 
-                                                    restError.message?.includes("Identity Toolkit API");
-                  if (isRestIdentityToolkitError) {
-                    authErrorEncountered = true;
-                    authErrorMessage = restError.response?.data?.error?.message || restError.message;
-                    
-                    let fallbackUid = id;
-                    if (!fallbackUid) {
-                      try {
-                        const existingSnap = await adminDb.collection("users").where("email", "==", email).get();
-                        if (!existingSnap.empty) {
-                          fallbackUid = existingSnap.docs[0].id;
-                        } else {
-                          fallbackUid = adminDb.collection("users").doc().id;
-                        }
-                      } catch (fsErr) {
-                        console.warn("Firestore fallback lookup failed, generating local unique ID instead:", fsErr);
-                        fallbackUid = `u_${Math.random().toString(36).substring(2, 12)}_${Date.now().toString(36)}`;
-                      }
-                    }
-                    authUser = { uid: fallbackUid, email };
-                  } else {
-                    throw new Error(`Auth Error: ${restError.response?.data?.error?.message || restError.message}`);
-                  }
-               }
-            }
-          } else if (id) {
-            authUser = { uid: id, email };
-          } else {
-            throw new Error("Se requiere contraseña para configurar el acceso por primera vez");
-          }
+          return res.status(500).json({ error: "Error al gestionar cuenta de profesional." });
         }
       }
 
       const authUid = authUser?.uid;
-
       const userData = {
         name,
         email,
-        role: role || 'medico',
-        status: status || 'Activo',
+        role: role || "medico",
+        status: status || "Activo",
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       };
 
       try {
         await adminDb.collection("users").doc(authUid).set(userData, { merge: true });
       } catch (fsErr) {
-        console.warn("Server-side Firestore write bypassed. Client will handle database syncing:", fsErr);
+        console.warn("Server-side Firestore write bypassed:", fsErr);
       }
 
-      res.json({ 
-        success: true, 
-        uid: authUid, 
-        warning: authErrorEncountered ? "Nota: Se guardó en Firestore pero Identity Toolkit API está inactiva en tu consola Google Cloud; por favor actívala." : undefined,
-        message: createdInAuth ? "Creado exitosamente" : "Actualizado (si los permisos lo permiten)" 
+      res.json({
+        success: true,
+        uid: authUid,
+        warning: authErrorEncountered ? "Nota: Identity Toolkit API no está activa en Google Cloud." : undefined,
+        message: createdInAuth ? "Profesional creado exitosamente" : "Profesional actualizado exitosamente"
       });
     } catch (error: any) {
-      console.error("User Admin Management Error:", error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -600,28 +611,28 @@ async function startServer() {
     const fields: Record<string, any> = {};
     for (const [key, val] of Object.entries(obj)) {
       if (val === undefined || val === null) continue;
-      if (typeof val === 'string') {
+      if (typeof val === "string") {
         fields[key] = { stringValue: val };
-      } else if (typeof val === 'number') {
+      } else if (typeof val === "number") {
         fields[key] = Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
-      } else if (typeof val === 'boolean') {
+      } else if (typeof val === "boolean") {
         fields[key] = { booleanValue: val };
       } else if (Array.isArray(val)) {
         fields[key] = {
           arrayValue: {
             values: val.map(item => {
-              if (typeof item === 'object' && item !== null) {
+              if (typeof item === "object" && item !== null) {
                 return { mapValue: { fields: toFirestoreFields(item) } };
               }
-              if (typeof item === 'number') {
+              if (typeof item === "number") {
                 return Number.isInteger(item) ? { integerValue: String(item) } : { doubleValue: item };
               }
-              if (typeof item === 'boolean') return { booleanValue: item };
+              if (typeof item === "boolean") return { booleanValue: item };
               return { stringValue: String(item) };
             })
           }
         };
-      } else if (typeof val === 'object') {
+      } else if (typeof val === "object") {
         fields[key] = { mapValue: { fields: toFirestoreFields(val) } };
       }
     }
@@ -631,35 +642,36 @@ async function startServer() {
   function fromFirestoreFields(fields: Record<string, any> = {}): Record<string, any> {
     const result: Record<string, any> = {};
     for (const [key, val] of Object.entries(fields)) {
-      if ('stringValue' in val) result[key] = val.stringValue;
-      else if ('integerValue' in val) result[key] = Number(val.integerValue);
-      else if ('doubleValue' in val) result[key] = Number(val.doubleValue);
-      else if ('booleanValue' in val) result[key] = Boolean(val.booleanValue);
-      else if ('timestampValue' in val) result[key] = val.timestampValue;
-      else if ('arrayValue' in val) {
+      if ("stringValue" in val) result[key] = val.stringValue;
+      else if ("integerValue" in val) result[key] = Number(val.integerValue);
+      else if ("doubleValue" in val) result[key] = Number(val.doubleValue);
+      else if ("booleanValue" in val) result[key] = Boolean(val.booleanValue);
+      else if ("timestampValue" in val) result[key] = val.timestampValue;
+      else if ("arrayValue" in val) {
         result[key] = (val.arrayValue?.values || []).map((item: any) => {
-          if ('mapValue' in item) return fromFirestoreFields(item.mapValue.fields);
-          if ('stringValue' in item) return item.stringValue;
-          if ('integerValue' in item) return Number(item.integerValue);
-          if ('doubleValue' in item) return Number(item.doubleValue);
-          if ('booleanValue' in item) return Boolean(item.booleanValue);
+          if ("mapValue" in item) return fromFirestoreFields(item.mapValue.fields);
+          if ("stringValue" in item) return item.stringValue;
+          if ("integerValue" in item) return Number(item.integerValue);
+          if ("doubleValue" in item) return Number(item.doubleValue);
+          if ("booleanValue" in item) return Boolean(item.booleanValue);
           return item;
         });
-      } else if ('mapValue' in val) {
+      } else if ("mapValue" in val) {
         result[key] = fromFirestoreFields(val.mapValue.fields);
       }
     }
     return result;
   }
 
-  // Synchronization of Plans & Bonificaciones with Firebase Firestore
-  app.post("/api/admin/sync-plans", async (req, res) => {
+  // ------------------------------------------------------------
+  // Plan & Referral Discount Synchronization (Admin-Only)
+  // ------------------------------------------------------------
+  app.post("/api/admin/sync-plans", authenticateToken, requireAdminRole, async (req, res) => {
     try {
-      // 1. Fetch plans via Firestore REST
       const defaultPlans = [
-        { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, price: 30000 },
-        { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, price: 40000 },
-        { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, price: 50000 }
+        { id: "basico", name: "Básicos", usersLimit: 1, secretariesLimit: 1, price: 30000 },
+        { id: "plus", name: "Plus", usersLimit: 3, secretariesLimit: 2, price: 40000 },
+        { id: "premium", name: "Premium", usersLimit: 10, secretariesLimit: 5, price: 50000 }
       ];
 
       const plansMap: Record<string, any> = {};
@@ -689,7 +701,7 @@ async function startServer() {
         if (!plansMap[p.id]) plansMap[p.id] = p;
       }
 
-      // 2. Fetch referrals
+      // Fetch referrals
       const referralsList: any[] = [];
       try {
         const refResponse = await fetch(getFirestoreRestUrl("referrals"));
@@ -706,7 +718,7 @@ async function startServer() {
         console.warn("Could not query referrals via REST:", err);
       }
 
-      // 3. Fetch users
+      // Fetch users
       const allUsersMap: Map<string, any> = new Map();
       try {
         const usersResponse = await fetch(getFirestoreRestUrl("users"));
@@ -723,33 +735,6 @@ async function startServer() {
         console.warn("Could not query users via REST:", err);
       }
 
-      // Also check staff collection
-      try {
-        const staffResponse = await fetch(getFirestoreRestUrl("staff"));
-        if (staffResponse.ok) {
-          const staffData = await staffResponse.json();
-          if (staffData.documents) {
-            staffData.documents.forEach((doc: any) => {
-              const sId = doc.name.split("/").pop();
-              const sData = fromFirestoreFields(doc.fields || {});
-              const targetUid = sData.authUid || sId;
-              if (!allUsersMap.has(targetUid) && sData.email) {
-                allUsersMap.set(targetUid, {
-                  id: targetUid,
-                  name: sData.name || sData.email,
-                  email: sData.email,
-                  role: sData.role || 'medico',
-                  status: sData.status || 'Activo',
-                  activePlanId: 'plus'
-                });
-              }
-            });
-          }
-        }
-      } catch (staffErr) {
-        // Ignored
-      }
-
       const syncSummary = {
         totalUsers: allUsersMap.size,
         syncedCount: 0,
@@ -759,8 +744,8 @@ async function startServer() {
       };
 
       for (const [userId, userData] of allUsersMap.entries()) {
-        const planKey = (userData.activePlanId || userData.planId || 'plus').toLowerCase();
-        const plan = plansMap[planKey] || plansMap['plus'] || Object.values(plansMap)[0];
+        const planKey = (userData.activePlanId || userData.planId || "plus").toLowerCase();
+        const plan = plansMap[planKey] || plansMap["plus"] || Object.values(plansMap)[0];
         const basePrice = Math.max(0, Number(plan.price) || 0);
         const bonificaciones: any[] = [];
 
@@ -771,114 +756,92 @@ async function startServer() {
         );
 
         if (isReferred && userData.referralDiscount?.active !== false) {
-          const discType = userData.referralInfo?.discountType || userData.referralDiscount?.type || 'percent';
+          const discType = userData.referralInfo?.discountType || userData.referralDiscount?.type || "percent";
           const discValue = Number(userData.referralInfo?.discountValue ?? userData.referralDiscount?.value ?? 0);
           if (discValue > 0) {
-            const discAmount = discType === 'percent'
+            const discAmount = discType === "percent"
               ? Math.round(((basePrice * discValue) / 100) * 100) / 100
               : Math.min(basePrice, discValue);
-            const referrerLabel = userData.referralInfo?.referrerName || userData.referralInfo?.referrerEmail || 'Colega';
+            const referrerLabel = userData.referralInfo?.referrerName || userData.referralInfo?.referrerEmail || "Colega";
 
             bonificaciones.push({
               id: `ref-welcome-${userId}`,
-              title: 'Descuento de Bienvenida por Referido',
-              source: 'referral_welcome',
+              title: "Descuento de Bienvenida por Referido",
+              source: "referral_welcome",
               discountType: discType,
               discountValue: discValue,
               discountAmount: discAmount,
-              description: `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} (Referido por ${referrerLabel})`,
-              beneficiaryType: 'referred'
+              description: `Bonificación del ${discValue}${discType === "percent" ? "%" : "$"} (Referido por ${referrerLabel})`,
+              beneficiaryType: "referred"
             });
           }
         }
 
         // Referral reward discounts
         const userReferralsAsReferrer = referralsList.filter(
-          (r: any) => (r.referrerId === userId || r.referrerEmail === userData.email) && r.status === 'active'
+          (r: any) => (r.referrerId === userId || r.referrerEmail === userData.email) && r.status === "active"
         );
 
         userReferralsAsReferrer.forEach((ref: any) => {
-          const discType = ref.referrerDiscountType || 'percent';
+          const discType = ref.referrerDiscountType || "percent";
           const discValue = Number(ref.referrerDiscountValue) || 0;
           if (discValue > 0) {
-            const discAmount = discType === 'percent'
+            const discAmount = discType === "percent"
               ? Math.round(((basePrice * discValue) / 100) * 100) / 100
               : Math.min(basePrice, discValue);
-            const colleagueLabel = ref.referredUserName || ref.referredUserEmail || 'Colega';
+            const colleagueLabel = ref.referredUserName || ref.referredUserEmail || "Colega";
 
             bonificaciones.push({
               id: `ref-reward-${ref.id}`,
-              title: 'Recompensa por Colega Referido',
-              source: 'referral_reward',
+              title: "Recompensa por Colega Referido",
+              source: "referral_reward",
               discountType: discType,
               discountValue: discValue,
               discountAmount: discAmount,
-              description: `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} por recomendar a ${colleagueLabel}`,
-              beneficiaryType: 'referrer',
+              description: `Bonificación del ${discValue}${discType === "percent" ? "%" : "$"} por recomendar a ${colleagueLabel}`,
+              beneficiaryType: "referrer",
               referralId: ref.id
             });
           }
         });
 
-        if (userReferralsAsReferrer.length === 0 && userData.referralReward?.hasReward && userData.referralReward?.discountValue) {
-          const discType = userData.referralReward.discountType || 'percent';
-          const discValue = Number(userData.referralReward.discountValue) || 0;
-          if (discValue > 0) {
-            const discAmount = discType === 'percent'
-              ? Math.round(((basePrice * discValue) / 100) * 100) / 100
-              : Math.min(basePrice, discValue);
-
-            bonificaciones.push({
-              id: `user-reward-direct-${userId}`,
-              title: 'Recompensa por Recomendación',
-              source: 'referral_reward',
-              discountType: discType,
-              discountValue: discValue,
-              discountAmount: discAmount,
-              description: `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} por colega referido (${userData.referralReward.rewardFromUserName || 'Colega'})`,
-              beneficiaryType: 'referrer'
-            });
-          }
-        }
-
-        // Custom administrative bonus
+        // Administrative custom bonuses
         if (userData.customBonus?.active && Number(userData.customBonus.discountValue) > 0) {
-          const discType = userData.customBonus.discountType || 'percent';
+          const discType = userData.customBonus.discountType || "percent";
           const discValue = Number(userData.customBonus.discountValue) || 0;
           if (discValue > 0) {
-            const discAmount = discType === 'percent'
+            const discAmount = discType === "percent"
               ? Math.round(((basePrice * discValue) / 100) * 100) / 100
               : Math.min(basePrice, discValue);
 
             bonificaciones.push({
               id: `custom-bonus-${userId}`,
-              title: userData.customBonus.title || 'Bonificación Especial Otorgada por el Administrador',
-              source: 'custom_bonus',
+              title: userData.customBonus.title || "Bonificación Especial Otorgada por el Administrador",
+              source: "custom_bonus",
               discountType: discType,
               discountValue: discValue,
               discountAmount: discAmount,
-              description: userData.customBonus.reason || userData.customBonus.description || `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} otorgada por la administración del sistema`,
-              beneficiaryType: 'manual'
+              description: userData.customBonus.reason || userData.customBonus.description || `Bonificación del ${discValue}${discType === "percent" ? "%" : "$"} otorgada por la administración`,
+              beneficiaryType: "manual"
             });
           }
         }
 
-        // Include existing custom bonuses if present and not duplicated
-        const existingBonuses = Array.isArray(userData.bonificaciones) 
-          ? userData.bonificaciones 
+        const existingBonuses = Array.isArray(userData.bonificaciones)
+          ? userData.bonificaciones
           : (Array.isArray(userData.billingDetails?.bonificaciones) ? userData.billingDetails.bonificaciones : []);
         existingBonuses.forEach((b: any) => {
           if (b && b.id && !bonificaciones.some((x: any) => x.id === b.id) && (Number(b.discountAmount) > 0 || Number(b.discountValue) > 0)) {
-            const discAmount = Number(b.discountAmount) || (b.discountType === 'percent' ? Math.round(((basePrice * Number(b.discountValue)) / 100) * 100) / 100 : Number(b.discountValue));
+            const discAmount = Number(b.discountAmount) || (b.discountType === "percent" ? Math.round(((basePrice * Number(b.discountValue)) / 100) * 100) / 100 : Number(b.discountValue));
             bonificaciones.push({
               id: b.id,
-              title: b.title || 'Bonificación Especial',
-              source: b.source || 'custom_bonus',
-              discountType: b.discountType || 'percent',
+              title: b.title || "Bonificación Especial",
+              source: b.source || "custom_bonus",
+              discountType: b.discountType || "percent",
               discountValue: Number(b.discountValue) || 0,
               discountAmount: discAmount,
-              description: b.description || 'Bonificación aplicada',
-              beneficiaryType: b.beneficiaryType || 'manual'
+              description: b.description || "Bonificación aplicada",
+              beneficiaryType: b.beneficiaryType || "manual"
             });
           }
         });
@@ -894,8 +857,8 @@ async function startServer() {
 
         syncSummary.users.push({
           id: userId,
-          name: userData.name || userData.email || 'Sin nombre',
-          email: userData.email || '',
+          name: userData.name || userData.email || "Sin nombre",
+          email: userData.email || "",
           planName: plan.name,
           basePrice,
           discount: totalDiscount,
@@ -937,16 +900,15 @@ async function startServer() {
             totalDiscount,
             finalPrice,
             bonificacionesCount: bonificaciones.length,
-            summary: bonificaciones.map((b: any) => b.description).join(', ')
+            summary: bonificaciones.map((b: any) => b.description).join(", ")
           };
         }
 
-        // Persist directly to Firestore via REST
         try {
-          const updateUrl = `${getFirestoreRestUrl(`users/${userId}`)}&updateMask.fieldPaths=activePlanId&updateMask.fieldPaths=planId&updateMask.fieldPaths=planDetails&updateMask.fieldPaths=billingDetails&updateMask.fieldPaths=planPrice&updateMask.fieldPaths=basePlanPrice&updateMask.fieldPaths=discountApplied&updateMask.fieldPaths=updatedAt${hasDiscount ? '&updateMask.fieldPaths=referralDiscount' : ''}`;
+          const updateUrl = `${getFirestoreRestUrl(`users/${userId}`)}&updateMask.fieldPaths=activePlanId&updateMask.fieldPaths=planId&updateMask.fieldPaths=planDetails&updateMask.fieldPaths=billingDetails&updateMask.fieldPaths=planPrice&updateMask.fieldPaths=basePlanPrice&updateMask.fieldPaths=discountApplied&updateMask.fieldPaths=updatedAt${hasDiscount ? "&updateMask.fieldPaths=referralDiscount" : ""}`;
           await fetch(updateUrl, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ fields: toFirestoreFields(userUpdatePayload) })
           });
         } catch (uPatchErr) {
@@ -954,7 +916,6 @@ async function startServer() {
         }
       }
 
-      // Record sync status in system_stats
       syncSummary.totalMonthlyBilling = Math.round(syncSummary.totalMonthlyBilling * 100) / 100;
       try {
         const statsPayload = {
@@ -967,8 +928,8 @@ async function startServer() {
           updatedAt: new Date().toISOString()
         };
         await fetch(getFirestoreRestUrl("system_stats/billing_summary"), {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fields: toFirestoreFields(statsPayload) })
         });
       } catch (statsErr) {
@@ -980,24 +941,21 @@ async function startServer() {
         ...syncSummary
       });
     } catch (error: any) {
-      console.error("Sync Plans Error:", error);
       res.status(500).json({ error: error.message });
     }
   });
 
-  // Sync single user
-  app.post("/api/admin/sync-single-user", async (req, res) => {
+  app.post("/api/admin/sync-single-user", authenticateToken, requireAdminRole, async (req, res) => {
     try {
       const { userId, targetPlanId } = req.body;
       if (!userId) {
         return res.status(400).json({ error: "Missing userId" });
       }
 
-      // Fetch plans
       const defaultPlans = [
-        { id: 'basico', name: 'Básicos', usersLimit: 1, secretariesLimit: 1, price: 30000 },
-        { id: 'plus', name: 'Plus', usersLimit: 3, secretariesLimit: 2, price: 40000 },
-        { id: 'premium', name: 'Premium', usersLimit: 10, secretariesLimit: 5, price: 50000 }
+        { id: "basico", name: "Básicos", usersLimit: 1, secretariesLimit: 1, price: 30000 },
+        { id: "plus", name: "Plus", usersLimit: 3, secretariesLimit: 2, price: 40000 },
+        { id: "premium", name: "Premium", usersLimit: 10, secretariesLimit: 5, price: 50000 }
       ];
       const plansMap: Record<string, any> = {};
       try {
@@ -1012,14 +970,13 @@ async function startServer() {
             });
           }
         }
-      } catch (e) {
+      } catch {
         // Ignored
       }
       for (const p of defaultPlans) {
         if (!plansMap[p.id]) plansMap[p.id] = p;
       }
 
-      // Fetch referrals
       const referralsList: any[] = [];
       try {
         const refResponse = await fetch(getFirestoreRestUrl("referrals"));
@@ -1032,12 +989,11 @@ async function startServer() {
             });
           }
         }
-      } catch (e) {
+      } catch {
         // Ignored
       }
 
-      // Fetch user doc
-      let userData: any = { id: userId, activePlanId: targetPlanId || 'plus' };
+      let userData: any = { id: userId, activePlanId: targetPlanId || "plus" };
       try {
         const userResp = await fetch(getFirestoreRestUrl(`users/${userId}`));
         if (userResp.ok) {
@@ -1046,12 +1002,12 @@ async function startServer() {
             userData = { id: userId, ...fromFirestoreFields(uDoc.fields) };
           }
         }
-      } catch (e) {
+      } catch {
         // Ignored
       }
 
-      const planKey = (targetPlanId || userData.activePlanId || userData.planId || 'plus').toLowerCase();
-      const plan = plansMap[planKey] || plansMap['plus'] || Object.values(plansMap)[0];
+      const planKey = (targetPlanId || userData.activePlanId || userData.planId || "plus").toLowerCase();
+      const plan = plansMap[planKey] || plansMap["plus"] || Object.values(plansMap)[0];
       const basePrice = Math.max(0, Number(plan.price) || 0);
       const bonificaciones: any[] = [];
 
@@ -1061,49 +1017,49 @@ async function startServer() {
       );
 
       if (isReferred && userData.referralDiscount?.active !== false) {
-        const discType = userData.referralInfo?.discountType || userData.referralDiscount?.type || 'percent';
+        const discType = userData.referralInfo?.discountType || userData.referralDiscount?.type || "percent";
         const discValue = Number(userData.referralInfo?.discountValue ?? userData.referralDiscount?.value ?? 0);
         if (discValue > 0) {
-          const discAmount = discType === 'percent'
+          const discAmount = discType === "percent"
             ? Math.round(((basePrice * discValue) / 100) * 100) / 100
             : Math.min(basePrice, discValue);
-          const referrerLabel = userData.referralInfo?.referrerName || userData.referralInfo?.referrerEmail || 'Colega';
+          const referrerLabel = userData.referralInfo?.referrerName || userData.referralInfo?.referrerEmail || "Colega";
 
           bonificaciones.push({
             id: `ref-welcome-${userId}`,
-            title: 'Descuento de Bienvenida por Referido',
-            source: 'referral_welcome',
+            title: "Descuento de Bienvenida por Referido",
+            source: "referral_welcome",
             discountType: discType,
             discountValue: discValue,
             discountAmount: discAmount,
-            description: `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} (Referido por ${referrerLabel})`,
-            beneficiaryType: 'referred'
+            description: `Bonificación del ${discValue}${discType === "percent" ? "%" : "$"} (Referido por ${referrerLabel})`,
+            beneficiaryType: "referred"
           });
         }
       }
 
       const userReferralsAsReferrer = referralsList.filter(
-        (r: any) => (r.referrerId === userId || r.referrerEmail === userData.email) && r.status === 'active'
+        (r: any) => (r.referrerId === userId || r.referrerEmail === userData.email) && r.status === "active"
       );
 
       userReferralsAsReferrer.forEach((ref: any) => {
-        const discType = ref.referrerDiscountType || 'percent';
+        const discType = ref.referrerDiscountType || "percent";
         const discValue = Number(ref.referrerDiscountValue) || 0;
         if (discValue > 0) {
-          const discAmount = discType === 'percent'
+          const discAmount = discType === "percent"
             ? Math.round(((basePrice * discValue) / 100) * 100) / 100
             : Math.min(basePrice, discValue);
-          const colleagueLabel = ref.referredUserName || ref.referredUserEmail || 'Colega';
+          const colleagueLabel = ref.referredUserName || ref.referredUserEmail || "Colega";
 
           bonificaciones.push({
             id: `ref-reward-${ref.id}`,
-            title: 'Recompensa por Colega Referido',
-            source: 'referral_reward',
+            title: "Recompensa por Colega Referido",
+            source: "referral_reward",
             discountType: discType,
             discountValue: discValue,
             discountAmount: discAmount,
-            description: `Bonificación del ${discValue}${discType === 'percent' ? '%' : '$'} por recomendar a ${colleagueLabel}`,
-            beneficiaryType: 'referrer',
+            description: `Bonificación del ${discValue}${discType === "percent" ? "%" : "$"} por recomendar a ${colleagueLabel}`,
+            beneficiaryType: "referrer",
             referralId: ref.id
           });
         }
@@ -1148,14 +1104,14 @@ async function startServer() {
           totalDiscount,
           finalPrice,
           bonificacionesCount: bonificaciones.length,
-          summary: bonificaciones.map((b: any) => b.description).join(', ')
+          summary: bonificaciones.map((b: any) => b.description).join(", ")
         };
       }
 
-      const updateUrl = `${getFirestoreRestUrl(`users/${userId}`)}&updateMask.fieldPaths=activePlanId&updateMask.fieldPaths=planId&updateMask.fieldPaths=planDetails&updateMask.fieldPaths=billingDetails&updateMask.fieldPaths=planPrice&updateMask.fieldPaths=basePlanPrice&updateMask.fieldPaths=discountApplied&updateMask.fieldPaths=updatedAt${hasDiscount ? '&updateMask.fieldPaths=referralDiscount' : ''}`;
+      const updateUrl = `${getFirestoreRestUrl(`users/${userId}`)}&updateMask.fieldPaths=activePlanId&updateMask.fieldPaths=planId&updateMask.fieldPaths=planDetails&updateMask.fieldPaths=billingDetails&updateMask.fieldPaths=planPrice&updateMask.fieldPaths=basePlanPrice&updateMask.fieldPaths=discountApplied&updateMask.fieldPaths=updatedAt${hasDiscount ? "&updateMask.fieldPaths=referralDiscount" : ""}`;
       await fetch(updateUrl, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fields: toFirestoreFields(userUpdatePayload) })
       });
 
@@ -1164,12 +1120,13 @@ async function startServer() {
         billing: userUpdatePayload.billingDetails
       });
     } catch (error: any) {
-      console.error("Sync Single User Error:", error);
       res.status(500).json({ error: error.message });
     }
   });
 
-  // Detect production environment reliably (when running bundled dist/server.cjs, NODE_ENV=production, or dist/index.html exists)
+  // ------------------------------------------------------------
+  // Environment & Vite / Static Middleware
+  // ------------------------------------------------------------
   const isProduction =
     process.env.NODE_ENV === "production" ||
     process.argv[1]?.includes("server.cjs") ||
@@ -1180,7 +1137,6 @@ async function startServer() {
     process.env.NODE_ENV = "production";
   }
 
-  // Vite middleware for development vs static files for production
   if (!isProduction) {
     const { createServer } = await import("vite");
     const vite = await createServer({
@@ -1197,7 +1153,7 @@ async function startServer() {
   }
 
   const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`[Server] MedTurnos secure server running on http://localhost:${PORT}`);
   });
 
   server.on("error", (err) => {

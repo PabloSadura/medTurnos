@@ -2,8 +2,11 @@ import { db, auth } from './firebase';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 export async function seedAllCollections() {
-  const currentUserId = auth.currentUser?.uid || 'admin_root';
-  const currentUserEmail = auth.currentUser?.email || 'admin@mail.com';
+  const currentUserId = auth.currentUser?.uid;
+  if (!currentUserId) {
+    throw new Error('Debe iniciar sesión para inicializar los datos de su cuenta profesional.');
+  }
+  const currentUserEmail = auth.currentUser?.email || '';
 
   const results: Record<string, number> = {};
 

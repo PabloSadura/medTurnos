@@ -18,6 +18,8 @@ import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { comparePatientsByLastName } from '../lib/patientNameUtils';
 import { syncSingleUserPlan } from '../lib/planSyncService';
+import { apiFetch } from '../lib/apiClient';
+import { validatePassword } from '../lib/security';
 
 type AdminTab = 'overview' | 'users' | 'notifications' | 'backup' | 'theme' | 'billing';
 
@@ -34,7 +36,7 @@ const AVAILABLE_MODULES = [
 export function Administration() {
   const { showToast } = useToast();
   const { ownerId, profile, user } = useAuth();
-  const isAdmin = profile?.role === 'admin' || user?.email === 'admin@mail.com' || user?.email === 'pablosadura@gmail.com';
+  const isAdmin = profile?.role === 'admin';
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [patientsCount, setPatientsCount] = useState(0);
   const [appointmentsCount, setAppointmentsCount] = useState(0);
@@ -305,15 +307,22 @@ export function Administration() {
       return;
     }
 
+    if (userForm.password) {
+      const pwdRes = validatePassword(userForm.password);
+      if (!pwdRes.isValid) {
+        showToast(pwdRes.feedback[0] || 'La contraseña no cumple con los requisitos de seguridad (mínimo 12 caracteres, mayúsculas, minúsculas, números y símbolos).', 'error');
+        return;
+      }
+    }
+
     // Sanitize permissions: professionals cannot grant 'admin' permission
     const sanitizedPermissions = isAdmin 
       ? userForm.permissions 
       : userForm.permissions.filter(p => p !== 'admin');
 
     try {
-      const response = await fetch('/api/staff/manage', {
+      const { ok, status, data: result } = await apiFetch('/api/staff/manage', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...userForm,
           role: targetRole,
@@ -323,12 +332,10 @@ export function Administration() {
         })
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Error managing user');
+      if (!ok) {
+        throw new Error(result?.error || 'Error al procesar la cuenta');
       }
 
-      const result = await response.json();
       const authUid = result.uid;
 
       if (result.warning) {

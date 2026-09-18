@@ -5,6 +5,7 @@ import {
   setDoc, 
   serverTimestamp 
 } from 'firebase/firestore';
+import { apiFetch } from './apiClient';
 
 export interface PlanModel {
   id: string;
@@ -221,24 +222,20 @@ export async function syncAllUsersPlanValues(db: any): Promise<SyncResult> {
   // Layer 1: Authoritative Server-side Firebase Admin synchronization
   let serverResult: SyncResult | null = null;
   try {
-    const apiResponse = await fetch('/api/admin/sync-plans', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+    const { ok, status, data } = await apiFetch('/api/admin/sync-plans', {
+      method: 'POST'
     });
-    if (apiResponse.ok) {
-      const data = await apiResponse.json();
-      if (data.success) {
-        serverResult = {
-          totalUsers: data.totalUsers || 0,
-          syncedCount: data.syncedCount || 0,
-          withDiscountsCount: data.withDiscountsCount || 0,
-          totalMonthlyBilling: data.totalMonthlyBilling || 0,
-          users: data.users || []
-        };
-        console.log(`[PlanSync] Server Admin SDK successfully synced ${serverResult.syncedCount} users to Firestore.`);
-      }
+    if (ok && data?.success) {
+      serverResult = {
+        totalUsers: data.totalUsers || 0,
+        syncedCount: data.syncedCount || 0,
+        withDiscountsCount: data.withDiscountsCount || 0,
+        totalMonthlyBilling: data.totalMonthlyBilling || 0,
+        users: data.users || []
+      };
+      console.log(`[PlanSync] Server Admin SDK successfully synced ${serverResult.syncedCount} users to Firestore.`);
     } else {
-      console.warn("[PlanSync] Server sync API returned status:", apiResponse.status);
+      console.warn("[PlanSync] Server sync API returned status:", status);
     }
   } catch (apiErr) {
     console.warn("[PlanSync] Server sync API unreachable, relying on client Firestore:", apiErr);
@@ -458,17 +455,13 @@ export async function syncSingleUserPlan(
 
   // Layer 1: Server Admin endpoint
   try {
-    const resp = await fetch('/api/admin/sync-single-user', {
+    const { ok, data } = await apiFetch('/api/admin/sync-single-user', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, targetPlanId })
     });
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data.success && data.billing) {
-        console.log(`[PlanSync] Server Admin SDK successfully updated user ${userId}`);
-        return data.billing;
-      }
+    if (ok && data?.success && data?.billing) {
+      console.log(`[PlanSync] Server Admin SDK successfully updated user ${userId}`);
+      return data.billing;
     }
   } catch (apiErr) {
     console.warn("[PlanSync] Server single user sync warning, falling back to direct Firestore:", apiErr);

@@ -1,5 +1,5 @@
 import { Bell, Menu, PanelLeft, Cloud } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { auth } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -9,8 +9,24 @@ import { cn } from '../lib/utils';
 export function TopAppBar() {
   const { user: authUser, profile } = useAuth();
   const user = auth.currentUser || authUser;
-  const { isCollapsed, toggleSidebar } = useSidebar();
+  const { isCollapsed, toggleSidebar, openMobile } = useSidebar();
   const { isConnected: isDriveConnected, connectGoogleDrive, isConnecting: isDriveConnecting } = useGoogleDrive();
+  const location = useLocation();
+
+  const getSectionTitle = () => {
+    const path = location.pathname;
+    if (path.startsWith('/profile')) return 'Mi Perfil';
+    if (path.startsWith('/agenda')) return 'Agenda';
+    if (path.startsWith('/patients')) return 'Pacientes';
+    if (path.startsWith('/treatments')) return 'Tratamientos';
+    if (path.startsWith('/inventory')) return 'Inventario';
+    if (path.startsWith('/reminders')) return 'Recordatorios';
+    if (path.startsWith('/admin') || path.startsWith('/system')) return 'Administración';
+    if (path.startsWith('/medical/dashboard')) return 'Panel Clínico';
+    return 'MedTurnos';
+  };
+
+  const sectionTitle = getSectionTitle();
 
   const roleBadge = profile?.role === 'admin' 
     ? { label: 'Administrador', bg: 'bg-primary/10 text-primary border-primary/20' }
@@ -22,26 +38,40 @@ export function TopAppBar() {
     <header
       id="top-app-bar"
       className={cn(
-        "h-14 bg-white/90 backdrop-blur-md border-b border-outline-variant fixed top-0 right-0 flex items-center justify-between px-4 sm:px-6 lg:px-8 z-40 shrink-0 transition-all duration-300 ease-in-out",
+        "h-14 bg-white/95 backdrop-blur-md border-b border-outline-variant fixed top-0 right-0 flex items-center justify-between px-3 sm:px-6 lg:px-8 z-40 shrink-0 transition-all duration-300 ease-in-out font-sans",
         isCollapsed ? "lg:left-16" : "lg:left-56",
         "left-0"
       )}
     >
-      <div className="flex items-center gap-3">
-        {/* Sidebar Toggler Button in Top Bar */}
+      <div className="flex items-center gap-2.5 sm:gap-3">
+        {/* Menu button for Mobile / Sidebar toggle for Desktop */}
         <button
           id="topbar-sidebar-toggle-btn"
           type="button"
-          onClick={toggleSidebar}
-          className="p-2 rounded-xl text-on-surface-variant hover:text-primary hover:bg-surface border border-transparent hover:border-outline-variant transition-all cursor-pointer flex items-center justify-center shadow-2xs"
-          title={isCollapsed ? "Abrir menú lateral" : "Contraer menú lateral"}
-          aria-label="Alternar menú lateral"
+          onClick={() => {
+            if (window.innerWidth < 1024) {
+              openMobile();
+            } else {
+              toggleSidebar();
+            }
+          }}
+          className="p-2 rounded-xl text-on-surface-variant hover:text-primary hover:bg-surface border border-transparent hover:border-outline-variant transition-all cursor-pointer flex items-center justify-center min-h-[44px] min-w-[44px] touch-manipulation"
+          title="Abrir menú de navegación"
+          aria-label="Abrir menú de navegación"
         >
-          <Menu className="w-4 h-4 lg:hidden" />
+          <Menu className="w-5 h-5 lg:hidden" />
           <PanelLeft className="w-4 h-4 hidden lg:block" />
         </button>
 
-        <h2 className="text-[13px] sm:text-[14px] font-bold text-on-surface tracking-tight">Centro de Control</h2>
+        {/* Mobile reduced logo + Dynamic Section Title */}
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-primary text-white font-black text-[11px] flex items-center justify-center lg:hidden shadow-xs shrink-0 select-none">
+            MT
+          </div>
+          <h1 className="text-sm sm:text-base font-black text-on-surface tracking-tight">
+            {sectionTitle}
+          </h1>
+        </div>
         
         <div className="hidden sm:flex items-center gap-2">
           <span className="bg-primary/5 text-primary text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-widest border border-primary/10">
@@ -56,7 +86,7 @@ export function TopAppBar() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2.5 sm:gap-3">
+      <div className="flex items-center gap-2 sm:gap-3">
         {isDriveConnected ? (
           <Link
             to="/profile"
@@ -83,21 +113,23 @@ export function TopAppBar() {
         <button 
           id="topbar-notifications-btn"
           type="button"
-          className="p-1.5 rounded-lg hover:bg-surface text-on-surface-variant transition-all border border-transparent hover:border-outline-variant relative cursor-pointer"
+          className="p-2 rounded-xl hover:bg-surface text-on-surface-variant transition-all border border-transparent hover:border-outline-variant relative cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
           title="Notificaciones"
+          aria-label="Ver notificaciones del sistema"
         >
           <Bell className="w-4 h-4" />
-          <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-error rounded-full border-2 border-white"></span>
+          <span className="absolute top-2 right-2 w-2 h-2 bg-primary rounded-full ring-2 ring-white"></span>
         </button>
 
         <Link
           to="/profile"
-          className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-full hover:bg-surface border border-transparent hover:border-outline-variant transition-all cursor-pointer"
-          title="Ver perfil y configuración"
+          className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-full hover:bg-surface border border-transparent hover:border-outline-variant transition-all cursor-pointer min-h-[40px]"
+          title="Ir a mi perfil"
+          aria-label="Ir a mi perfil"
         >
-          <div className="w-7 h-7 rounded-full border border-primary/20 overflow-hidden bg-surface flex-shrink-0 flex items-center justify-center font-bold text-[10px] text-primary bg-primary-container">
+          <div className="w-8 h-8 rounded-full border border-primary/20 overflow-hidden bg-primary/10 flex-shrink-0 flex items-center justify-center font-bold text-xs text-primary">
             {user?.photoURL ? (
-              <img src={user.photoURL} alt="Profile" className="w-full h-full object-cover" />
+              <img src={user.photoURL} alt="Foto de perfil" className="w-full h-full object-cover" />
             ) : (
               user?.displayName?.charAt(0) || user?.email?.charAt(0) || 'U'
             )}

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import { 
   LogOut, 
@@ -14,7 +14,7 @@ import {
   MessageSquare,
   Settings,
   Terminal,
-  Shield
+  MoreHorizontal
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
@@ -32,27 +32,45 @@ export function SideNavBar() {
 
   const handleLogout = () => logout();
 
-  const filteredItems = useMemo(() => {
-    const isAdmin = profile?.role === 'admin';
-    if (isAdmin) {
-      return [
-        { icon: Terminal, label: 'Control Maestro', path: '/system/dashboard', id: 'sys_dashboard' },
-        { icon: CalendarDays, label: 'Agenda Diaria', path: '/agenda', id: 'agenda' },
-        { icon: Users, label: 'Pacientes', path: '/patients', id: 'patients' },
-        { icon: Stethoscope, label: 'Tratamientos', path: '/treatments', id: 'treatments' },
-        { icon: Package, label: 'Inventario', path: '/inventory', id: 'inventory' },
-        { icon: MessageSquare, label: 'Recordatorios', path: '/reminders', id: 'reminders' },
-        { icon: LayoutDashboard, label: 'Panel Clínico', path: '/medical/dashboard', id: 'dashboard' },
-        { icon: Settings, label: 'Administración', path: '/admin', id: 'admin' },
-      ];
-    }
-    return NAV_ITEMS.filter(item => {
-      if (permissions.includes(item.id)) return true;
-      if (permissions.includes('all')) {
-        return !item.id.startsWith('sys_');
+  // Close drawer on Escape key press
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isMobileOpen) {
+        closeMobile();
       }
-      return false;
-    });
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isMobileOpen, closeMobile]);
+
+  const { primaryItems, secondaryItems } = useMemo(() => {
+    const isAdmin = profile?.role === 'admin';
+    const all = isAdmin 
+      ? [
+          { icon: Terminal, label: 'Control Maestro', path: '/system/dashboard', id: 'sys_dashboard', primary: true },
+          { icon: CalendarDays, label: 'Agenda Diaria', path: '/agenda', id: 'agenda', primary: true },
+          { icon: Users, label: 'Pacientes', path: '/patients', id: 'patients', primary: true },
+          { icon: MessageSquare, label: 'Recordatorios', path: '/reminders', id: 'reminders', primary: true },
+          { icon: LayoutDashboard, label: 'Panel Clínico', path: '/medical/dashboard', id: 'dashboard', primary: true },
+          { icon: Stethoscope, label: 'Tratamientos', path: '/treatments', id: 'treatments', primary: false },
+          { icon: Package, label: 'Inventario', path: '/inventory', id: 'inventory', primary: false },
+          { icon: Settings, label: 'Administración', path: '/admin', id: 'admin', primary: false },
+        ]
+      : NAV_ITEMS.filter(item => {
+          if (permissions.includes(item.id)) return true;
+          if (permissions.includes('all')) {
+            return !item.id.startsWith('sys_');
+          }
+          return false;
+        }).map(item => ({
+          ...item,
+          primary: ['agenda', 'patients', 'reminders', 'dashboard', 'assistant_agenda'].includes(item.id)
+        }));
+
+    return {
+      primaryItems: all.filter(i => i.primary),
+      secondaryItems: all.filter(i => !i.primary)
+    };
   }, [permissions, profile?.role]);
 
   const userRoleLabel = useMemo(() => {
@@ -68,21 +86,24 @@ export function SideNavBar() {
         <div
           id="sidebar-mobile-backdrop"
           onClick={closeMobile}
-          className="fixed inset-0 bg-black/40 backdrop-blur-xs z-40 lg:hidden transition-opacity duration-300"
+          className="fixed inset-0 bg-black/50 backdrop-blur-xs z-40 lg:hidden transition-opacity duration-300"
           aria-hidden="true"
         />
       )}
 
-      {/* Main Sidebar Aside */}
+      {/* Main Sidebar / Accessible Drawer */}
       <aside
         id="main-sidebar"
+        role={isMobileOpen ? "dialog" : "complementary"}
+        aria-modal={isMobileOpen ? "true" : undefined}
+        aria-label="Menú de navegación principal"
         className={cn(
-          "bg-white border-r border-outline-variant h-screen fixed left-0 top-0 flex flex-col z-50 shadow-[4px_0_12px_rgba(0,0,0,0.02)] transition-all duration-300 ease-in-out",
+          "bg-white border-r border-outline-variant h-screen fixed left-0 top-0 flex flex-col z-50 shadow-[4px_0_16px_rgba(0,0,0,0.04)] transition-all duration-300 ease-in-out font-sans",
           // Desktop collapsed vs expanded
           isCollapsed ? "lg:w-16" : "lg:w-56",
           // Mobile open vs closed (drawer)
           isMobileOpen 
-            ? "translate-x-0 w-64" 
+            ? "translate-x-0 w-72" 
             : "-translate-x-full lg:translate-x-0"
         )}
       >
@@ -135,24 +156,25 @@ export function SideNavBar() {
             id="sidebar-mobile-close-btn"
             type="button"
             onClick={closeMobile}
-            className="flex lg:hidden p-1.5 rounded-lg text-on-surface-variant hover:text-error hover:bg-error/10 transition-all cursor-pointer"
-            title="Cerrar menú"
-            aria-label="Cerrar menú"
+            className="flex lg:hidden p-2 rounded-xl text-on-surface-variant hover:text-error hover:bg-error/10 transition-all cursor-pointer"
+            title="Cerrar menú de navegación"
+            aria-label="Cerrar menú de navegación"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Navigation Items */}
+        {/* Navigation Items Organized by Primary & More */}
         <nav className="flex-1 py-3 overflow-y-auto overflow-x-hidden bg-white">
+          {/* Primary Navigation Section */}
           {!isCollapsed && (
-            <div className="px-5 mb-2 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-50">
-              Navegación
+            <div className="px-5 mb-1 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-50">
+              Principal
             </div>
           )}
 
           <div className="space-y-1">
-            {filteredItems.map((item) => (
+            {primaryItems.map((item) => (
               <NavLink
                 key={item.path}
                 to={item.path}
@@ -187,6 +209,54 @@ export function SideNavBar() {
               </NavLink>
             ))}
           </div>
+
+          {/* Secondary "Más" Section */}
+          {secondaryItems.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-outline-variant/40">
+              {!isCollapsed && (
+                <div className="px-5 mb-1 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-50 flex items-center gap-1.5">
+                  <MoreHorizontal size={11} />
+                  <span>Más Opciones</span>
+                </div>
+              )}
+              <div className="space-y-1">
+                {secondaryItems.map((item) => (
+                  <NavLink
+                    key={item.path}
+                    to={item.path}
+                    onClick={closeMobile}
+                    title={isCollapsed ? item.label : undefined}
+                    className={({ isActive }) => cn(
+                      "flex items-center text-[12px] font-bold transition-all duration-200 rounded-xl",
+                      isCollapsed
+                        ? "justify-center p-2.5 mx-1.5"
+                        : "px-3.5 py-2.5 mx-2.5",
+                      isActive 
+                        ? "bg-primary text-white shadow-xs"
+                        : "text-on-surface-variant hover:bg-surface hover:text-on-surface"
+                    )}
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <item.icon 
+                          className={cn(
+                            "w-4 h-4 shrink-0 transition-colors",
+                            !isCollapsed && "mr-3",
+                            isActive 
+                              ? "text-white" 
+                              : "text-on-surface-variant opacity-70"
+                          )} 
+                        />
+                        {!isCollapsed && (
+                          <span className="tracking-tight truncate">{item.label}</span>
+                        )}
+                      </>
+                    )}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+          )}
         </nav>
 
         {/* User Footer: Profile, Role Badge & Logout */}
@@ -220,7 +290,7 @@ export function SideNavBar() {
             title={isCollapsed ? "Mi Perfil" : undefined}
             className={({ isActive }) => cn(
               "flex items-center text-[12px] font-bold rounded-lg transition-all duration-200",
-              isCollapsed ? "justify-center p-2" : "px-3 py-1.5",
+              isCollapsed ? "justify-center p-2" : "px-3 py-2",
               isActive 
                 ? "bg-primary text-white shadow-xs" 
                 : "text-on-surface-variant hover:bg-surface hover:text-on-surface"
@@ -247,7 +317,7 @@ export function SideNavBar() {
             title={isCollapsed ? "Cerrar Sesión" : undefined}
             className={cn(
               "flex items-center w-full text-[12px] font-bold rounded-lg text-error hover:bg-error/10 transition-all duration-200 cursor-pointer",
-              isCollapsed ? "justify-center p-2" : "px-3 py-1.5 text-left"
+              isCollapsed ? "justify-center p-2" : "px-3 py-2 text-left"
             )}
           >
             <LogOut className={cn("w-4 h-4 shrink-0 text-error/80", !isCollapsed && "mr-2.5")} />

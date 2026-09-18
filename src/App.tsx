@@ -51,15 +51,7 @@ function ProtectedRoute({ children, permission }: { children: React.ReactNode, p
 }
 
 function AppContent() {
-  const { user, profile, loading, loginLocalUser } = useAuth();
-  const [showEscapeHatch, setShowEscapeHatch] = useState(false);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowEscapeHatch(true);
-    }, 1500);
-    return () => clearTimeout(timer);
-  }, []);
+  const { user, profile, loading } = useAuth();
 
   if (loading) {
     return (
@@ -75,14 +67,6 @@ function AppContent() {
           <div className="w-full bg-outline-variant/40 h-1.5 rounded-full overflow-hidden">
             <div className="bg-primary h-full rounded-full w-2/3 animate-[pulse_1s_ease-in-out_infinite]"></div>
           </div>
-          {showEscapeHatch && (
-            <button
-              onClick={() => loginLocalUser('pablosadura@gmail.com', 'Pablo Sadura (Administrador)', 'admin')}
-              className="mt-4 px-4 py-2 bg-primary text-white text-xs font-semibold rounded-xl hover:bg-primary/90 transition-all cursor-pointer shadow-sm"
-            >
-              Acceso Inmediato
-            </button>
-          )}
         </div>
       </div>
     );

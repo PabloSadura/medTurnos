@@ -23,8 +23,11 @@ import {
   timeToMinutes,
   getDayOccupiedSlots,
   getSuggestedAvailableSlots,
+  getEffectiveDuration,
+  computeOverlappingLayout,
   DayOccupiedSlot
 } from '../lib/agendaUtils';
+import { saveAppointmentWithPersistenceCheck } from '../lib/appointmentService';
 import { SuggestedSlotsPicker } from '../components/SuggestedSlotsPicker';
 
 const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
@@ -147,11 +150,7 @@ export function Agenda() {
 
   // Duration calculations - completely automatic based on selected treatment
   const effectiveNewAptDuration = useMemo(() => {
-    const matched = treatments.find(t => t.name === newApt.type);
-    if (matched?.duration && Number(matched.duration) > 0) {
-      return Number(matched.duration);
-    }
-    return newApt.duration && newApt.duration > 0 ? Number(newApt.duration) : 30;
+    return getEffectiveDuration(newApt.type, newApt.duration, treatments, 30);
   }, [newApt.type, newApt.duration, treatments]);
 
   // Calculate outside working hours with duration awareness
@@ -165,8 +164,8 @@ export function Agenda() {
 
   const isNewAptOverturn = useMemo(() => {
     if (newApt.manualOverturn) return Boolean(newApt.isOverturn);
-    return newAptOutsideCheck.isOutside || Boolean(newApt.isOverturn);
-  }, [newApt.manualOverturn, newApt.isOverturn, newAptOutsideCheck.isOutside]);
+    return newAptOutsideCheck.isOutside || newAptCollision.hasConflict || Boolean(newApt.isOverturn);
+  }, [newApt.manualOverturn, newApt.isOverturn, newAptOutsideCheck.isOutside, newAptCollision.hasConflict]);
 
   // Occupied slots and suggested available free slots for new appointment date
   const newAptOccupiedSlots = useMemo(() => {
@@ -179,11 +178,7 @@ export function Agenda() {
 
   // Duration calculations for edit appointment - completely automatic based on selected treatment
   const effectiveEditAptDuration = useMemo(() => {
-    const matched = treatments.find(t => t.name === editAptData.type);
-    if (matched?.duration && Number(matched.duration) > 0) {
-      return Number(matched.duration);
-    }
-    return editAptData.duration && editAptData.duration > 0 ? Number(editAptData.duration) : 30;
+    return getEffectiveDuration(editAptData.type, editAptData.duration, treatments, 30);
   }, [editAptData.type, editAptData.duration, treatments]);
 
   // Calculate outside working hours with duration awareness for edited appointment
@@ -197,8 +192,8 @@ export function Agenda() {
 
   const isEditAptOverturn = useMemo(() => {
     if (editAptData.manualOverturn) return Boolean(editAptData.isOverturn);
-    return editAptOutsideCheck.isOutside || Boolean(editAptData.isOverturn);
-  }, [editAptData.manualOverturn, editAptData.isOverturn, editAptOutsideCheck.isOutside]);
+    return editAptOutsideCheck.isOutside || editAptCollision.hasConflict || Boolean(editAptData.isOverturn);
+  }, [editAptData.manualOverturn, editAptData.isOverturn, editAptOutsideCheck.isOutside, editAptCollision.hasConflict]);
 
   // Occupied slots and suggested available free slots for edit appointment date
   const editAptOccupiedSlots = useMemo(() => {
@@ -266,7 +261,8 @@ export function Agenda() {
     const initialDuration = matchedTreatment?.duration ? Number(matchedTreatment.duration) : 30;
     const finalDate = targetDate || formatLocalDate(selectedDate || new Date());
     const availableSlots = getSuggestedAvailableSlots(finalDate, initialDuration, appointments, workingHours);
-    const initialTime = targetTime || (availableSlots.length > 0 ? availableSlots[0].time : '09:00');
+    const freeSlot = availableSlots.find(s => !s.isConflict);
+    const initialTime = targetTime || (freeSlot ? freeSlot.time : (availableSlots.length > 0 ? availableSlots[0].time : '09:00'));
 
     setNewApt({
       patientId: '',
@@ -426,24 +422,11 @@ export function Agenda() {
       const matchedTreatment = treatments.find(t => t.name === newApt.type);
       const finalDuration = effectiveNewAptDuration;
 
-      // 1. Strict Overlap / Collision Prevention: Block if another appointment or treatment is already occupying the slot
-      const collision = checkScheduleCollision(newApt.date, newApt.time, finalDuration, appointments);
-      if (collision.hasConflict) {
-        showToast(collision.message || 'No se pueden agendar 2 turnos en el mismo horario.', 'error');
-        return;
-      }
-
-      // 2. Sobre Turno Detection: outside working hours qualifies as Sobre Turno
-      const outsideCheck = checkIsOutsideWorkingHours(newApt.date, newApt.time, workingHours, finalDuration);
-      const isOverturn = Boolean(newApt.manualOverturn ? newApt.isOverturn : (newApt.isOverturn || outsideCheck.isOutside));
-      const endTime = calculateEndTime(newApt.time, finalDuration);
-
       const isPkg = Boolean(newApt.isPackageSession && newApt.patientPackageId);
       const treatmentPrice = isPkg ? 0 : (matchedTreatment?.cost ? Number(matchedTreatment.cost) : 0);
-
       const patientPhone = isCreatingNewPatient ? newPatientData.phone : (patient?.phone || '');
 
-      await addDoc(collection(db, 'appointments'), {
+      const result = await saveAppointmentWithPersistenceCheck({
         ...newApt,
         patientId,
         patientName,
@@ -456,26 +439,32 @@ export function Agenda() {
         price: treatmentPrice,
         paidAmount: treatmentPrice,
         isPackageSession: isPkg,
-        patientPackageId: isPkg ? newApt.patientPackageId : null,
-        packageName: isPkg ? (newApt.packageName || null) : null,
+        patientPackageId: isPkg ? newApt.patientPackageId : undefined,
+        packageName: isPkg ? (newApt.packageName || undefined) : undefined,
         userId: ownerId,
         status: 'pendiente',
         duration: finalDuration,
-        endTime,
-        isOverturn,
-        isOverturnTag: isOverturn ? 'Sobre Turno' : null,
         attendance: attendanceCount,
-        startTime: appointmentDate, // Save as JS Date, Firestore converts to Timestamp
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
+        treatmentsList: treatments,
+        workingHours
+      }, false);
 
       setIsNewAppointmentOpen(false);
       setIsCreatingNewPatient(false);
       setNewPatientData({ firstName: '', lastName: '', name: '', phone: '', idNumber: '', birthDate: '' });
       setNewApt({ ...newApt, patientId: '', patientName: '', patientFirstName: '', patientLastName: '', notes: '', isPackageSession: false, patientPackageId: '', packageName: '', isOverturn: false, manualOverturn: false });
       setSearchTerm('');
-      showToast(isOverturn ? '⚡ Turno guardado con etiqueta SOBRE TURNO' : 'Turno agendado correctamente', 'success');
+
+      if (result.isOverturn) {
+        showToast(
+          result.conflictSummary 
+            ? `⚡ Turno guardado como SOBRETURNO: ${result.conflictSummary}` 
+            : '⚡ Turno guardado como SOBRETURNO',
+          'success'
+        );
+      } else {
+        showToast('Turno agendado correctamente', 'success');
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'appointments');
     }
@@ -645,35 +634,35 @@ export function Agenda() {
       const matchedTreatment = treatments.find(t => t.name === editAptData.type);
       const finalDuration = effectiveEditAptDuration;
 
-      // 1. Strict Overlap / Collision Prevention: Block if another appointment or treatment is already occupying the slot
-      const collision = checkScheduleCollision(editAptData.date, editAptData.time, finalDuration, appointments, editAptData.id);
-      if (collision.hasConflict) {
-        showToast(collision.message || 'No se pueden agendar 2 turnos en el mismo horario.', 'error');
-        return;
-      }
-
-      // 2. Sobre Turno Detection: outside working hours qualifies as Sobre Turno
-      const outsideCheck = checkIsOutsideWorkingHours(editAptData.date, editAptData.time, workingHours, finalDuration);
-      const isOverturn = Boolean(editAptData.manualOverturn ? editAptData.isOverturn : (editAptData.isOverturn || outsideCheck.isOutside));
-      const endTime = calculateEndTime(editAptData.time, finalDuration);
-
-      await updateDoc(doc(db, 'appointments', editAptData.id), {
+      const result = await saveAppointmentWithPersistenceCheck({
+        id: editAptData.id,
+        patientId: editAptData.patientId || '',
+        patientName: editAptData.patientName || '',
         date: editAptData.date,
         time: editAptData.time,
-        endTime,
         duration: finalDuration,
-        isOverturn,
-        isOverturnTag: isOverturn ? 'Sobre Turno' : null,
         type: editAptData.type,
         treatment: editAptData.type,
         treatmentId: matchedTreatment?.id || '',
         notes: editAptData.notes || '',
-        startTime: appointmentDate,
-        updatedAt: serverTimestamp()
-      });
+        userId: ownerId,
+        manualOverturn: editAptData.manualOverturn,
+        treatmentsList: treatments,
+        workingHours
+      }, true);
 
       setIsEditModalOpen(false);
-      showToast(isOverturn ? '⚡ Turno actualizado con etiqueta SOBRE TURNO' : 'Fecha y hora del turno actualizadas correctamente', 'success');
+
+      if (result.isOverturn) {
+        showToast(
+          result.conflictSummary
+            ? `⚡ Turno actualizado como SOBRETURNO: ${result.conflictSummary}`
+            : '⚡ Turno reprogramado como SOBRETURNO',
+          'success'
+        );
+      } else {
+        showToast('Fecha y hora del turno actualizadas correctamente', 'success');
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `appointments/${editAptData.id}`);
     }
@@ -1023,19 +1012,21 @@ export function Agenda() {
                         {hours.map(hour => (
                           <div key={hour} className="h-[60px] border-b border-outline-variant border-dashed opacity-20"></div>
                         ))}
-                        {appointments
-                          .filter(a => a.date === formatLocalDate(dayDate))
-                          .map((apt) => {
+                        {(() => {
+                          const dayApts = appointments.filter(a => a.date === formatLocalDate(dayDate));
+                          const layoutMap = computeOverlappingLayout(dayApts);
+                          return dayApts.map((apt) => {
                             const [h, m] = apt.time.split(':').map(Number);
                             if (h < startHour || h > hours[hours.length - 1]) return null;
                             const duration = apt.duration || 30;
                             const calculatedEnd = apt.endTime || calculateEndTime(apt.time, duration);
+                            const layout = layoutMap[apt.id] || { colIndex: 0, totalCols: 1, leftPercent: 0, widthPercent: 100 };
                             return (
                               <div
                                 key={apt.id}
                                 onClick={() => handleAppointmentClick(apt)}
                                 className={cn(
-                                  "absolute left-1 right-1 p-1.5 sm:p-2 rounded-lg border-l-4 shadow-sm cursor-pointer z-10 transition-all hover:scale-[1.02] overflow-hidden",
+                                  "absolute p-1.5 sm:p-2 rounded-lg border-l-4 shadow-sm cursor-pointer transition-all hover:scale-[1.02] overflow-hidden",
                                   apt.isOverturn ? "ring-2 ring-purple-400 bg-purple-50/95 border-l-purple-600 text-purple-950" :
                                   apt.status === 'pendiente' ? "bg-amber-50 border-amber-400 text-amber-700" :
                                   apt.status === 'confirmed' ? "bg-primary-container/20 border-primary text-primary" : 
@@ -1045,7 +1036,10 @@ export function Agenda() {
                                 )}
                                 style={{
                                   top: `${((h - startHour) * 60 + m)}px`,
-                                  height: `${Math.max(28, duration - 2)}px`
+                                  height: `${Math.max(28, duration - 2)}px`,
+                                  left: `calc(2px + ${layout.leftPercent}% * 0.94)`,
+                                  width: `calc(${layout.widthPercent}% * 0.94)`,
+                                  zIndex: (apt.isOverturn ? 20 : 10) + layout.colIndex
                                 }}
                               >
                                 <div className="flex items-center justify-between gap-1">
@@ -1062,8 +1056,8 @@ export function Agenda() {
                                 </p>
                               </div>
                             );
-                          })
-                        }
+                          });
+                        })()}
                       </div>
                     </div>
                   ))}
@@ -1084,49 +1078,56 @@ export function Agenda() {
                   {hours.map(hour => (
                     <div key={hour} className="h-[100px] border-b border-outline-variant border-dashed opacity-30"></div>
                   ))}
-                  {selectedDateAppointments.map((apt) => {
-                    const [h, m] = apt.time.split(':').map(Number);
-                    if (h < startHour || h > hours[hours.length - 1]) return null;
-                    const duration = apt.duration || 30;
-                    const calculatedEnd = apt.endTime || calculateEndTime(apt.time, duration);
-                    return (
-                      <motion.div
-                        key={apt.id}
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        onClick={() => handleAppointmentClick(apt)}
-                        className={cn(
-                          "absolute left-2 right-2 sm:left-4 sm:right-8 p-2.5 sm:p-4 rounded-xl border-l-[4px] sm:border-l-[6px] shadow-md cursor-pointer z-10 flex flex-col justify-center gap-1 transition-all hover:translate-x-1",
-                          apt.isOverturn ? "ring-2 ring-purple-400 bg-purple-50/95 border-l-purple-600 text-purple-950 shadow-purple-900/10" :
-                          apt.status === 'pendiente' ? "bg-amber-50 border-amber-400 text-amber-700 shadow-amber-950/5" :
-                          apt.status === 'confirmed' ? "bg-primary-container/30 border-primary text-primary" : 
-                          apt.status === 'in-session' ? "bg-tertiary-container/30 border-tertiary text-tertiary shadow-tertiary/10" : 
-                          apt.status === 'finished' ? "bg-secondary-container/30 border-secondary text-secondary" :
-                          "bg-surface border-outline-variant text-on-surface-variant opacity-80"
-                        )}
-                        style={{
-                          top: `${((h - startHour) * 100 + (m / 60) * 100)}px`,
-                          height: `${Math.max(48, ((duration) / 60) * 100 - 4)}px`
-                        }}
-                      >
-                        <div className="flex justify-between items-center gap-1">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-[10px] sm:text-[12px] font-black uppercase tracking-wider opacity-80 truncate">
-                              {apt.time} - {calculatedEnd} hs ({duration}m) • {apt.type || apt.treatment}
-                            </span>
-                            {apt.isOverturn && (
-                              <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-purple-200 text-purple-900 border border-purple-300 flex items-center gap-1 shrink-0">
-                                <Zap size={10} className="text-purple-600 fill-purple-600" />
-                                Sobre Turno
+                  {(() => {
+                    const dayLayoutMap = computeOverlappingLayout(selectedDateAppointments);
+                    return selectedDateAppointments.map((apt) => {
+                      const [h, m] = apt.time.split(':').map(Number);
+                      if (h < startHour || h > hours[hours.length - 1]) return null;
+                      const duration = apt.duration || 30;
+                      const calculatedEnd = apt.endTime || calculateEndTime(apt.time, duration);
+                      const layout = dayLayoutMap[apt.id] || { colIndex: 0, totalCols: 1, leftPercent: 0, widthPercent: 100 };
+                      return (
+                        <motion.div
+                          key={apt.id}
+                          initial={{ opacity: 0, x: -20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          onClick={() => handleAppointmentClick(apt)}
+                          className={cn(
+                            "absolute p-2.5 sm:p-4 rounded-xl border-l-[4px] sm:border-l-[6px] shadow-md cursor-pointer flex flex-col justify-center gap-1 transition-all hover:translate-x-0.5 overflow-hidden",
+                            apt.isOverturn ? "ring-2 ring-purple-400 bg-purple-50/95 border-l-purple-600 text-purple-950 shadow-purple-900/10" :
+                            apt.status === 'pendiente' ? "bg-amber-50 border-amber-400 text-amber-700 shadow-amber-950/5" :
+                            apt.status === 'confirmed' ? "bg-primary-container/30 border-primary text-primary" : 
+                            apt.status === 'in-session' ? "bg-tertiary-container/30 border-tertiary text-tertiary shadow-tertiary/10" : 
+                            apt.status === 'finished' ? "bg-secondary-container/30 border-secondary text-secondary" :
+                            "bg-surface border-outline-variant text-on-surface-variant opacity-80"
+                          )}
+                          style={{
+                            top: `${((h - startHour) * 100 + (m / 60) * 100)}px`,
+                            height: `${Math.max(48, ((duration) / 60) * 100 - 4)}px`,
+                            left: `calc(8px + ${layout.leftPercent}% * 0.94)`,
+                            width: `calc(${layout.widthPercent}% * 0.94)`,
+                            zIndex: (apt.isOverturn ? 25 : 10) + layout.colIndex
+                          }}
+                        >
+                          <div className="flex justify-between items-center gap-1">
+                            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                              <span className="text-[10px] sm:text-[12px] font-black uppercase tracking-wider opacity-80 truncate">
+                                {apt.time} - {calculatedEnd} hs ({duration}m) • {apt.type || apt.treatment}
                               </span>
-                            )}
+                              {apt.isOverturn && (
+                                <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-purple-200 text-purple-900 border border-purple-300 flex items-center gap-1 shrink-0">
+                                  <Zap size={10} className="text-purple-600 fill-purple-600" />
+                                  Sobre Turno
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[9px] sm:text-[10px] font-black bg-white/70 px-1.5 py-0.5 rounded capitalize shrink-0">{apt.status}</span>
                           </div>
-                          <span className="text-[9px] sm:text-[10px] font-black bg-white/70 px-1.5 py-0.5 rounded capitalize shrink-0">{apt.status}</span>
-                        </div>
-                        <h4 className="text-[13px] sm:text-[16px] font-black tracking-tight truncate">{apt.patientName}</h4>
-                      </motion.div>
-                    );
-                  })}
+                          <h4 className="text-[13px] sm:text-[16px] font-black tracking-tight truncate">{apt.patientName}</h4>
+                        </motion.div>
+                      );
+                    });
+                  })()}
                 </div>
               </div>
             )}
@@ -1796,18 +1797,35 @@ export function Agenda() {
             workingHours={workingHours}
           />
 
-          {/* ALERTA DE SUPERPOSICIÓN / COLISIÓN DE TURNOS */}
+          {/* AVISO INFORMATIVO NO BLOQUEANTE DE SUPERPOSICIÓN / SOBRETURNO */}
           {newAptCollision.hasConflict && (
-            <div className="p-3.5 bg-red-50 border-2 border-red-300 rounded-xl space-y-1.5 text-red-950 animate-pulse">
-              <div className="flex items-center gap-2 font-black text-red-700 text-xs">
-                <AlertTriangle size={16} className="text-red-600 shrink-0" />
-                <span>HORARIO BLOQUEADO — SUPERPOSICIÓN DE TURNOS</span>
+            <div className="p-3.5 bg-purple-50/95 border border-purple-300 rounded-xl space-y-2 text-purple-950 animate-in fade-in">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-black flex items-center gap-1.5 text-purple-900 text-[12px]">
+                  <Zap size={15} className="text-purple-600 fill-purple-600 shrink-0" />
+                  Superposición horaria detectada
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-purple-200 text-purple-900 border border-purple-300">
+                  Sobreturno Permitido
+                </span>
               </div>
-              <p className="text-[12px] font-semibold text-red-900 leading-snug">
-                {newAptCollision.message}
+              <p className="text-[12px] text-purple-900 font-medium leading-snug">
+                {newAptCollision.conflictSummary || newAptCollision.message}
               </p>
-              <p className="text-[10px] text-red-700 font-bold uppercase tracking-wider">
-                Seleccione uno de los horarios sugeridos disponibles arriba para evitar la superposición.
+              {newAptCollision.detailedConflicts && newAptCollision.detailedConflicts.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  {newAptCollision.detailedConflicts.map(conf => (
+                    <div key={conf.id} className="text-[11px] bg-white/80 px-2.5 py-1 rounded-lg border border-purple-200 flex items-center justify-between text-purple-950">
+                      <span className="font-bold truncate">{conf.patientName}</span>
+                      <span className="font-mono text-purple-700 text-[10px] font-bold shrink-0">
+                        {conf.time} - {conf.endTime} hs ({conf.treatment})
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-[10px] text-purple-800 italic">
+                La agenda no bloquea la operación: el turno se guardará válidamente clasificado como <strong>SOBRETURNO</strong>.
               </p>
             </div>
           )}
@@ -1969,20 +1987,18 @@ export function Agenda() {
             </button>
             <button 
               type="submit"
-              disabled={(!isCreatingNewPatient && !newApt.patientId) || newAptCollision.hasConflict}
+              disabled={!isCreatingNewPatient && !newApt.patientId}
               className={cn(
                 "flex-1 px-4 py-2.5 text-white text-[12px] font-bold rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider",
-                newAptCollision.hasConflict
-                  ? "bg-red-600 opacity-60 cursor-not-allowed"
-                  : isNewAptOverturn
+                newAptCollision.hasConflict || isNewAptOverturn
                   ? "bg-purple-700 hover:bg-purple-800"
                   : "bg-primary hover:bg-primary/90"
               )}
             >
               {newAptCollision.hasConflict ? (
                 <>
-                  <AlertTriangle size={14} />
-                  HORARIO OCUPADO
+                  <Zap size={14} className="fill-white" />
+                  GUARDAR COMO SOBRETURNO
                 </>
               ) : isNewAptOverturn ? (
                 <>
@@ -2065,19 +2081,40 @@ export function Agenda() {
             </div>
 
             {selectedAppointment.isOverturn && (
-              <div className="p-3.5 bg-purple-50 rounded-xl border border-purple-200 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-purple-200 text-purple-900 flex items-center justify-center shrink-0">
-                    <Zap size={16} className="fill-purple-700 text-purple-700" />
+              <div className="p-3.5 bg-purple-50 rounded-xl border border-purple-200 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-purple-200 text-purple-900 flex items-center justify-center shrink-0">
+                      <Zap size={16} className="fill-purple-700 text-purple-700" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-purple-900">Turno de Excepción</p>
+                      <p className="text-[12px] font-bold text-purple-950">
+                        {selectedAppointment.overturnReason || 'Atención registrada con clasificación de SOBRETURNO'}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-purple-900">Turno de Excepción</p>
-                    <p className="text-[12px] font-bold text-purple-950">Atención registrada con etiqueta <strong>Sobre Turno</strong> (fuera del horario habitual)</p>
-                  </div>
+                  <span className="text-[10px] font-black text-purple-900 bg-white px-2.5 py-1 rounded-md border border-purple-300 shadow-2xs shrink-0">
+                    ⚡ SOBRE TURNO
+                  </span>
                 </div>
-                <span className="text-[10px] font-black text-purple-900 bg-white px-2.5 py-1 rounded-md border border-purple-300 shadow-2xs shrink-0">
-                  ⚡ SOBRE TURNO
-                </span>
+                {selectedAppointment.overlappingAppointmentIds && selectedAppointment.overlappingAppointmentIds.length > 0 && (
+                  <div className="pt-1.5 border-t border-purple-200/80 text-[11px] text-purple-900">
+                    <p className="font-semibold text-[10px] uppercase tracking-wider mb-1 opacity-80">
+                      Coincide en horario con ({selectedAppointment.overlappingAppointmentIds.length}) turno(s):
+                    </p>
+                    <div className="space-y-1">
+                      {appointments
+                        .filter(a => selectedAppointment.overlappingAppointmentIds?.includes(a.id))
+                        .map(conf => (
+                          <div key={conf.id} className="bg-white/80 px-2 py-1 rounded border border-purple-200 flex justify-between items-center text-[11px]">
+                            <span className="font-bold">{conf.patientName}</span>
+                            <span className="font-mono text-[10px] text-purple-800 font-semibold">{conf.time} - {conf.endTime || calculateEndTime(conf.time, conf.duration || 30)} hs</span>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2297,18 +2334,35 @@ export function Agenda() {
             workingHours={workingHours}
           />
 
-          {/* ALERTA DE SUPERPOSICIÓN / COLISIÓN DE TURNOS */}
+          {/* AVISO INFORMATIVO NO BLOQUEANTE DE SUPERPOSICIÓN / SOBRETURNO */}
           {editAptCollision.hasConflict && (
-            <div className="p-3.5 bg-red-50 border-2 border-red-300 rounded-xl space-y-1.5 text-red-950 animate-pulse">
-              <div className="flex items-center gap-2 font-black text-red-700 text-xs">
-                <AlertTriangle size={16} className="text-red-600 shrink-0" />
-                <span>HORARIO BLOQUEADO — SUPERPOSICIÓN DE TURNOS</span>
+            <div className="p-3.5 bg-purple-50/95 border border-purple-300 rounded-xl space-y-2 text-purple-950 animate-in fade-in">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-black flex items-center gap-1.5 text-purple-900 text-[12px]">
+                  <Zap size={15} className="text-purple-600 fill-purple-600 shrink-0" />
+                  Superposición horaria detectada
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-purple-200 text-purple-900 border border-purple-300">
+                  Sobreturno Permitido
+                </span>
               </div>
-              <p className="text-[12px] font-semibold text-red-900 leading-snug">
-                {editAptCollision.message}
+              <p className="text-[12px] text-purple-900 font-medium leading-snug">
+                {editAptCollision.conflictSummary || editAptCollision.message}
               </p>
-              <p className="text-[10px] text-red-700 font-bold uppercase tracking-wider">
-                Seleccione uno de los horarios sugeridos disponibles arriba para evitar la superposición.
+              {editAptCollision.detailedConflicts && editAptCollision.detailedConflicts.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  {editAptCollision.detailedConflicts.map(conf => (
+                    <div key={conf.id} className="text-[11px] bg-white/80 px-2.5 py-1 rounded-lg border border-purple-200 flex items-center justify-between text-purple-950">
+                      <span className="font-bold truncate">{conf.patientName}</span>
+                      <span className="font-mono text-purple-700 text-[10px] font-bold shrink-0">
+                        {conf.time} - {conf.endTime} hs ({conf.treatment})
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-[10px] text-purple-800 italic">
+                La agenda permite guardar el turno reprogramado como <strong>SOBRETURNO</strong> sin bloquear la operación.
               </p>
             </div>
           )}
@@ -2414,20 +2468,17 @@ export function Agenda() {
             </button>
             <button
               type="submit"
-              disabled={editAptCollision.hasConflict}
               className={cn(
                 "flex-1 px-4 py-2.5 text-white text-[12px] font-bold rounded-lg shadow-sm transition-all uppercase tracking-widest flex items-center justify-center gap-2",
-                editAptCollision.hasConflict
-                  ? "bg-red-600 opacity-60 cursor-not-allowed"
-                  : isEditAptOverturn
+                editAptCollision.hasConflict || isEditAptOverturn
                   ? "bg-purple-700 hover:bg-purple-800"
                   : "bg-primary hover:bg-primary/90"
               )}
             >
               {editAptCollision.hasConflict ? (
                 <>
-                  <AlertTriangle size={15} />
-                  HORARIO OCUPADO
+                  <Zap size={15} className="fill-white" />
+                  Guardar como Sobreturno
                 </>
               ) : isEditAptOverturn ? (
                 <>
