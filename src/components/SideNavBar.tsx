@@ -43,40 +43,48 @@ export function SideNavBar() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isMobileOpen, closeMobile]);
 
-  const { primaryItems, secondaryItems } = useMemo(() => {
+  const { operationItems, clinicalItems, adminItems } = useMemo(() => {
     const isAdmin = profile?.role === 'admin';
-    const all = isAdmin 
-      ? [
-          { icon: Terminal, label: 'Control Maestro', path: '/system/dashboard', id: 'sys_dashboard', primary: true },
-          { icon: CalendarDays, label: 'Agenda Diaria', path: '/agenda', id: 'agenda', primary: true },
-          { icon: Users, label: 'Pacientes', path: '/patients', id: 'patients', primary: true },
-          { icon: MessageSquare, label: 'Recordatorios', path: '/reminders', id: 'reminders', primary: true },
-          { icon: LayoutDashboard, label: 'Panel Clínico', path: '/medical/dashboard', id: 'dashboard', primary: true },
-          { icon: Stethoscope, label: 'Tratamientos', path: '/treatments', id: 'treatments', primary: false },
-          { icon: Package, label: 'Inventario', path: '/inventory', id: 'inventory', primary: false },
-          { icon: Settings, label: 'Administración', path: '/admin', id: 'admin', primary: false },
+    if (isAdmin) {
+      // El administrador tiene acceso exclusivamente al panel de control de administración global
+      // Todas las demás opciones (Agenda, Pacientes, Tratamientos, Inventario, Avisos, Panel Clínico) son para los profesionales
+      return {
+        operationItems: [],
+        clinicalItems: [],
+        adminItems: [
+          { 
+            icon: Terminal, 
+            label: 'Panel de Control', 
+            path: '/system/dashboard', 
+            id: 'sys_dashboard', 
+            subtitle: 'Gestión global y suscripciones' 
+          },
         ]
-      : NAV_ITEMS.filter(item => {
-          if (permissions.includes(item.id)) return true;
-          if (permissions.includes('all')) {
-            return !item.id.startsWith('sys_');
-          }
-          return false;
-        }).map(item => ({
-          ...item,
-          primary: ['agenda', 'patients', 'reminders', 'dashboard', 'assistant_agenda'].includes(item.id)
-        }));
+      };
+    }
+
+    const allowed = NAV_ITEMS.filter(item => {
+      if (permissions.includes(item.id)) return true;
+      if (permissions.includes('all')) {
+        return !item.id.startsWith('sys_');
+      }
+      return false;
+    });
 
     return {
-      primaryItems: all.filter(i => i.primary),
-      secondaryItems: all.filter(i => !i.primary)
+      operationItems: allowed.filter(i => ['agenda', 'patients', 'treatments', 'inventory', 'reminders', 'assistant_agenda'].includes(i.id)),
+      clinicalItems: allowed.filter(i => ['dashboard'].includes(i.id)).map(i => ({ ...i, subtitle: 'Métricas clínicas y seguimiento' })),
+      adminItems: allowed.filter(i => ['admin', 'sys_dashboard'].includes(i.id)).map(i => ({
+        ...i,
+        subtitle: i.id === 'sys_dashboard' ? 'Control global' : 'Gestión y staff'
+      }))
     };
   }, [permissions, profile?.role]);
 
   const userRoleLabel = useMemo(() => {
-    if (profile?.role === 'admin') return 'Administrador';
-    if (profile?.role === 'secretary') return 'Secretaría';
-    return 'Profesional';
+    if (profile?.role === 'admin') return 'Superadmin · Toda la org.';
+    if (profile?.role === 'secretary') return 'Staff Administrativo';
+    return 'Profesional Clínico';
   }, [profile?.role]);
 
   return (
@@ -164,63 +172,18 @@ export function SideNavBar() {
           </button>
         </div>
 
-        {/* Navigation Items Organized by Primary & More */}
-        <nav className="flex-1 py-3 overflow-y-auto overflow-x-hidden bg-white">
-          {/* Primary Navigation Section */}
-          {!isCollapsed && (
-            <div className="px-5 mb-1 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-50">
-              Principal
-            </div>
-          )}
-
-          <div className="space-y-1">
-            {primaryItems.map((item) => (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                onClick={closeMobile}
-                title={isCollapsed ? item.label : undefined}
-                className={({ isActive }) => cn(
-                  "flex items-center text-[12px] font-bold transition-all duration-200 rounded-xl",
-                  isCollapsed
-                    ? "justify-center p-2.5 mx-1.5"
-                    : "px-3.5 py-2.5 mx-2.5",
-                  isActive 
-                    ? "bg-primary text-white shadow-xs"
-                    : "text-on-surface-variant hover:bg-surface hover:text-on-surface"
-                )}
-              >
-                {({ isActive }) => (
-                  <>
-                    <item.icon 
-                      className={cn(
-                        "w-4 h-4 shrink-0 transition-colors",
-                        !isCollapsed && "mr-3",
-                        isActive 
-                          ? "text-white" 
-                          : "text-on-surface-variant opacity-70"
-                      )} 
-                    />
-                    {!isCollapsed && (
-                      <span className="tracking-tight truncate">{item.label}</span>
-                    )}
-                  </>
-                )}
-              </NavLink>
-            ))}
-          </div>
-
-          {/* Secondary "Más" Section */}
-          {secondaryItems.length > 0 && (
-            <div className="mt-4 pt-3 border-t border-outline-variant/40">
+        {/* Navigation Items Organized by Operación, Supervisión Clínica & Administración */}
+        <nav className="flex-1 py-3 overflow-y-auto overflow-x-hidden bg-white space-y-4">
+          {/* 1. Operación (Solo para profesionales) */}
+          {operationItems.length > 0 && (
+            <div>
               {!isCollapsed && (
-                <div className="px-5 mb-1 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-50 flex items-center gap-1.5">
-                  <MoreHorizontal size={11} />
-                  <span>Más Opciones</span>
+                <div className="px-5 mb-1.5 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-60">
+                  Operación
                 </div>
               )}
-              <div className="space-y-1">
-                {secondaryItems.map((item) => (
+              <div className="space-y-0.5">
+                {operationItems.map((item) => (
                   <NavLink
                     key={item.path}
                     to={item.path}
@@ -230,7 +193,7 @@ export function SideNavBar() {
                       "flex items-center text-[12px] font-bold transition-all duration-200 rounded-xl",
                       isCollapsed
                         ? "justify-center p-2.5 mx-1.5"
-                        : "px-3.5 py-2.5 mx-2.5",
+                        : "px-3.5 py-2 mx-2.5",
                       isActive 
                         ? "bg-primary text-white shadow-xs"
                         : "text-on-surface-variant hover:bg-surface hover:text-on-surface"
@@ -249,6 +212,114 @@ export function SideNavBar() {
                         />
                         {!isCollapsed && (
                           <span className="tracking-tight truncate">{item.label}</span>
+                        )}
+                      </>
+                    )}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 2. Supervisión Clínica (Solo para profesionales) */}
+          {clinicalItems.length > 0 && (
+            <div className={cn(operationItems.length > 0 && "pt-2 border-t border-outline-variant/40")}>
+              {!isCollapsed && (
+                <div className="px-5 mb-1.5 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-60">
+                  Supervisión Clínica
+                </div>
+              )}
+              <div className="space-y-0.5">
+                {clinicalItems.map((item: any) => (
+                  <NavLink
+                    key={item.path}
+                    to={item.path}
+                    onClick={closeMobile}
+                    title={isCollapsed ? `${item.label} - ${item.subtitle || ''}` : item.subtitle}
+                    className={({ isActive }) => cn(
+                      "flex items-center text-[12px] font-bold transition-all duration-200 rounded-xl",
+                      isCollapsed
+                        ? "justify-center p-2.5 mx-1.5"
+                        : "px-3.5 py-2 mx-2.5",
+                      isActive 
+                        ? "bg-primary text-white shadow-xs"
+                        : "text-on-surface-variant hover:bg-surface hover:text-on-surface"
+                    )}
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <item.icon 
+                          className={cn(
+                            "w-4 h-4 shrink-0 transition-colors",
+                            !isCollapsed && "mr-3",
+                            isActive 
+                              ? "text-white" 
+                              : "text-on-surface-variant opacity-70"
+                          )} 
+                        />
+                        {!isCollapsed && (
+                          <div className="min-w-0">
+                            <span className="tracking-tight truncate block">{item.label}</span>
+                            {item.subtitle && (
+                              <span className="text-[10px] font-medium text-on-surface-variant/70 truncate block -mt-0.5">
+                                {item.subtitle}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 3. Panel de Control / Administración */}
+          {adminItems.length > 0 && (
+            <div className={cn((operationItems.length > 0 || clinicalItems.length > 0) && "pt-2 border-t border-outline-variant/40")}>
+              {!isCollapsed && (
+                <div className="px-5 mb-1.5 text-[9px] font-black uppercase tracking-[0.25em] text-on-surface-variant opacity-60">
+                  {profile?.role === 'admin' ? 'Panel de Control' : 'Administración'}
+                </div>
+              )}
+              <div className="space-y-0.5">
+                {adminItems.map((item: any) => (
+                  <NavLink
+                    key={item.path}
+                    to={item.path}
+                    onClick={closeMobile}
+                    title={isCollapsed ? `${item.label} - ${item.subtitle || ''}` : item.subtitle}
+                    className={({ isActive }) => cn(
+                      "flex items-center text-[12px] font-bold transition-all duration-200 rounded-xl",
+                      isCollapsed
+                        ? "justify-center p-2.5 mx-1.5"
+                        : "px-3.5 py-2 mx-2.5",
+                      isActive 
+                        ? "bg-primary text-white shadow-xs"
+                        : "text-on-surface-variant hover:bg-surface hover:text-on-surface"
+                    )}
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <item.icon 
+                          className={cn(
+                            "w-4 h-4 shrink-0 transition-colors",
+                            !isCollapsed && "mr-3",
+                            isActive 
+                              ? "text-white" 
+                              : "text-on-surface-variant opacity-70"
+                          )} 
+                        />
+                        {!isCollapsed && (
+                          <div className="min-w-0">
+                            <span className="tracking-tight truncate block">{item.label}</span>
+                            {item.subtitle && (
+                              <span className="text-[10px] font-medium text-on-surface-variant/70 truncate block -mt-0.5">
+                                {item.subtitle}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </>
                     )}

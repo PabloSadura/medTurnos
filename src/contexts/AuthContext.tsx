@@ -115,16 +115,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               if (data.role === 'admin') {
                 setIsStaff(false);
                 setOwnerId(firebaseUser.uid);
+                // El administrador solo accede al panel de control administrativo; las demás opciones son únicamente para los profesionales
                 setPermissions([
                   'sys_dashboard',
-                  'admin',
-                  'all',
-                  'dashboard',
-                  'agenda',
-                  'patients',
-                  'treatments',
-                  'inventory',
-                  'reminders'
+                  'admin'
                 ]);
                 setLoading(false);
                 return;

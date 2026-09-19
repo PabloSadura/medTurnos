@@ -41,8 +41,18 @@ function HomeRedirect() {
 }
 
 function ProtectedRoute({ children, permission }: { children: React.ReactNode, permission?: string }) {
-  const { permissions } = useAuth();
+  const { permissions, profile } = useAuth();
   
+  // Si el usuario es administrador y la ruta es de operaciones clínicas (solo para profesionales), redirigir al panel de control
+  if (profile?.role === 'admin' && permission && !['sys_dashboard', 'admin'].includes(permission)) {
+    return <Navigate to="/system/dashboard" replace />;
+  }
+
+  // Si el usuario es un profesional y trata de ingresar al panel maestro del sistema
+  if (profile?.role !== 'admin' && permission === 'sys_dashboard') {
+    return <Navigate to="/medical/dashboard" replace />;
+  }
+
   if (permission && !permissions.includes('all') && !permissions.includes(permission)) {
     return <Navigate to="/" replace />;
   }

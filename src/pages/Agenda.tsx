@@ -25,6 +25,7 @@ import {
   getSuggestedAvailableSlots,
   getEffectiveDuration,
   computeOverlappingLayout,
+  getAppointmentStatusStyles,
   DayOccupiedSlot
 } from '../lib/agendaUtils';
 import { saveAppointmentWithPersistenceCheck } from '../lib/appointmentService';
@@ -41,7 +42,7 @@ export function Agenda() {
   const [appointments, setAppointments] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
   const [treatments, setTreatments] = useState<any[]>([]);
-  const [view, setView] = useState<'day' | 'week' | 'month'>(() => typeof window !== 'undefined' && window.innerWidth < 768 ? 'day' : 'month');
+  const [view, setView] = useState<'day' | 'week' | 'month'>('month');
   const [workingHours, setWorkingHours] = useState<any>(null);
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
 
@@ -495,6 +496,11 @@ export function Agenda() {
 
   const handleUpdateStatus = async (status: string) => {
     if (!selectedAppointment) return;
+    const isAlreadyFinished = selectedAppointment.status === 'finished' || selectedAppointment.status === 'finalizado';
+    if (isAlreadyFinished) {
+      showToast('El turno ya se encuentra finalizado. No se permite volver a un estado anterior.', 'warning');
+      return;
+    }
     try {
       // User request: When changing status to 'in-session', automatically redirect to patients opening a new entry in evolutions
       if (status === 'in-session') {
@@ -604,6 +610,10 @@ export function Agenda() {
 
   const handleOpenEditAppointment = (apt: any, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (apt.status === 'finished' || apt.status === 'finalizado') {
+      showToast('No se puede modificar la fecha u hora de un turno ya finalizado.', 'warning');
+      return;
+    }
     const matched = treatments.find(t => t.name === (apt.type || apt.treatment));
     const initialDuration = Number(apt.duration) || (matched?.duration ? Number(matched.duration) : 30);
     setEditAptData({
@@ -868,21 +878,6 @@ export function Agenda() {
                 </button>
               </div>
             </div>
-
-            <div className="sm:hidden flex items-center gap-1 bg-surface border border-outline-variant rounded-lg p-1">
-              {(['day', 'week', 'month'] as const).map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setView(v)}
-                  className={cn(
-                    "px-2.5 py-1 rounded text-[11px] font-bold tracking-tight whitespace-nowrap transition-colors",
-                    view === v ? "bg-primary text-white shadow-2xs" : "text-on-surface-variant hover:text-on-surface"
-                  )}
-                >
-                  {v === 'day' ? 'Día' : v === 'week' ? 'Semana' : 'Mes'}
-                </button>
-              ))}
-            </div>
           </div>
 
           <div className="flex-1 overflow-auto bg-surface-dim">
@@ -921,20 +916,15 @@ export function Agenda() {
 
                       {/* Mobile Indicator Dots */}
                       <div className="w-full mt-1 flex sm:hidden items-center justify-center gap-0.5 flex-wrap">
-                        {dayAppointments.slice(0, 3).map((apt) => (
-                          <span 
-                            key={apt.id} 
-                            className={cn(
-                              "w-1.5 h-1.5 rounded-full shrink-0",
-                              apt.status === 'pendiente' ? "bg-amber-500" :
-                              apt.status === 'confirmed' ? "bg-primary" :
-                              apt.status === 'in-session' ? "bg-purple-600" :
-                              apt.status === 'finished' ? "bg-emerald-600" :
-                              apt.status === 'cancelado' ? "bg-red-500" :
-                              "bg-on-surface-variant"
-                            )} 
-                          />
-                        ))}
+                        {dayAppointments.slice(0, 3).map((apt) => {
+                          const styles = getAppointmentStatusStyles(apt.status);
+                          return (
+                            <span 
+                              key={apt.id} 
+                              className={cn("w-1.5 h-1.5 rounded-full shrink-0", styles.dotColor)} 
+                            />
+                          );
+                        })}
                         {dayAppointments.length > 3 && (
                           <span className="text-[8px] font-black text-on-surface-variant leading-none">
                             +{dayAppointments.length - 3}
@@ -946,32 +936,31 @@ export function Agenda() {
                       <div className="w-full space-y-1 hidden sm:block mt-1">
                         {dayAppointments
                           .slice(0, 3)
-                          .map((apt) => (
-                            <div 
-                              key={apt.id} 
-                              className={cn(
-                                "w-full px-1.5 py-0.5 rounded text-[10px] font-bold truncate border flex items-center gap-1",
-                                apt.isOverturn && "ring-1 ring-purple-400 bg-purple-50/80 text-purple-900 border-purple-200",
-                                !apt.isOverturn && (
-                                  apt.status === 'pendiente' ? "bg-amber-100/50 text-amber-700 border-amber-200" :
-                                  apt.status === 'confirmed' ? "bg-primary-container/30 text-primary border-primary/20" :
-                                  apt.status === 'in-session' ? "bg-tertiary-container/30 text-tertiary border-tertiary/20" :
-                                  apt.status === 'finished' ? "bg-secondary-container/30 text-secondary border-secondary/20" :
-                                  "bg-surface-dim text-on-surface-variant border-outline-variant"
-                                )
-                              )}
-                            >
-                              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-current" />
-                              {apt.isOverturn && (
-                                <span className="px-1 py-0.2 rounded bg-purple-200 text-purple-900 text-[8px] font-black uppercase shrink-0 flex items-center gap-0.5">
-                                  <Zap size={7} className="fill-purple-700 text-purple-700" />
-                                  Sobre Turno
-                                </span>
-                              )}
-                              {apt.isPackageSession && <Package size={9} className="shrink-0 text-emerald-600" />}
-                              <span className="truncate">{apt.patientName}</span>
-                            </div>
-                          ))
+                          .map((apt) => {
+                            const styles = getAppointmentStatusStyles(apt.status);
+                            return (
+                              <div 
+                                key={apt.id} 
+                                className={cn(
+                                  "w-full px-1.5 py-0.5 rounded text-[10px] font-bold truncate border flex items-center gap-1",
+                                  styles.bgLight,
+                                  styles.textColor,
+                                  styles.borderColor,
+                                  apt.isOverturn && "ring-1 ring-purple-400"
+                                )}
+                              >
+                                <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", styles.dotColor)} />
+                                {apt.isOverturn && (
+                                  <span className="px-1 py-0.2 rounded bg-purple-200 text-purple-900 text-[8px] font-black uppercase shrink-0 flex items-center gap-0.5 border border-purple-300">
+                                    <Zap size={7} className="fill-purple-700 text-purple-700" />
+                                    ST
+                                  </span>
+                                )}
+                                {apt.isPackageSession && <Package size={9} className="shrink-0 text-emerald-600" />}
+                                <span className="truncate">{apt.patientName}</span>
+                              </div>
+                            );
+                          })
                         }
                         {dayAppointments.length > 3 && (
                           <div className="text-[10px] font-black text-on-surface-variant/50 px-1">
@@ -1021,18 +1010,18 @@ export function Agenda() {
                             const duration = apt.duration || 30;
                             const calculatedEnd = apt.endTime || calculateEndTime(apt.time, duration);
                             const layout = layoutMap[apt.id] || { colIndex: 0, totalCols: 1, leftPercent: 0, widthPercent: 100 };
+                            const styles = getAppointmentStatusStyles(apt.status);
                             return (
                               <div
                                 key={apt.id}
                                 onClick={() => handleAppointmentClick(apt)}
                                 className={cn(
-                                  "absolute p-1.5 sm:p-2 rounded-lg border-l-4 shadow-sm cursor-pointer transition-all hover:scale-[1.02] overflow-hidden",
-                                  apt.isOverturn ? "ring-2 ring-purple-400 bg-purple-50/95 border-l-purple-600 text-purple-950" :
-                                  apt.status === 'pendiente' ? "bg-amber-50 border-amber-400 text-amber-700" :
-                                  apt.status === 'confirmed' ? "bg-primary-container/20 border-primary text-primary" : 
-                                  apt.status === 'in-session' ? "bg-tertiary-container/20 border-tertiary text-tertiary" : 
-                                  apt.status === 'finished' ? "bg-secondary-container/20 border-secondary text-secondary" :
-                                  "bg-surface border-outline-variant text-on-surface-variant opacity-80"
+                                  "absolute p-1.5 sm:p-2 rounded-lg border border-l-4 shadow-sm cursor-pointer transition-all hover:scale-[1.02] overflow-hidden",
+                                  styles.bg,
+                                  styles.textColor,
+                                  styles.borderColor,
+                                  styles.borderLeftColor,
+                                  apt.isOverturn && "ring-2 ring-purple-400 shadow-purple-900/10"
                                 )}
                                 style={{
                                   top: `${((h - startHour) * 60 + m)}px`,
@@ -1086,6 +1075,7 @@ export function Agenda() {
                       const duration = apt.duration || 30;
                       const calculatedEnd = apt.endTime || calculateEndTime(apt.time, duration);
                       const layout = dayLayoutMap[apt.id] || { colIndex: 0, totalCols: 1, leftPercent: 0, widthPercent: 100 };
+                      const styles = getAppointmentStatusStyles(apt.status);
                       return (
                         <motion.div
                           key={apt.id}
@@ -1093,13 +1083,13 @@ export function Agenda() {
                           animate={{ opacity: 1, x: 0 }}
                           onClick={() => handleAppointmentClick(apt)}
                           className={cn(
-                            "absolute p-2.5 sm:p-4 rounded-xl border-l-[4px] sm:border-l-[6px] shadow-md cursor-pointer flex flex-col justify-center gap-1 transition-all hover:translate-x-0.5 overflow-hidden",
-                            apt.isOverturn ? "ring-2 ring-purple-400 bg-purple-50/95 border-l-purple-600 text-purple-950 shadow-purple-900/10" :
-                            apt.status === 'pendiente' ? "bg-amber-50 border-amber-400 text-amber-700 shadow-amber-950/5" :
-                            apt.status === 'confirmed' ? "bg-primary-container/30 border-primary text-primary" : 
-                            apt.status === 'in-session' ? "bg-tertiary-container/30 border-tertiary text-tertiary shadow-tertiary/10" : 
-                            apt.status === 'finished' ? "bg-secondary-container/30 border-secondary text-secondary" :
-                            "bg-surface border-outline-variant text-on-surface-variant opacity-80"
+                            "absolute p-2.5 sm:p-4 rounded-xl border border-l-[4px] sm:border-l-[6px] shadow-md cursor-pointer flex flex-col justify-center gap-1 transition-all hover:translate-x-0.5 overflow-hidden",
+                            styles.bg,
+                            styles.textColor,
+                            styles.borderColor,
+                            styles.borderLeftColor,
+                            styles.shadow,
+                            apt.isOverturn && "ring-2 ring-purple-400 shadow-purple-900/10"
                           )}
                           style={{
                             top: `${((h - startHour) * 100 + (m / 60) * 100)}px`,
@@ -1121,7 +1111,14 @@ export function Agenda() {
                                 </span>
                               )}
                             </div>
-                            <span className="text-[9px] sm:text-[10px] font-black bg-white/70 px-1.5 py-0.5 rounded capitalize shrink-0">{apt.status}</span>
+                            <span className={cn(
+                              "text-[9px] sm:text-[10px] font-black px-2 py-0.5 rounded capitalize shrink-0 border",
+                              styles.badgeBg,
+                              styles.badgeText,
+                              styles.badgeBorder
+                            )}>
+                              {styles.label}
+                            </span>
                           </div>
                           <h4 className="text-[13px] sm:text-[16px] font-black tracking-tight truncate">{apt.patientName}</h4>
                         </motion.div>
@@ -1194,18 +1191,17 @@ export function Agenda() {
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {selectedDateAppointments.map((apt) => {
                   const phone = getPatientPhone(apt);
+                  const styles = getAppointmentStatusStyles(apt.status);
                   return (
                     <motion.div
                       key={apt.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       className={cn(
-                        "p-4 rounded-xl border transition-all flex flex-col justify-between gap-3 relative group bg-white shadow-xs hover:shadow-md",
-                        apt.status === 'pendiente' ? "border-amber-300 hover:border-amber-400 bg-amber-50/15" :
-                        apt.status === 'confirmed' ? "border-primary/30 hover:border-primary" :
-                        apt.status === 'in-session' ? "border-tertiary/40 bg-tertiary-container/10" :
-                        apt.status === 'finished' ? "border-secondary/40 bg-secondary-container/10" :
-                        "border-outline-variant bg-surface/30"
+                        "p-4 rounded-xl border border-l-4 transition-all flex flex-col justify-between gap-3 relative group bg-white shadow-xs hover:shadow-md",
+                        styles.borderColor,
+                        styles.borderLeftColor,
+                        styles.bgLight
                       )}
                     >
                       <div>
@@ -1229,14 +1225,11 @@ export function Agenda() {
 
                           <span className={cn(
                             "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border",
-                            apt.status === 'pendiente' ? "bg-amber-100 text-amber-800 border-amber-300" :
-                            apt.status === 'confirmed' ? "bg-blue-100 text-blue-800 border-blue-300" :
-                            apt.status === 'in-session' ? "bg-purple-100 text-purple-800 border-purple-300" :
-                            apt.status === 'finished' ? "bg-emerald-100 text-emerald-800 border-emerald-300" :
-                            apt.status === 'cancelado' ? "bg-red-100 text-red-800 border-red-300" :
-                            "bg-orange-100 text-orange-800 border-orange-300"
+                            styles.badgeBg,
+                            styles.badgeText,
+                            styles.badgeBorder
                           )}>
-                            {apt.status}
+                            {styles.label}
                           </span>
                         </div>
 
@@ -1308,14 +1301,16 @@ export function Agenda() {
                               <span>Evolución (En Sesión)</span>
                             </button>
                           )}
-                          <button
-                            type="button"
-                            onClick={(e) => handleOpenEditAppointment(apt, e)}
-                            title="Reprogramar / Editar fecha y hora"
-                            className="p-1.5 rounded-lg text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors cursor-pointer"
-                          >
-                            <Edit2 size={14} />
-                          </button>
+                          {apt.status !== 'finished' && apt.status !== 'finalizado' && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleOpenEditAppointment(apt, e)}
+                              title="Reprogramar / Editar fecha y hora"
+                              className="p-1.5 rounded-lg text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors cursor-pointer"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleAppointmentClick(apt)}
@@ -1347,47 +1342,44 @@ export function Agenda() {
             
             <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar min-h-0">
               {selectedDateAppointments.length > 0 ? (
-                selectedDateAppointments.map((apt) => (
-                  <motion.div
-                    key={apt.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    onClick={() => handleAppointmentClick(apt)}
-                    className={cn(
-                      "p-4 rounded-xl border border-outline-variant shadow-none hover:shadow-md transition-all cursor-pointer group relative overflow-hidden",
-                      apt.status === 'pendiente' ? "hover:border-amber-400 bg-amber-50/30" :
-                      apt.status === 'confirmed' ? "hover:border-primary/40" :
-                      apt.status === 'in-session' ? "hover:border-tertiary/40 bg-tertiary-container/10" :
-                      apt.status === 'finished' ? "hover:border-secondary/40 opacity-70" : "opacity-50"
-                    )}
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[12px] font-black text-primary bg-primary/5 px-2 py-0.5 rounded border border-primary/10">
-                          {apt.time} - {apt.endTime || calculateEndTime(apt.time, apt.duration || 30)}
-                        </span>
-                        {apt.isOverturn && (
-                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-300 flex items-center gap-0.5">
-                            <Zap size={9} className="text-purple-600 fill-purple-600" /> ST
+                selectedDateAppointments.map((apt) => {
+                  const styles = getAppointmentStatusStyles(apt.status);
+                  return (
+                    <motion.div
+                      key={apt.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      onClick={() => handleAppointmentClick(apt)}
+                      className={cn(
+                        "p-3.5 rounded-xl border border-l-4 shadow-none hover:shadow-md transition-all cursor-pointer group relative overflow-hidden bg-white",
+                        styles.borderColor,
+                        styles.borderLeftColor,
+                        styles.bgLight
+                      )}
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[12px] font-black text-primary bg-primary/5 px-2 py-0.5 rounded border border-primary/10">
+                            {apt.time} - {apt.endTime || calculateEndTime(apt.time, apt.duration || 30)}
                           </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={(e) => handleOpenEditAppointment(apt, e)}
-                          title="Editar fecha y hora"
-                          className="p-1 rounded-md text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors"
-                        >
-                          <Edit2 size={13} />
-                        </button>
+                          {apt.isOverturn && (
+                            <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-300 flex items-center gap-0.5">
+                              <Zap size={9} className="text-purple-600 fill-purple-600" /> ST
+                            </span>
+                          )}
+                          {apt.status !== 'finished' && apt.status !== 'finalizado' && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleOpenEditAppointment(apt, e)}
+                              title="Editar fecha y hora"
+                              className="p-1 rounded-md text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-colors"
+                            >
+                              <Edit2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                        <div className={cn("w-2 h-2 rounded-full shrink-0", styles.dotColor)} />
                       </div>
-                      <div className={cn(
-                        "w-2 h-2 rounded-full",
-                        apt.status === 'pendiente' ? "bg-amber-500" :
-                        apt.status === 'confirmed' ? "bg-primary" :
-                        apt.status === 'in-session' ? "bg-tertiary" :
-                        apt.status === 'finished' ? "bg-secondary" : "bg-on-surface-variant"
-                      )} />
-                    </div>
                     <h4 className="text-[14px] font-bold text-on-surface mb-1 group-hover:text-primary transition-colors">{apt.patientName}</h4>
                     <div className="flex items-center gap-2 text-[11px] font-bold text-on-surface-variant uppercase tracking-tighter">
                       <span className="truncate">{apt.type}</span>
@@ -1400,8 +1392,9 @@ export function Agenda() {
                       )}
                     </div>
                   </motion.div>
-                ))
-              ) : (
+                );
+              })
+            ) : (
                 <div className="h-full flex flex-col items-center justify-center opacity-30 py-20 text-center">
                   <Calendar size={48} className="mb-4 text-on-surface-variant" />
                   <p className="text-[11px] font-black uppercase tracking-widest leading-loose">
@@ -2018,224 +2011,276 @@ export function Agenda() {
         onClose={() => setIsDetailModalOpen(false)} 
         title="Detalles del Turno"
       >
-        {selectedAppointment && (
-          <div className="space-y-6">
-            <div className="flex items-center gap-4 p-4 bg-surface-bright rounded-xl border border-outline-variant">
-              <div className="w-12 h-12 rounded-full bg-primary-container text-primary flex items-center justify-center text-lg font-bold">
-                {selectedAppointment.patientName.charAt(0)}
-              </div>
-              <div className="flex-1">
-                <h4 className="text-sm font-bold text-on-surface">{selectedAppointment.patientName}</h4>
-                <p className="text-[11px] text-on-surface-variant tracking-wide uppercase font-bold">
-                  {selectedAppointment.time} • {selectedAppointment.duration || 30} min
-                </p>
-                {getPatientPhone(selectedAppointment) && (
-                  <p className="text-xs text-emerald-700 font-semibold flex items-center gap-1 mt-0.5">
-                    <Phone size={11} />
-                    {getPatientPhone(selectedAppointment)}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* Fecha y Hora con botón de edición */}
-            <div className="p-4 bg-surface-bright rounded-xl border border-outline-variant flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center font-bold shrink-0">
-                  <CalendarClock size={18} />
+        {selectedAppointment && (() => {
+          const modalStatusStyles = getAppointmentStatusStyles(selectedAppointment.status);
+          const isFinishedAppointment = selectedAppointment.status === 'finished' || selectedAppointment.status === 'finalizado';
+          return (
+            <div className="space-y-6">
+              <div className={cn(
+                "flex items-center gap-4 p-4 rounded-xl border border-l-4 bg-surface-bright",
+                modalStatusStyles.borderColor,
+                modalStatusStyles.borderLeftColor
+              )}>
+                <div className="w-12 h-12 rounded-full bg-primary-container text-primary flex items-center justify-center text-lg font-bold">
+                  {selectedAppointment.patientName.charAt(0)}
                 </div>
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Fecha y Horario Bloqueado</p>
-                  <p className="text-[13px] font-bold text-on-surface">
-                    {selectedAppointment.date} de {selectedAppointment.time} a {selectedAppointment.endTime || calculateEndTime(selectedAppointment.time, selectedAppointment.duration || 30)} hs
+                <div className="flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-sm font-bold text-on-surface">{selectedAppointment.patientName}</h4>
+                    <span className={cn(
+                      "text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full border",
+                      modalStatusStyles.badgeBg,
+                      modalStatusStyles.badgeText,
+                      modalStatusStyles.badgeBorder
+                    )}>
+                      {modalStatusStyles.label}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-on-surface-variant tracking-wide uppercase font-bold">
+                    {selectedAppointment.time} • {selectedAppointment.duration || 30} min
                   </p>
-                  <p className="text-[11px] font-semibold text-on-surface-variant">
-                    Duración: {selectedAppointment.duration || 30} minutos
-                  </p>
+                  {getPatientPhone(selectedAppointment) && (
+                    <p className="text-xs text-emerald-700 font-semibold flex items-center gap-1 mt-0.5">
+                      <Phone size={11} />
+                      {getPatientPhone(selectedAppointment)}
+                    </p>
+                  )}
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const phone = getAppointmentPatientPhone(selectedAppointment);
-                    setReminderModalApt({
-                      ...selectedAppointment,
-                      patientPhone: phone
-                    });
-                  }}
-                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm cursor-pointer"
-                >
-                  <MessageCircle size={14} />
-                  Recordatorio WhatsApp
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleOpenEditAppointment(selectedAppointment)}
-                  className="px-3 py-2 bg-primary text-white hover:bg-primary/90 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm cursor-pointer"
-                >
-                  <Edit2 size={13} />
-                  Editar Fecha / Hora
-                </button>
-              </div>
-            </div>
 
-            {selectedAppointment.isOverturn && (
-              <div className="p-3.5 bg-purple-50 rounded-xl border border-purple-200 space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-purple-200 text-purple-900 flex items-center justify-center shrink-0">
-                      <Zap size={16} className="fill-purple-700 text-purple-700" />
+              {/* Fecha y Hora con botón de edición */}
+              <div className="p-4 bg-surface-bright rounded-xl border border-outline-variant flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center font-bold shrink-0">
+                    <CalendarClock size={18} />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Fecha y Horario Bloqueado</p>
+                    <p className="text-[13px] font-bold text-on-surface">
+                      {selectedAppointment.date} de {selectedAppointment.time} a {selectedAppointment.endTime || calculateEndTime(selectedAppointment.time, selectedAppointment.duration || 30)} hs
+                    </p>
+                    <p className="text-[11px] font-semibold text-on-surface-variant">
+                      Duración: {selectedAppointment.duration || 30} minutos
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const phone = getAppointmentPatientPhone(selectedAppointment);
+                      setReminderModalApt({
+                        ...selectedAppointment,
+                        patientPhone: phone
+                      });
+                    }}
+                    className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm cursor-pointer"
+                  >
+                    <MessageCircle size={14} />
+                    Recordatorio WhatsApp
+                  </button>
+                  {!isFinishedAppointment && (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEditAppointment(selectedAppointment)}
+                      className="px-3 py-2 bg-primary text-white hover:bg-primary/90 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm cursor-pointer"
+                    >
+                      <Edit2 size={13} />
+                      Editar Fecha / Hora
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {selectedAppointment.isOverturn && (
+                <div className="p-3.5 bg-purple-50 rounded-xl border border-purple-200 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-purple-200 text-purple-900 flex items-center justify-center shrink-0">
+                        <Zap size={16} className="fill-purple-700 text-purple-700" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-purple-900">Turno de Excepción</p>
+                        <p className="text-[12px] font-bold text-purple-950">
+                          {selectedAppointment.overturnReason || 'Atención registrada con clasificación de SOBRETURNO'}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-black text-purple-900 bg-white px-2.5 py-1 rounded-md border border-purple-300 shadow-2xs shrink-0">
+                      ⚡ SOBRE TURNO
+                    </span>
+                  </div>
+                  {selectedAppointment.overlappingAppointmentIds && selectedAppointment.overlappingAppointmentIds.length > 0 && (
+                    <div className="pt-1.5 border-t border-purple-200/80 text-[11px] text-purple-900">
+                      <p className="font-semibold text-[10px] uppercase tracking-wider mb-1 opacity-80">
+                        Coincide en horario con ({selectedAppointment.overlappingAppointmentIds.length}) turno(s):
+                      </p>
+                      <div className="space-y-1">
+                        {appointments
+                          .filter(a => selectedAppointment.overlappingAppointmentIds?.includes(a.id))
+                          .map(conf => (
+                            <div key={conf.id} className="bg-white/80 px-2 py-1 rounded border border-purple-200 flex justify-between items-center text-[11px]">
+                              <span className="font-bold">{conf.patientName}</span>
+                              <span className="font-mono text-[10px] text-purple-800 font-semibold">{conf.time} - {conf.endTime || calculateEndTime(conf.time, conf.duration || 30)} hs</span>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {selectedAppointment.isPackageSession && (
+                <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
+                      <Package size={16} className="text-emerald-700" />
                     </div>
                     <div>
-                      <p className="text-[10px] font-black uppercase tracking-widest text-purple-900">Turno de Excepción</p>
-                      <p className="text-[12px] font-bold text-purple-950">
-                        {selectedAppointment.overturnReason || 'Atención registrada con clasificación de SOBRETURNO'}
+                      <p className="text-[10px] font-black uppercase tracking-widest text-emerald-800">Sesión Cubierta por Paquete</p>
+                      <p className="text-[12px] font-bold text-emerald-900">{selectedAppointment.packageName || 'Paquete de tratamientos'}</p>
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-bold text-emerald-800 bg-white px-2.5 py-1 rounded-md border border-emerald-300 shadow-xs">
+                    $0 (Ya abonado)
+                  </span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-surface rounded-xl border border-outline-variant">
+                  <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Tratamiento</p>
+                  <p className="text-[13px] font-bold text-on-surface">{selectedAppointment.type}</p>
+                </div>
+                <div className="p-3 bg-surface rounded-xl border border-outline-variant">
+                  <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Asistencias</p>
+                  <p className="text-[13px] font-bold text-on-surface">
+                    {selectedAppointment.attendance === 1 ? 'Primera vez' : `${selectedAppointment.attendance} visitas anteriores`}
+                  </p>
+                </div>
+              </div>
+
+              {selectedAppointment.notes && (
+                <div className="p-3 bg-surface rounded-xl border border-outline-variant">
+                  <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Notas</p>
+                  <p className="text-[12px] text-on-surface">{selectedAppointment.notes}</p>
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                    {isFinishedAppointment ? 'Estado del Turno' : 'Cambiar Estado'}
+                  </label>
+                  {isFinishedAppointment && (
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-300 flex items-center gap-1">
+                      <CheckCircle2 size={12} className="text-emerald-600" />
+                      Finalizado (Definitivo)
+                    </span>
+                  )}
+                </div>
+
+                {isFinishedAppointment && (
+                  <div className="p-3 bg-emerald-50/80 rounded-xl border border-emerald-200 text-[11px] text-emerald-900 flex items-start gap-2">
+                    <CheckCircle2 size={15} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-emerald-950">Turno Completado</p>
+                      <p className="text-[11px] text-emerald-800">
+                        Este turno ya fue finalizado. Por seguridad clínica y de inventario, no se permite volver a un estado anterior.
                       </p>
                     </div>
                   </div>
-                  <span className="text-[10px] font-black text-purple-900 bg-white px-2.5 py-1 rounded-md border border-purple-300 shadow-2xs shrink-0">
-                    ⚡ SOBRE TURNO
-                  </span>
-                </div>
-                {selectedAppointment.overlappingAppointmentIds && selectedAppointment.overlappingAppointmentIds.length > 0 && (
-                  <div className="pt-1.5 border-t border-purple-200/80 text-[11px] text-purple-900">
-                    <p className="font-semibold text-[10px] uppercase tracking-wider mb-1 opacity-80">
-                      Coincide en horario con ({selectedAppointment.overlappingAppointmentIds.length}) turno(s):
-                    </p>
-                    <div className="space-y-1">
-                      {appointments
-                        .filter(a => selectedAppointment.overlappingAppointmentIds?.includes(a.id))
-                        .map(conf => (
-                          <div key={conf.id} className="bg-white/80 px-2 py-1 rounded border border-purple-200 flex justify-between items-center text-[11px]">
-                            <span className="font-bold">{conf.patientName}</span>
-                            <span className="font-mono text-[10px] text-purple-800 font-semibold">{conf.time} - {conf.endTime || calculateEndTime(conf.time, conf.duration || 30)} hs</span>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
                 )}
-              </div>
-            )}
 
-            {selectedAppointment.isPackageSession && (
-              <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
-                    <Package size={16} className="text-emerald-700" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-emerald-800">Sesión Cubierta por Paquete</p>
-                    <p className="text-[12px] font-bold text-emerald-900">{selectedAppointment.packageName || 'Paquete de tratamientos'}</p>
-                  </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { id: 'pendiente', label: 'Pendiente', color: 'bg-amber-500' },
+                    { id: 'confirmed', label: 'Confirmado', color: 'bg-primary' },
+                    { id: 'in-session', label: 'En Sesión', color: 'bg-teal-600' },
+                    { id: 'finished', label: 'Finalizado', color: 'bg-emerald-600' },
+                    { id: 'cancelado', label: 'Cancelado', color: 'bg-error' },
+                    { id: 'ausente', label: 'Ausente', color: 'bg-orange-500' },
+                  ].map((s) => {
+                    const isCurrent = selectedAppointment.status === s.id;
+                    return (
+                      <button
+                        key={s.id}
+                        disabled={isFinishedAppointment && !isCurrent}
+                        onClick={() => !isFinishedAppointment && handleUpdateStatus(s.id)}
+                        className={cn(
+                          "px-3 py-2 rounded-lg border text-[11px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2",
+                          isCurrent 
+                            ? `${s.color} text-white border-transparent shadow-sm ring-2 ring-offset-1 ring-emerald-500` 
+                            : isFinishedAppointment
+                              ? "bg-surface-dim/40 border-outline-variant/40 text-on-surface-variant/40 cursor-not-allowed opacity-40"
+                              : "bg-white border-outline-variant text-on-surface-variant hover:bg-surface cursor-pointer"
+                        )}
+                      >
+                        <div className={cn("w-1.5 h-1.5 rounded-full", isCurrent ? "bg-white" : s.color)} />
+                        {s.label}
+                      </button>
+                    );
+                  })}
                 </div>
-                <span className="text-[11px] font-bold text-emerald-800 bg-white px-2.5 py-1 rounded-md border border-emerald-300 shadow-xs">
-                  $0 (Ya abonado)
-                </span>
               </div>
-            )}
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-3 bg-surface rounded-xl border border-outline-variant">
-                <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Tratamiento</p>
-                <p className="text-[13px] font-bold text-on-surface">{selectedAppointment.type}</p>
-              </div>
-              <div className="p-3 bg-surface rounded-xl border border-outline-variant">
-                <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Asistencias</p>
-                <p className="text-[13px] font-bold text-on-surface">
-                  {selectedAppointment.attendance === 1 ? 'Primera vez' : `${selectedAppointment.attendance} visitas anteriores`}
-                </p>
-              </div>
-            </div>
-
-            {selectedAppointment.notes && (
-              <div className="p-3 bg-surface rounded-xl border border-outline-variant">
-                <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Notas</p>
-                <p className="text-[12px] text-on-surface">{selectedAppointment.notes}</p>
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Cambiar Estado</label>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { id: 'pendiente', label: 'Pendiente', color: 'bg-amber-500' },
-                  { id: 'confirmed', label: 'Confirmado', color: 'bg-primary' },
-                  { id: 'in-session', label: 'En Sesión', color: 'bg-tertiary' },
-                  { id: 'finished', label: 'Finalizado', color: 'bg-secondary' },
-                  { id: 'cancelado', label: 'Cancelado', color: 'bg-error' },
-                  { id: 'ausente', label: 'Ausente', color: 'bg-error-container' },
-                ].map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => handleUpdateStatus(s.id)}
-                    className={cn(
-                      "px-3 py-2 rounded-lg border text-[11px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2",
-                      selectedAppointment.status === s.id 
-                        ? `${s.color} text-white border-transparent shadow-sm` 
-                        : "bg-white border-outline-variant text-on-surface-variant hover:bg-surface"
-                    )}
-                  >
-                    <div className={cn("w-1.5 h-1.5 rounded-full", selectedAppointment.status === s.id ? "bg-white" : s.color)} />
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="pt-4 flex flex-col sm:flex-row gap-2.5">
-              <button 
-                type="button"
-                onClick={() => setIsDetailModalOpen(false)}
-                className="px-4 py-2 border border-outline-variant text-[11px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest text-on-surface-variant"
-              >
-                Cerrar
-              </button>
-              <button 
-                type="button"
-                onClick={() => {
-                  const targetPatientId = selectedAppointment?.patientId || patients.find(p => p.name?.trim().toLowerCase() === selectedAppointment?.patientName?.trim().toLowerCase())?.id;
-                  if (targetPatientId) {
-                    navigate(`/patients?id=${targetPatientId}&appointmentId=${selectedAppointment.id}&action=add-entry`);
-                  }
-                  setIsDetailModalOpen(false);
-                }}
-                className="px-4 py-2 bg-surface-variant text-on-surface text-[11px] font-bold rounded-lg hover:bg-surface-variant/80 border border-outline-variant transition-colors uppercase tracking-widest cursor-pointer"
-              >
-                Ver Ficha
-              </button>
-              {selectedAppointment.status === 'in-session' ? (
+              <div className="pt-4 flex flex-col sm:flex-row gap-2.5">
+                <button 
+                  type="button"
+                  onClick={() => setIsDetailModalOpen(false)}
+                  className="px-4 py-2 border border-outline-variant text-[11px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest text-on-surface-variant"
+                >
+                  Cerrar
+                </button>
                 <button 
                   type="button"
                   onClick={() => {
-                    setIsDetailModalOpen(false);
                     const targetPatientId = selectedAppointment?.patientId || patients.find(p => p.name?.trim().toLowerCase() === selectedAppointment?.patientName?.trim().toLowerCase())?.id;
                     if (targetPatientId) {
                       navigate(`/patients?id=${targetPatientId}&appointmentId=${selectedAppointment.id}&action=add-entry`);
-                    } else {
-                      handleOpenClinicalHistory(selectedAppointment);
                     }
+                    setIsDetailModalOpen(false);
                   }}
-                  className="flex-1 px-4 py-2 bg-tertiary text-white text-[11px] font-bold rounded-lg hover:bg-tertiary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm animate-pulse cursor-pointer"
+                  className={cn(
+                    "px-4 py-2 bg-surface-variant text-on-surface text-[11px] font-bold rounded-lg hover:bg-surface-variant/80 border border-outline-variant transition-colors uppercase tracking-widest cursor-pointer",
+                    isFinishedAppointment && "flex-1"
+                  )}
                 >
-                  <Stethoscope size={13} />
-                  Evolución (En Sesión)
+                  Ver Ficha
                 </button>
-              ) : (
-                <button 
-                  type="button"
-                  onClick={async () => {
-                    await handleUpdateStatus('in-session');
-                  }}
-                  className="flex-1 px-4 py-2 bg-primary text-white text-[11px] font-bold rounded-lg hover:bg-primary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
-                >
-                  <Stethoscope size={13} />
-                  Atender (Poner En Sesión)
-                </button>
-              )}
+                {selectedAppointment.status === 'in-session' ? (
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setIsDetailModalOpen(false);
+                      const targetPatientId = selectedAppointment?.patientId || patients.find(p => p.name?.trim().toLowerCase() === selectedAppointment?.patientName?.trim().toLowerCase())?.id;
+                      if (targetPatientId) {
+                        navigate(`/patients?id=${targetPatientId}&appointmentId=${selectedAppointment.id}&action=add-entry`);
+                      } else {
+                        handleOpenClinicalHistory(selectedAppointment);
+                      }
+                    }}
+                    className="flex-1 px-4 py-2 bg-tertiary text-white text-[11px] font-bold rounded-lg hover:bg-tertiary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm animate-pulse cursor-pointer"
+                  >
+                    <Stethoscope size={13} />
+                    Evolución (En Sesión)
+                  </button>
+                ) : isFinishedAppointment ? null : (
+                  <button 
+                    type="button"
+                    onClick={async () => {
+                      await handleUpdateStatus('in-session');
+                    }}
+                    className="flex-1 px-4 py-2 bg-primary text-white text-[11px] font-bold rounded-lg hover:bg-primary/90 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                  >
+                    <Stethoscope size={13} />
+                    Atender (Poner En Sesión)
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
 
       {/* Modal Editar Fecha y Hora del Turno */}

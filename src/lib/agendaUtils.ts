@@ -640,3 +640,124 @@ export function computeOverlappingLayout(
 
   return layout;
 }
+
+/**
+ * Returns consistent styling rules (border, background, badge, dot, text)
+ * matching the status of an appointment.
+ */
+export function getAppointmentStatusStyles(status?: string) {
+  const norm = (status || 'pendiente').toLowerCase().trim();
+
+  if (norm === 'finished' || norm === 'finalizado') {
+    return {
+      borderColor: 'border-emerald-500',
+      borderLeftColor: 'border-l-emerald-600',
+      borderSubtle: 'border-emerald-300',
+      borderSubtleLight: 'border-emerald-200',
+      bg: 'bg-emerald-50/95',
+      bgLight: 'bg-emerald-50/30',
+      textColor: 'text-emerald-950',
+      textAccent: 'text-emerald-700',
+      badgeBg: 'bg-emerald-100',
+      badgeText: 'text-emerald-800',
+      badgeBorder: 'border-emerald-300',
+      dotColor: 'bg-emerald-600',
+      shadow: 'shadow-emerald-950/10',
+      label: 'Finalizado'
+    };
+  }
+
+  if (norm === 'in-session' || norm === 'en-sesion' || norm === 'atendiendo') {
+    return {
+      borderColor: 'border-teal-500',
+      borderLeftColor: 'border-l-teal-600',
+      borderSubtle: 'border-teal-300',
+      borderSubtleLight: 'border-teal-200',
+      bg: 'bg-teal-50/95',
+      bgLight: 'bg-teal-50/30',
+      textColor: 'text-teal-950',
+      textAccent: 'text-teal-700',
+      badgeBg: 'bg-teal-100',
+      badgeText: 'text-teal-800',
+      badgeBorder: 'border-teal-300',
+      dotColor: 'bg-teal-600',
+      shadow: 'shadow-teal-950/10',
+      label: 'En Sesión'
+    };
+  }
+
+  if (norm === 'confirmed' || norm === 'confirmado') {
+    return {
+      borderColor: 'border-blue-500',
+      borderLeftColor: 'border-l-blue-600',
+      borderSubtle: 'border-blue-300',
+      borderSubtleLight: 'border-blue-200',
+      bg: 'bg-blue-50/90',
+      bgLight: 'bg-blue-50/30',
+      textColor: 'text-blue-950',
+      textAccent: 'text-primary',
+      badgeBg: 'bg-blue-100',
+      badgeText: 'text-blue-800',
+      badgeBorder: 'border-blue-300',
+      dotColor: 'bg-primary',
+      shadow: 'shadow-blue-950/10',
+      label: 'Confirmado'
+    };
+  }
+
+  if (norm === 'cancelado' || norm === 'cancelled' || norm === 'anulado') {
+    return {
+      borderColor: 'border-rose-400',
+      borderLeftColor: 'border-l-rose-500',
+      borderSubtle: 'border-rose-300',
+      borderSubtleLight: 'border-rose-200',
+      bg: 'bg-rose-50/80',
+      bgLight: 'bg-rose-50/30',
+      textColor: 'text-rose-950',
+      textAccent: 'text-rose-700',
+      badgeBg: 'bg-rose-100',
+      badgeText: 'text-rose-800',
+      badgeBorder: 'border-rose-300',
+      dotColor: 'bg-rose-500',
+      shadow: 'shadow-rose-950/10',
+      label: 'Cancelado'
+    };
+  }
+
+  if (norm === 'ausente') {
+    return {
+      borderColor: 'border-orange-400',
+      borderLeftColor: 'border-l-orange-500',
+      borderSubtle: 'border-orange-300',
+      borderSubtleLight: 'border-orange-200',
+      bg: 'bg-orange-50/80',
+      bgLight: 'bg-orange-50/30',
+      textColor: 'text-orange-950',
+      textAccent: 'text-orange-700',
+      badgeBg: 'bg-orange-100',
+      badgeText: 'text-orange-800',
+      badgeBorder: 'border-orange-300',
+      dotColor: 'bg-orange-500',
+      shadow: 'shadow-orange-950/10',
+      label: 'Ausente'
+    };
+  }
+
+  // default: 'pendiente'
+  return {
+    borderColor: 'border-amber-400',
+    borderLeftColor: 'border-l-amber-500',
+    borderSubtle: 'border-amber-300',
+    borderSubtleLight: 'border-amber-200',
+    bg: 'bg-amber-50/95',
+    bgLight: 'bg-amber-50/30',
+    textColor: 'text-amber-950',
+    textAccent: 'text-amber-700',
+    badgeBg: 'bg-amber-100',
+    badgeText: 'text-amber-800',
+    badgeBorder: 'border-amber-300',
+    dotColor: 'bg-amber-500',
+    shadow: 'shadow-amber-950/5',
+    label: 'Pendiente'
+  };
+}

@@ -433,6 +433,187 @@ async function startServer() {
   });
 
   // ------------------------------------------------------------
+  // Audit Logs & Security Administration APIs
+  // ------------------------------------------------------------
+  app.post("/api/audit/log", authenticateToken, async (req, res) => {
+    try {
+      const { action, section, details, changes, targetId } = req.body;
+      const caller = (req as any).user;
+      const callerUid = caller.uid;
+
+      if (!action || !section) {
+        return res.status(400).json({ error: "Acción y sección son obligatorias para el registro de auditoría." });
+      }
+
+      const { adminDb } = getFirebaseAdmin();
+      if (!adminDb) {
+        return res.status(503).json({ error: "Base de datos no disponible para auditoría." });
+      }
+
+      // Fetch user role info
+      let userRole = "medico";
+      let userName = caller.name || caller.email || "Usuario";
+      try {
+        const userDoc = await adminDb.collection("users").doc(callerUid).get();
+        if (userDoc.exists) {
+          const uData = userDoc.data();
+          userRole = uData?.role || "medico";
+          userName = uData?.name || uData?.displayName || userName;
+        }
+      } catch {
+        // Fallback to token
+      }
+
+      const clientIp = (req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "127.0.0.1";
+      const userAgent = req.headers["user-agent"] || "Desconocido";
+
+      const auditEntry = {
+        authorId: callerUid,
+        authorEmail: caller.email || "anon@medturnos.com",
+        authorName: userName,
+        authorRole: userRole,
+        action,
+        section,
+        details: details || `Modificación en ${section}`,
+        changes: changes || {},
+        targetId: targetId || callerUid,
+        clientIp: clientIp.split(",")[0].trim(),
+        userAgent,
+        createdAt: new Date().toISOString(),
+        serverTimestamp: new Date().toISOString()
+      };
+
+      const docRef = await adminDb.collection("audit_logs").add(auditEntry);
+
+      res.json({
+        success: true,
+        id: docRef.id,
+        timestamp: auditEntry.createdAt
+      });
+    } catch (error: any) {
+      console.error("[Audit API Error]:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/audit/logs", authenticateToken, requireAdminRole, async (req, res) => {
+    try {
+      const { adminDb } = getFirebaseAdmin();
+      if (!adminDb) {
+        return res.status(503).json({ error: "Base de datos no disponible" });
+      }
+
+      const limitCount = Math.min(100, Math.max(1, parseInt((req.query.limit as string) || "50", 10)));
+      const snapshot = await adminDb.collection("audit_logs")
+        .orderBy("createdAt", "desc")
+        .limit(limitCount)
+        .get();
+
+      const logs = snapshot.docs.map((doc: any) => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      res.json(logs);
+    } catch (error: any) {
+      console.error("[Audit Logs Fetch Error]:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/auth/revoke-sessions", authenticateToken, async (req, res) => {
+    try {
+      const callerUid = (req as any).user.uid;
+      const { auth } = getFirebaseAdmin();
+      if (auth && typeof auth.revokeRefreshTokens === "function") {
+        await auth.revokeRefreshTokens(callerUid);
+      }
+      res.json({
+        success: true,
+        message: "Otras sesiones cerradas exitosamente. Se revocaron los tokens de actualización activos."
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ------------------------------------------------------------
+  // Appointment Status Transition Endpoint with Strict Validation
+  // ------------------------------------------------------------
+  app.post("/api/appointments/:id/status", authenticateToken, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+      const caller = (req as any).user;
+      const callerUid = caller.uid;
+
+      if (!status) {
+        return res.status(400).json({ error: "Debe especificar el nuevo estado del turno." });
+      }
+
+      const { adminDb } = getFirebaseAdmin();
+      if (!adminDb) {
+        return res.status(503).json({ error: "Base de datos no disponible" });
+      }
+
+      const aptRef = adminDb.collection("appointments").doc(id);
+      const aptSnap = await aptRef.get();
+
+      if (!aptSnap.exists) {
+        return res.status(404).json({ error: "El turno no existe." });
+      }
+
+      const aptData = aptSnap.data() || {};
+
+      // Check caller authorization
+      const callerDoc = await adminDb.collection("users").doc(callerUid).get();
+      const isCallerAdmin = callerDoc.exists && callerDoc.data()?.role === "admin";
+      const isOwner = aptData.userId === callerUid;
+
+      // Check if staff
+      let isStaff = false;
+      if (!isCallerAdmin && !isOwner) {
+        const staffSnap = await adminDb.collection("staff")
+          .where("authUid", "==", callerUid)
+          .where("userId", "==", aptData.userId)
+          .get();
+        isStaff = !staffSnap.empty;
+      }
+
+      if (!isCallerAdmin && !isOwner && !isStaff) {
+        return res.status(403).json({ error: "No tiene permisos para modificar este turno." });
+      }
+
+      // STRICT VALIDATION: If appointment is already finished, it cannot revert to an earlier status
+      const currentStatus = (aptData.status || "").toLowerCase().trim();
+      const targetStatus = status.toLowerCase().trim();
+      const isAlreadyFinished = currentStatus === "finished" || currentStatus === "finalizado";
+      const isTargetFinished = targetStatus === "finished" || targetStatus === "finalizado";
+
+      if (isAlreadyFinished && !isTargetFinished) {
+        return res.status(403).json({
+          error: "Operación rechazada: El turno ya se encuentra finalizado y no se permite volver a un estado anterior."
+        });
+      }
+
+      await aptRef.update({
+        status: targetStatus,
+        updatedAt: new Date().toISOString()
+      });
+
+      res.json({
+        success: true,
+        id,
+        previousStatus: currentStatus,
+        newStatus: targetStatus
+      });
+    } catch (error: any) {
+      console.error("[Appointment Status API Error]:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ------------------------------------------------------------
   // Clinical / Data APIs (Scoped to Authenticated User)
   // ------------------------------------------------------------
   app.get("/api/patients", authenticateToken, async (req, res) => {

@@ -21,7 +21,8 @@ export function TopAppBar() {
     if (path.startsWith('/treatments')) return 'Tratamientos';
     if (path.startsWith('/inventory')) return 'Inventario';
     if (path.startsWith('/reminders')) return 'Recordatorios';
-    if (path.startsWith('/admin') || path.startsWith('/system')) return 'Administración';
+    if (path.startsWith('/system')) return 'Panel de Control Administrador';
+    if (path.startsWith('/admin')) return 'Administración';
     if (path.startsWith('/medical/dashboard')) return 'Panel Clínico';
     return 'MedTurnos';
   };

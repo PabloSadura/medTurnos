@@ -18,34 +18,48 @@ export function BottomNavBar() {
 
   const isAdmin = profile?.role === 'admin';
 
-  // 5 core navigation items for quick mobile access with clear labels
-  const navItems = [
-    {
-      to: isAdmin ? '/system/dashboard' : '/medical/dashboard',
-      label: 'Inicio',
-      icon: isAdmin ? Terminal : LayoutDashboard,
-    },
-    {
-      to: '/agenda',
-      label: 'Agenda',
-      icon: CalendarDays,
-    },
-    {
-      to: '/patients',
-      label: 'Pacientes',
-      icon: Users,
-    },
-    {
-      to: '/reminders',
-      label: 'Avisos',
-      icon: MessageSquare,
-    },
-    {
-      to: '/profile',
-      label: 'Perfil',
-      icon: UserCircle,
-    }
-  ];
+  // Navigation items: Admin sees only their control panel and profile.
+  // Clinical options (Agenda, Pacientes, Avisos) are solely for professionals.
+  const navItems = isAdmin
+    ? [
+        {
+          to: '/system/dashboard',
+          label: 'Panel Control',
+          icon: Terminal,
+        },
+        {
+          to: '/profile',
+          label: 'Mi Perfil',
+          icon: UserCircle,
+        }
+      ]
+    : [
+        {
+          to: '/medical/dashboard',
+          label: 'Inicio',
+          icon: LayoutDashboard,
+        },
+        {
+          to: '/agenda',
+          label: 'Agenda',
+          icon: CalendarDays,
+        },
+        {
+          to: '/patients',
+          label: 'Pacientes',
+          icon: Users,
+        },
+        {
+          to: '/reminders',
+          label: 'Avisos',
+          icon: MessageSquare,
+        },
+        {
+          to: '/profile',
+          label: 'Perfil',
+          icon: UserCircle,
+        }
+      ];
 
   return (
     <nav
@@ -53,7 +67,10 @@ export function BottomNavBar() {
       aria-label="Navegación móvil"
       className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-outline-variant shadow-[0_-4px_16px_rgba(0,0,0,0.04)] lg:hidden transition-transform duration-200 pb-safe font-sans"
     >
-      <div className="grid grid-cols-5 h-15 max-w-lg mx-auto px-1 items-center">
+      <div className={cn(
+        "h-15 max-w-lg mx-auto px-4 items-center grid",
+        isAdmin ? "grid-cols-2 max-w-xs" : "grid-cols-5"
+      )}>
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(item.to));

@@ -308,6 +308,24 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["referrerId", "referredUserId", "newDiscountValue", "referrerDiscountValue"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Administrative and security audit trail records",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string" },
+        "authorEmail": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorRole": { "type": "string" },
+        "action": { "type": "string" },
+        "section": { "type": "string" },
+        "details": { "type": "string" },
+        "changes": { "type": "object" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorId", "action", "section", "createdAt"]
     }
   },
   "firestore": {
@@ -370,6 +388,10 @@
     "/whatsapp_logs": {
       "schema": "WhatsAppLog",
       "description": "History of WhatsApp reminders sent"
+    },
+    "/audit_logs": {
+      "schema": "AuditLog",
+      "description": "Immutable security and administrative audit trail"
     }
   }
 }

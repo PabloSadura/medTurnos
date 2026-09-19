@@ -123,7 +123,17 @@ service cloud.firestore {
     match /appointments/{id} {
       allow read: if isSignedIn() && (isAdmin() || (resource != null && 'userId' in resource.data && canAccessData(resource.data.userId)));
       allow create: if isSignedIn() && (isAdmin() || (request.resource != null && 'userId' in request.resource.data && canAccessData(request.resource.data.userId)));
-      allow update, delete: if isSignedIn() && (isAdmin() || (resource != null && 'userId' in resource.data && canAccessData(resource.data.userId)));
+      allow update: if isSignedIn() && (
+        isAdmin() || (
+          resource != null && 'userId' in resource.data && canAccessData(resource.data.userId) &&
+          // Finished appointments cannot revert to a previous status
+          (
+            !(resource.data.get('status', '') in ['finished', 'finalizado']) ||
+            (request.resource.data.get('status', '') in ['finished', 'finalizado'])
+          )
+        )
+      );
+      allow delete: if isSignedIn() && (isAdmin() || (resource != null && 'userId' in resource.data && canAccessData(resource.data.userId)));
     }
 
     match /patients/{id} {
@@ -203,6 +213,17 @@ service cloud.firestore {
         canAccessData(id) ||
         (request.resource != null && 'userId' in request.resource.data && canAccessData(request.resource.data.userId))
       );
+    }
+
+    // ------------------------------------------------------------
+    // Audit Logs (Immutable Security and Administrative Audit Trail)
+    // ------------------------------------------------------------
+    match /audit_logs/{id} {
+      allow read: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && (
+        isAdmin() || (request.resource != null && request.resource.data.get('authorId', '') == request.auth.uid)
+      );
+      allow update, delete: if false; // Append-only audit logs
     }
   }
 }
