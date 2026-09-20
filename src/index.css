@@ -117,3 +117,23 @@
   background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
   background-size: 20px 20px;
 }
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  #printable-agenda, #printable-agenda * {
+    visibility: visible !important;
+  }
+  #printable-agenda {
+    display: block !important;
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 16px !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+}

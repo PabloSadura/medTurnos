@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock, Stethoscope, Package, Sparkles, Phone, MessageCircle, Zap, X } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock, Stethoscope, Package, Sparkles, Phone, MessageCircle, Zap, X, Download } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 import { ClinicalHistoryModal } from '../components/ClinicalHistoryModal';
 import { ReminderModal } from '../components/ReminderModal';
+import { ExportDayAgendaModal } from '../components/ExportDayAgendaModal';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch, getDoc } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
@@ -45,6 +46,7 @@ export function Agenda() {
   const [view, setView] = useState<'day' | 'week' | 'month'>('month');
   const [workingHours, setWorkingHours] = useState<any>(null);
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
+  const [isExportDayModalOpen, setIsExportDayModalOpen] = useState(false);
 
   useEffect(() => {
     if (!ownerId) return;
@@ -785,7 +787,7 @@ export function Agenda() {
           <h1 className="headline-lg text-on-surface">Agenda & Calendario</h1>
           <p className="body-md text-on-surface-variant">Gestione sus horarios y reservas de pacientes.</p>
         </div>
-        <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-between sm:justify-end">
+        <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-between sm:justify-end flex-wrap">
           <div className="flex items-center gap-1 bg-white/80 p-1 rounded-xl border border-outline-variant shadow-xs">
             {(['day', 'week', 'month'] as const).map((v) => (
               <button
@@ -800,6 +802,18 @@ export function Agenda() {
               </button>
             ))}
           </div>
+
+          <button
+            type="button"
+            onClick={() => setIsExportDayModalOpen(true)}
+            className="px-3 sm:px-3.5 py-2 bg-white text-on-surface hover:bg-surface border border-outline-variant rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all shadow-xs uppercase tracking-wider shrink-0"
+            title="Exportar agenda del día con pacientes, tratamientos, turnos y notas"
+          >
+            <Download size={14} className="text-primary shrink-0" />
+            <span className="hidden xs:inline">Exportar Día</span>
+            <span className="xs:hidden">Exportar</span>
+          </button>
+
           <button 
             onClick={() => handleOpenNewAppointment()}
             className="px-3 sm:px-4 py-2 bg-primary text-white rounded-xl text-xs font-bold flex items-center gap-1.5 sm:gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-xs uppercase tracking-wider shrink-0"
@@ -1162,6 +1176,16 @@ export function Agenda() {
                 </span>
                 <button
                   type="button"
+                  onClick={() => setIsExportDayModalOpen(true)}
+                  className="px-3 py-2 bg-white text-on-surface hover:bg-surface border border-outline-variant rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all shadow-xs uppercase tracking-wider"
+                  title="Exportar agenda del día con pacientes, tratamientos, turnos y notas"
+                >
+                  <Download size={14} className="text-primary" />
+                  <span className="hidden xs:inline">Exportar Día</span>
+                  <span className="xs:hidden">Exportar</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleOpenNewAppointment(formatLocalDate(selectedDate))}
                   className="px-3.5 py-2 bg-primary text-white rounded-xl text-xs font-bold flex items-center gap-1.5 hover:bg-primary/90 active:scale-95 transition-all shadow-sm uppercase tracking-wider"
                 >
@@ -1333,11 +1357,21 @@ export function Agenda() {
         {/* Sidebar: Day View (Solo en vistas Semana y Día) */}
         {view !== 'month' && (
           <div className="hidden lg:flex bg-white rounded-2xl border border-outline-variant shadow-sm flex-col overflow-hidden max-h-full">
-            <div className="p-6 border-b border-outline-variant bg-surface-bright shrink-0">
-              <p className="text-[10px] font-black text-on-surface-variant uppercase tracking-[0.2em] mb-1">Agenda del día</p>
-              <h3 className="text-sm font-bold text-on-surface capitalize">
-                {new Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'numeric', month: 'long' }).format(selectedDate)}
-              </h3>
+            <div className="p-6 border-b border-outline-variant bg-surface-bright shrink-0 flex items-center justify-between gap-2">
+              <div>
+                <p className="text-[10px] font-black text-on-surface-variant uppercase tracking-[0.2em] mb-1">Agenda del día</p>
+                <h3 className="text-sm font-bold text-on-surface capitalize">
+                  {new Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'numeric', month: 'long' }).format(selectedDate)}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsExportDayModalOpen(true)}
+                className="p-2 bg-white hover:bg-surface text-on-surface border border-outline-variant rounded-xl transition-colors shadow-2xs"
+                title="Exportar agenda del día"
+              >
+                <Download size={15} className="text-primary" />
+              </button>
             </div>
             
             <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar min-h-0">
@@ -2582,6 +2616,17 @@ export function Agenda() {
           }}
         />
       )}
+
+      {/* Modal Exportar Agenda del Día */}
+      <ExportDayAgendaModal
+        isOpen={isExportDayModalOpen}
+        onClose={() => setIsExportDayModalOpen(false)}
+        initialDate={selectedDate}
+        appointments={appointments}
+        patients={patients}
+        treatments={treatments}
+        profile={profile}
+      />
     </div>
   );
 }
