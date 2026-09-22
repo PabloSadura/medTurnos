@@ -1508,7 +1508,7 @@ export function PatientDetailView({
                 </span>
               </div>
               <p className="text-xs text-on-surface-variant font-medium mt-0.5">
-                DNI: <span className="font-mono text-on-surface font-semibold">{patient?.idNumber || 'Sin DNI'}</span> • {patient?.gender === 'Female' ? 'Femenino' : patient?.gender === 'Male' ? 'Masculino' : 'Otro'} • {calculateAge(patient?.birthDate)} años {patient?.birthDate ? `(${patient.birthDate})` : ''}
+                {patient?.gender === 'Female' ? 'Femenino' : patient?.gender === 'Male' ? 'Masculino' : 'Otro'} • {calculateAge(patient?.birthDate)} años {patient?.birthDate ? `(${patient.birthDate})` : ''}
               </p>
               <div className="flex flex-wrap items-center gap-4 mt-2 text-xs text-on-surface-variant">
                 <div className="flex items-center gap-1.5">

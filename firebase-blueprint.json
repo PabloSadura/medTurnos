@@ -46,7 +46,7 @@
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["name", "idNumber", "status"]
+      "required": ["name", "status"]
     },
     "Evolution": {
       "title": "Evolution",

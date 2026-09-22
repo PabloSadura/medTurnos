@@ -122,7 +122,7 @@ export interface Patient {
   lastName?: string;
   email?: string;
   phone?: string;
-  idNumber: string;
+  idNumber?: string;
   gender?: string;
   birthDate?: string;
   status: 'active' | 'inactive';

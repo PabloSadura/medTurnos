@@ -716,14 +716,13 @@ export function Patients() {
       showToast('No hay pacientes para exportar');
       return;
     }
-    const headers = ['Apellido', 'Nombre', 'DNI', 'Teléfono', 'Email', 'Género', 'Fecha Nacimiento', 'Estado'];
+    const headers = ['Apellido', 'Nombre', 'Teléfono', 'Email', 'Género', 'Fecha Nacimiento', 'Estado'];
     const rows = patients.map(p => {
       const ln = p.lastName || getPatientLastName(p);
       const fn = p.firstName || getPatientFirstName(p);
       return [
         `"${(ln || '').replace(/"/g, '""')}"`,
         `"${(fn || '').replace(/"/g, '""')}"`,
-        `"${(p.idNumber || '').replace(/"/g, '""')}"`,
         `"${(p.phone || '').replace(/"/g, '""')}"`,
         `"${(p.email || '').replace(/"/g, '""')}"`,
         `"${(p.gender || '').replace(/"/g, '""')}"`,
@@ -833,7 +832,7 @@ export function Patients() {
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
             <input 
               type="text" 
-              placeholder="Buscar por nombre, DNI o teléfono..." 
+              placeholder="Buscar por nombre o teléfono..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-9 pr-4 py-1.5 bg-surface border border-outline-variant rounded-lg focus:ring-1 focus:ring-primary text-[13px] outline-none"
@@ -881,7 +880,7 @@ export function Patients() {
                         })()}
                       </p>
                       <p className="text-[11px] text-on-surface-variant font-medium">
-                        DNI: <span className="font-mono text-on-surface">{patient.idNumber}</span> • {calculateAge(patient.birthDate)} años
+                        {patient.gender ? `${patient.gender === 'Female' ? 'Femenino' : patient.gender === 'Male' ? 'Masculino' : patient.gender} • ` : ''}{calculateAge(patient.birthDate)} años
                       </p>
                     </div>
                   </div>
@@ -1069,8 +1068,7 @@ export function Patients() {
             <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">DNI / Identificación</label>
               <input 
-                type="text" 
-                required
+                type="text"
                 value={formData.idNumber}
                 onChange={(e) => setFormData({ ...formData, idNumber: e.target.value })}
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
