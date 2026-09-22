@@ -8,11 +8,26 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid != null;
     }
 
-    // Role-based Access Control via trusted database document (users/{uid})
+    // Role-based Access Control via trusted database document (users/{uid}, profiles/{uid}), custom claims, or root superadmin email
     function isAdmin() {
-      return isSignedIn() &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin';
+      return isSignedIn() && (
+        ('email' in request.auth.token && (
+          request.auth.token.email == 'pablosadura@gmail.com' ||
+          request.auth.token.email.lower() == 'pablosadura@gmail.com'
+        )) ||
+        (request.auth.token.get('admin', false) == true) ||
+        (request.auth.token.get('role', '') in ['admin', 'superadmin', 'super_admin', 'Admin', 'Superadmin', 'SuperAdmin']) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         (
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['admin', 'superadmin', 'super_admin', 'Admin', 'Superadmin', 'SuperAdmin', 'ADMIN', 'SUPERADMIN'] ||
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '').lower() in ['admin', 'superadmin', 'super_admin']
+         )) ||
+        (exists(/databases/$(database)/documents/profiles/$(request.auth.uid)) &&
+         (
+           get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.get('role', '') in ['admin', 'superadmin', 'super_admin', 'Admin', 'Superadmin', 'SuperAdmin', 'ADMIN', 'SUPERADMIN'] ||
+           get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.get('role', '').lower() in ['admin', 'superadmin', 'super_admin']
+         ))
+      );
     }
 
     // Check if the current authenticated user is an authorized staff member for the target doctor
@@ -74,9 +89,13 @@ service cloud.firestore {
         isStaffOf(userId) ||
         isAdmin()
       );
-      // New users can create their own profile with 'medico' role (not admin)
-      allow create: if isSignedIn() && request.auth.uid == userId &&
-        request.resource.data.get('role', 'medico') != 'admin';
+      // Admin / Superadmin can create users, or new users can self-register their own profile with non-admin role
+      allow create: if isSignedIn() && (
+        isAdmin() || (
+          request.auth.uid == userId &&
+          !(request.resource.data.get('role', 'medico') in ['admin', 'superadmin', 'super_admin'])
+        )
+      );
       // Existing users can update their profile but cannot escalate role or bypass payment status
       allow update: if isSignedIn() && (
         isAdmin() || (

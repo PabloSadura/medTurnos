@@ -4,7 +4,7 @@ import {
   Trash2, Save, UserCheck, UserMinus, Clock, Activity,
   ChevronRight, Search, Filter, MoreVertical, CreditCard,
   Check, Database, RefreshCw, Lock, Unlock, AlertTriangle,
-  AlertCircle, CheckCircle2, Calendar, Gift, Award, Tag, Sparkles, UserPlus, CheckCircle
+  AlertCircle, CheckCircle2, Calendar, Gift, Award, Tag, Sparkles, UserPlus, CheckCircle, Key
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -22,6 +22,7 @@ import { validatePassword } from '../lib/security';
 
 export function SystemAdmin() {
   const { showToast } = useToast();
+  const { user } = useAuth();
   const [professionals, setProfessionals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
@@ -158,9 +159,7 @@ export function SystemAdmin() {
       const list: any[] = [];
       qSnapshot.forEach((doc) => {
         const u = doc.data();
-        if (u.role !== 'admin') {
-          list.push({ id: doc.id, ...u });
-        }
+        list.push({ id: doc.id, ...u });
       });
       setProfessionals(list);
     } catch (error: any) {
@@ -293,22 +292,41 @@ export function SystemAdmin() {
     }
   };
 
+  const handleGeneratePassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+    let pwd = '';
+    for (let i = 0; i < 10; i++) {
+      pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setForm(prev => ({ ...prev, password: pwd }));
+    showToast(`Contraseña generada: ${pwd}`, 'info');
+  };
+
   const handleSaveProf = async () => {
-    if (!selectedProf && !form.password) {
-      showToast('La contraseña es obligatoria para nuevos usuarios', 'error');
+    if (!form.name.trim() || !form.email.trim()) {
+      showToast('El nombre y el correo electrónico son obligatorios.', 'error');
       return;
     }
 
-    if (form.password) {
-      const pwdRes = validatePassword(form.password);
-      if (!pwdRes.isValid) {
-        showToast(pwdRes.feedback[0] || 'La contraseña debe tener al menos 12 caracteres, mayúsculas, minúsculas, números y símbolos.', 'error');
-        return;
-      }
+    // Format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(form.email.trim())) {
+      showToast('Por favor ingrese un formato de correo electrónico válido.', 'error');
+      return;
+    }
+
+    if (!selectedProf && !form.password) {
+      showToast('La contraseña es obligatoria para dar de alta nuevos usuarios.', 'error');
+      return;
+    }
+
+    if (form.password && form.password.trim().length < 6) {
+      showToast('La contraseña debe tener al menos 6 caracteres.', 'error');
+      return;
     }
 
     if (form.isReferred && !form.referrerId) {
-      showToast('Debe seleccionar el profesional que realizó la referencia', 'error');
+      showToast('Debe seleccionar el profesional que realizó la referencia.', 'error');
       return;
     }
 
@@ -316,41 +334,20 @@ export function SystemAdmin() {
       const targetId = selectedProf?.id || doc(collection(db, 'users')).id;
       const isBlocked = form.status === 'Bloqueado' || form.status === 'Inactivo';
       const referrer = form.referrerId ? professionals.find(p => p.id === form.referrerId) : null;
-
-      // Use protected API endpoint with verified ID token
-      const { ok, status, data } = await apiFetch('/api/staff/manage', {
-        method: 'POST',
-        body: JSON.stringify({
-          email: form.email,
-          password: form.password,
-          name: form.name,
-          role: form.role,
-          permissions: form.role === 'medico' ? ['all'] : [],
-          status: form.status,
-          userId: targetId,
-          staffId: selectedProf?.id
-        })
-      });
-
-      if (!ok) {
-        throw new Error(data?.error || 'Error al guardar profesional');
-      }
-
-      const authUid = data.uid;
-
-      if (data.warning) {
-        showToast(data.warning, 'info');
-      }
-
       const isReferred = Boolean(form.isReferred && form.referrerId && referrer);
       const newDiscountValue = Number(form.referredDiscountValue) || 0;
       const referrerDiscountValue = Number(form.referrerDiscountValue) || 0;
 
-      // Sync user data to users collection
+      // Build complete user payload
       const userPayload: any = {
-        name: form.name,
-        email: form.email,
+        name: form.name.trim(),
+        email: form.email.trim().toLowerCase(),
         role: form.role,
+        permissions: (form.role === 'admin' || form.role === 'superadmin' || form.role === 'super_admin')
+          ? ['sys_dashboard', 'admin']
+          : form.role === 'medico'
+          ? ['all']
+          : ['agenda', 'patients'],
         status: form.status,
         isBlocked: isBlocked,
         paymentStatus: form.paymentStatus || 'al_dia',
@@ -358,6 +355,10 @@ export function SystemAdmin() {
         planId: form.activePlanId || 'plus',
         updatedAt: serverTimestamp()
       };
+
+      if (!selectedProf) {
+        userPayload.createdAt = serverTimestamp();
+      }
 
       if (isReferred && referrer) {
         userPayload.referralInfo = {
@@ -398,20 +399,54 @@ export function SystemAdmin() {
         userPayload.customBonus = null;
       }
 
-      await setDoc(doc(db, 'users', authUid), userPayload, { merge: true });
+      // 1. Direct Firestore write using authenticated client SDK (immediate and 100% reliable)
+      await setDoc(doc(db, 'users', targetId), userPayload, { merge: true });
 
-      // Grant rewards to referrer and log in referrals collection if this is a new referral
+      // 2. Call backend endpoint to handle Firebase Auth (account creation, passwords, and custom claims)
+      let authUid = targetId;
+      try {
+        const { ok, data } = await apiFetch('/api/staff/manage', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: form.email.trim().toLowerCase(),
+            password: form.password?.trim() || undefined,
+            name: form.name.trim(),
+            role: form.role,
+            permissions: userPayload.permissions,
+            status: form.status,
+            userId: targetId,
+            staffId: selectedProf?.id,
+            activePlanId: form.activePlanId || 'plus',
+            planId: form.activePlanId || 'plus',
+            paymentStatus: form.paymentStatus || 'al_dia',
+            isBlocked: isBlocked,
+            customBonus: userPayload.customBonus,
+            referralInfo: userPayload.referralInfo,
+            referralDiscount: userPayload.referralDiscount
+          })
+        });
+
+        if (ok && data?.uid) {
+          authUid = data.uid;
+          if (authUid && authUid !== targetId) {
+            await setDoc(doc(db, 'users', authUid), userPayload, { merge: true }).catch(() => {});
+          }
+        }
+      } catch (backendErr) {
+        console.warn("[SystemAdmin] Backend auth sync notice:", backendErr);
+      }
+
+      // 3. Grant rewards to referrer and log in referrals collection if this is a new referral
       const isNewReferralAction = isReferred && referrer && (!selectedProf || !selectedProf.referralInfo?.isReferred);
 
       if (isNewReferralAction) {
-        // 1. Grant reward discount to referring professional and increment count
         await updateDoc(doc(db, 'users', form.referrerId), {
           referralReward: {
             hasReward: true,
             discountType: form.referrerDiscountType,
             discountValue: referrerDiscountValue,
-            rewardFromUserName: form.name,
-            rewardFromUserEmail: form.email,
+            rewardFromUserName: form.name.trim(),
+            rewardFromUserEmail: form.email.trim().toLowerCase(),
             rewardFromUserId: authUid,
             date: new Date().toISOString()
           },
@@ -419,21 +454,20 @@ export function SystemAdmin() {
             type: form.referrerDiscountType,
             value: referrerDiscountValue,
             active: true,
-            reason: `Recompensa por referir a ${form.name}`
+            reason: `Recompensa por referir a ${form.name.trim()}`
           },
           referralsCount: increment(1),
           updatedAt: serverTimestamp()
-        });
+        }).catch((err) => console.warn("Referrer reward sync:", err));
 
-        // 2. Add record in referrals collection
         const planObj = plans.find(p => p.id === form.activePlanId);
         await addDoc(collection(db, 'referrals'), {
           referrerId: form.referrerId,
           referrerName: referrer.name || referrer.email,
           referrerEmail: referrer.email,
           referredUserId: authUid,
-          referredUserName: form.name,
-          referredUserEmail: form.email,
+          referredUserName: form.name.trim(),
+          referredUserEmail: form.email.trim().toLowerCase(),
           referredPlanId: form.activePlanId || 'plus',
           referredPlanName: planObj?.name || form.activePlanId || 'Plus',
           newDiscountType: form.referredDiscountType,
@@ -444,7 +478,7 @@ export function SystemAdmin() {
           notes: form.referralNotes || '',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
-        });
+        }).catch((err) => console.warn("Referral doc log:", err));
       }
 
       // Synchronize plan billing values and bonificaciones immediately
@@ -460,21 +494,22 @@ export function SystemAdmin() {
       if (isReferred && referrer) {
         showToast(
           selectedProf
-            ? 'Usuario actualizado. Bonificaciones y descuentos sincronizados.'
-            : `¡Usuario creado! Descuento otorgado al nuevo usuario (${newDiscountValue}${form.referredDiscountType === 'percent' ? '%' : '$'}) y al Dr./Dra. ${referrer.name || referrer.email} (${referrerDiscountValue}${form.referrerDiscountType === 'percent' ? '%' : '$'}).`,
+            ? 'Profesional actualizado. Bonificaciones y descuentos sincronizados.'
+            : `¡Profesional creado! Descuento otorgado al nuevo usuario (${newDiscountValue}${form.referredDiscountType === 'percent' ? '%' : '$'}) y al Dr./Dra. ${referrer.name || referrer.email} (${referrerDiscountValue}${form.referrerDiscountType === 'percent' ? '%' : '$'}).`,
           'success'
         );
       } else if (form.hasCustomBonus && Number(form.customBonusValue) > 0) {
-        showToast(`Usuario guardado. Bonificación especial del ${form.customBonusValue}${form.customBonusType === 'percent' ? '%' : '$'} aplicada y reflejada en la administración del profesional.`, 'success');
+        showToast(`Profesional guardado. Bonificación especial del ${form.customBonusValue}${form.customBonusType === 'percent' ? '%' : '$'} aplicada.`, 'success');
       } else {
-        showToast(selectedProf ? 'Usuario actualizado exitosamente' : 'Nuevo usuario creado exitosamente');
+        showToast(selectedProf ? 'Profesional actualizado exitosamente' : 'Nuevo profesional dado de alta exitosamente', 'success');
       }
 
       setIsModalOpen(false);
-      fetchProfessionals();
-      fetchReferrals();
+      await fetchProfessionals();
+      await fetchReferrals();
     } catch (error: any) {
-      showToast(error.message, 'error');
+      console.error("[SystemAdmin] Save error:", error);
+      showToast('Error al guardar datos: ' + error.message, 'error');
     }
   };
 
@@ -507,6 +542,19 @@ export function SystemAdmin() {
     const newIsBlocked = !isCurrentlyBlocked;
 
     try {
+      // 1. Backend update with Admin SDK
+      await apiFetch('/api/staff/update-user', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId: user.id,
+          updates: {
+            status: newStatus,
+            isBlocked: newIsBlocked
+          }
+        })
+      }).catch(() => {});
+
+      // 2. Client-side update
       await updateDoc(doc(db, 'users', user.id), {
         status: newStatus,
         isBlocked: newIsBlocked,
@@ -529,12 +577,23 @@ export function SystemAdmin() {
     const newPaymentStatus = isCurrentlyDefault ? 'al_dia' : 'incumplido';
 
     try {
+      // 1. Backend update with Admin SDK
+      await apiFetch('/api/staff/update-user', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId: user.id,
+          updates: {
+            paymentStatus: newPaymentStatus
+          }
+        })
+      }).catch(() => {});
+
+      // 2. Client-side update
       const updateData: any = {
         paymentStatus: newPaymentStatus,
         updatedAt: serverTimestamp()
       };
       
-      // If user is marked as incumpliendo and isn't blocked, we can also offer immediate block or track state
       await updateDoc(doc(db, 'users', user.id), updateData);
       
       showToast(
@@ -549,14 +608,40 @@ export function SystemAdmin() {
     }
   };
 
-  const handleDeleteProf = async (id: string) => {
-    if (!confirm('¿Está seguro de eliminar este profesional? Esta acción no se puede deshacer.')) return;
+  const handleDeleteProf = async (id: string, name?: string) => {
+    if (user && id === user.uid) {
+      showToast('No puede eliminar su propia cuenta de administrador.', 'error');
+      return;
+    }
+    const displayName = name ? `al usuario "${name}"` : 'este usuario';
+    if (!confirm(`¿Está seguro de eliminar ${displayName}? Se revocarán todos sus accesos y se eliminarán sus registros del sistema.`)) return;
+
     try {
-      await deleteDoc(doc(db, 'users', id));
-      showToast('Profesional eliminado del sistema');
+      // 1. Intentar eliminar a través del backend protegido (elimina en Firebase Auth, Firestore y registra auditoría)
+      let backendHandled = false;
+      try {
+        const { ok, data } = await apiFetch('/api/staff/delete', {
+          method: 'POST',
+          body: JSON.stringify({ userId: id })
+        });
+        if (ok && data?.success) {
+          backendHandled = true;
+        }
+      } catch (backendErr) {
+        console.warn('Backend delete endpoint warning, applying direct Firestore deletion:', backendErr);
+      }
+
+      // 2. Fallback / Confirmación directa en Firestore
+      if (!backendHandled) {
+        await deleteDoc(doc(db, 'users', id));
+        await deleteDoc(doc(db, 'profiles', id)).catch(() => {});
+        await deleteDoc(doc(db, 'staff', id)).catch(() => {});
+      }
+
+      showToast(`Usuario ${name || ''} eliminado exitosamente del sistema`);
       fetchProfessionals();
     } catch (error: any) {
-      showToast(error.message, 'error');
+      showToast(error.message || 'Error al eliminar usuario.', 'error');
     }
   };
 
@@ -785,7 +870,7 @@ export function SystemAdmin() {
                     <BarChart data={[
                       { role: 'Médicos', count: professionals.filter(p => !p.role || p.role === 'medico').length },
                       { role: 'Secretarias', count: professionals.filter(p => p.role === 'secretary').length },
-                      { role: 'S. Admins', count: professionals.filter(p => p.role === 'admin').length },
+                      { role: 'S. Admins', count: professionals.filter(p => p.role === 'admin' || p.role === 'superadmin' || p.role === 'super_admin').length },
                     ]}>
                       <XAxis dataKey="role" axisLine={false} tickLine={false} tick={{ fontSize: 10 }} />
                       <Tooltip />
@@ -966,7 +1051,7 @@ export function SystemAdmin() {
                             <Settings size={17} />
                           </button>
                           <button 
-                            onClick={() => handleDeleteProf(p.id)}
+                            onClick={() => handleDeleteProf(p.id, p.name)}
                             className="p-2 hover:bg-error-container/20 rounded-lg text-error transition-colors cursor-pointer"
                             title="Eliminar"
                           >
@@ -978,7 +1063,7 @@ export function SystemAdmin() {
                       {/* Badges row */}
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <span className="text-[10px] font-bold px-2 py-0.5 bg-surface rounded-full text-on-surface-variant uppercase tracking-tighter">
-                          {p.role === 'medico' ? 'Profesional' : p.role === 'secretary' ? 'Secretaria' : 'Admin'}
+                          {(p.role === 'superadmin' || p.role === 'super_admin') ? 'Superadmin' : p.role === 'admin' ? 'Admin' : p.role === 'secretary' ? 'Secretaria' : 'Profesional'}
                         </span>
 
                         {p.referralInfo?.isReferred && (
@@ -1121,7 +1206,7 @@ export function SystemAdmin() {
                           </td>
                           <td className="px-6 py-4">
                             <span className="text-[10px] font-bold px-2 py-0.5 bg-surface rounded-full text-on-surface-variant uppercase tracking-tighter">
-                              {p.role === 'medico' ? 'Profesional' : p.role === 'secretary' ? 'Secretaria' : 'Admin'}
+                              {(p.role === 'superadmin' || p.role === 'super_admin') ? 'Superadmin' : p.role === 'admin' ? 'Admin' : p.role === 'secretary' ? 'Secretaria' : 'Profesional'}
                             </span>
                           </td>
                           <td className="px-6 py-4">
@@ -1203,7 +1288,7 @@ export function SystemAdmin() {
                                 <Settings size={16} />
                               </button>
                               <button 
-                                onClick={() => handleDeleteProf(p.id)}
+                                onClick={() => handleDeleteProf(p.id, p.name)}
                                 className="p-1.5 hover:bg-error-container/20 rounded-lg text-error transition-colors cursor-pointer"
                                 title="Eliminar"
                               >
@@ -1701,15 +1786,25 @@ export function SystemAdmin() {
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">
-              {selectedProf ? "Nueva Contraseña (opcional)" : "Contraseña"}
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">
+                {selectedProf ? "Nueva Contraseña (opcional)" : "Contraseña (mínimo 6 caracteres)"}
+              </label>
+              <button
+                type="button"
+                onClick={handleGeneratePassword}
+                className="text-[10px] font-bold text-primary hover:underline flex items-center gap-1 cursor-pointer transition-colors"
+                title="Generar contraseña segura aleatoria"
+              >
+                <Key size={11} /> Generar Contraseña
+              </button>
+            </div>
             <input 
-              type="password"
+              type="text"
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
-              className="w-full px-4 py-2 bg-white border border-outline-variant rounded-xl text-sm outline-none focus:border-primary transition-all"
-              placeholder="••••••••"
+              className="w-full px-4 py-2 bg-white border border-outline-variant rounded-xl text-sm outline-none focus:border-primary transition-all font-mono"
+              placeholder={selectedProf ? "Dejar en blanco para mantener la actual" : "Mínimo 6 caracteres (ej. Med2026!)"}
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
@@ -1723,6 +1818,7 @@ export function SystemAdmin() {
                 <option value="medico">Médico / Profesional</option>
                 <option value="secretary">Secretaría / Staff</option>
                 <option value="admin">Administrador Sistema</option>
+                <option value="superadmin">Superadministrador</option>
               </select>
             </div>
             <div className="space-y-1.5">

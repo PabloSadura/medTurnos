@@ -176,7 +176,7 @@
       "properties": {
         "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
-        "role": { "type": "string", "enum": ["Professional", "Secretary", "Admin"] },
+        "role": { "type": "string", "enum": ["Professional", "Secretary", "Admin", "Superadmin"] },
         "permissions": { "type": "array", "items": { "type": "string" } },
         "status": { "type": "string", "enum": ["Activo", "Inactivo"] },
         "userId": { "type": "string" },

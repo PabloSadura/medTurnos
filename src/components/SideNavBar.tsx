@@ -44,7 +44,7 @@ export function SideNavBar() {
   }, [isMobileOpen, closeMobile]);
 
   const { operationItems, clinicalItems, adminItems } = useMemo(() => {
-    const isAdmin = profile?.role === 'admin';
+    const isAdmin = profile?.role === 'admin' || profile?.role === 'superadmin' || profile?.role === 'super_admin';
     if (isAdmin) {
       // El administrador tiene acceso exclusivamente al panel de control de administración global
       // Todas las demás opciones (Agenda, Pacientes, Tratamientos, Inventario, Avisos, Panel Clínico) son para los profesionales
@@ -82,7 +82,7 @@ export function SideNavBar() {
   }, [permissions, profile?.role]);
 
   const userRoleLabel = useMemo(() => {
-    if (profile?.role === 'admin') return 'Superadmin · Toda la org.';
+    if (profile?.role === 'admin' || profile?.role === 'superadmin' || profile?.role === 'super_admin') return 'Superadmin · Toda la org.';
     if (profile?.role === 'secretary') return 'Staff Administrativo';
     return 'Profesional Clínico';
   }, [profile?.role]);

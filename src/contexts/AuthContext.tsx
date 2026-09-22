@@ -112,7 +112,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               const data = snap.data();
               setProfile(data);
 
-              if (data.role === 'admin') {
+              const isSuperOrAdmin = data.role === 'admin' || data.role === 'superadmin' || data.role === 'super_admin' || firebaseUser.email === 'pablosadura@gmail.com';
+              if (isSuperOrAdmin) {
                 setIsStaff(false);
                 setOwnerId(firebaseUser.uid);
                 // El administrador solo accede al panel de control administrativo; las demás opciones son únicamente para los profesionales
@@ -146,6 +147,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
               setLoading(false);
             } else {
+              if (firebaseUser.email === 'pablosadura@gmail.com') {
+                const superAdminProfile = {
+                  uid: firebaseUser.uid,
+                  email: firebaseUser.email,
+                  name: firebaseUser.displayName || 'Superadministrador',
+                  role: 'admin',
+                  status: 'Activo'
+                };
+                setProfile(superAdminProfile);
+                setIsStaff(false);
+                setOwnerId(firebaseUser.uid);
+                setPermissions(['sys_dashboard', 'admin']);
+                setLoading(false);
+                return;
+              }
               // Check if user is registered in staff collection
               checkStaffStatus(firebaseUser);
             }

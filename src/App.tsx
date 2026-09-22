@@ -21,8 +21,9 @@ import { NAV_ITEMS } from './lib/navigation';
 
 function HomeRedirect() {
   const { permissions, profile } = useAuth();
+  const isSuperOrAdmin = profile?.role === 'admin' || profile?.role === 'superadmin' || profile?.role === 'super_admin';
   
-  if (profile?.role === 'admin') {
+  if (isSuperOrAdmin) {
     return <Navigate to="/system/dashboard" replace />;
   }
   
@@ -42,14 +43,15 @@ function HomeRedirect() {
 
 function ProtectedRoute({ children, permission }: { children: React.ReactNode, permission?: string }) {
   const { permissions, profile } = useAuth();
+  const isSuperOrAdmin = profile?.role === 'admin' || profile?.role === 'superadmin' || profile?.role === 'super_admin';
   
   // Si el usuario es administrador y la ruta es de operaciones clínicas (solo para profesionales), redirigir al panel de control
-  if (profile?.role === 'admin' && permission && !['sys_dashboard', 'admin'].includes(permission)) {
+  if (isSuperOrAdmin && permission && !['sys_dashboard', 'admin'].includes(permission)) {
     return <Navigate to="/system/dashboard" replace />;
   }
 
   // Si el usuario es un profesional y trata de ingresar al panel maestro del sistema
-  if (profile?.role !== 'admin' && permission === 'sys_dashboard') {
+  if (!isSuperOrAdmin && permission === 'sys_dashboard') {
     return <Navigate to="/medical/dashboard" replace />;
   }
 
@@ -82,7 +84,8 @@ function AppContent() {
     );
   }
 
-  const isUserBlocked = user && profile?.role !== 'admin' && (
+  const isSuperOrAdmin = profile?.role === 'admin' || profile?.role === 'superadmin' || profile?.role === 'super_admin' || user?.email === 'pablosadura@gmail.com';
+  const isUserBlocked = user && !isSuperOrAdmin && (
     profile?.status === 'Inactivo' ||
     profile?.status === 'Bloqueado' ||
     profile?.isBlocked === true ||

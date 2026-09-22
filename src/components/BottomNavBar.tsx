@@ -16,7 +16,7 @@ export function BottomNavBar() {
   const { closeMobile } = useSidebar();
   const location = useLocation();
 
-  const isAdmin = profile?.role === 'admin';
+  const isAdmin = profile?.role === 'admin' || profile?.role === 'superadmin' || profile?.role === 'super_admin';
 
   // Navigation items: Admin sees only their control panel and profile.
   // Clinical options (Agenda, Pacientes, Avisos) are solely for professionals.

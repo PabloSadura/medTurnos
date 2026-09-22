@@ -40,29 +40,29 @@ export function validatePassword(password: string): PasswordValidationResult {
     };
   }
 
-  // Check length
-  if (trimmed.length < 12) {
-    feedback.push('Debe tener al menos 12 caracteres.');
+  // Check length (Firebase standard minimum is 6 characters)
+  if (trimmed.length < 6) {
+    feedback.push('Debe tener al menos 6 caracteres.');
   }
 
   // Check uppercase
   if (!/[A-Z]/.test(trimmed)) {
-    feedback.push('Debe contener al menos una letra mayúscula (A-Z).');
+    feedback.push('Recomendado: incluir al menos una letra mayúscula (A-Z).');
   }
 
   // Check lowercase
   if (!/[a-z]/.test(trimmed)) {
-    feedback.push('Debe contener al menos una letra minúscula (a-z).');
+    feedback.push('Recomendado: incluir al menos una letra minúscula (a-z).');
   }
 
   // Check numbers
   if (!/[0-9]/.test(trimmed)) {
-    feedback.push('Debe contener al menos un número (0-9).');
+    feedback.push('Recomendado: incluir al menos un número (0-9).');
   }
 
   // Check special characters
   if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(trimmed)) {
-    feedback.push('Debe contener al menos un carácter especial (ej. !@#$%^&*).');
+    feedback.push('Recomendado: incluir al menos un carácter especial (ej. !@#$%^&*).');
   }
 
   // Check against common passwords
@@ -72,8 +72,8 @@ export function validatePassword(password: string): PasswordValidationResult {
 
   // Calculate score (0 to 4)
   let score = 0;
-  if (trimmed.length >= 8) score++;
-  if (trimmed.length >= 12) score++;
+  if (trimmed.length >= 6) score++;
+  if (trimmed.length >= 10) score++;
   if (/[A-Z]/.test(trimmed) && /[a-z]/.test(trimmed)) score++;
   if (/[0-9]/.test(trimmed) && /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(trimmed)) score++;
 
@@ -93,12 +93,12 @@ export function validatePassword(password: string): PasswordValidationResult {
   } else if (score === 3) {
     label = 'Fuerte';
     color = 'text-blue-500';
-  } else if (score === 4 && feedback.length === 0) {
+  } else if (score >= 4) {
     label = 'Excelente';
     color = 'text-emerald-500';
   }
 
-  const isValid = feedback.length === 0;
+  const isValid = trimmed.length >= 6 && !COMMON_PASSWORDS.has(trimmed.toLowerCase());
 
   return {
     isValid,

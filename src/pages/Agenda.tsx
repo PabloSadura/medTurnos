@@ -48,6 +48,11 @@ export function Agenda() {
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false);
   const [isExportDayModalOpen, setIsExportDayModalOpen] = useState(false);
 
+  // La agenda profesional siempre debe iniciarse en vista mes
+  useEffect(() => {
+    setView('month');
+  }, [ownerId]);
+
   useEffect(() => {
     if (!ownerId) return;
 
@@ -1174,16 +1179,6 @@ export function Agenda() {
                 <span className="text-xs font-bold px-3 py-1.5 bg-surface-bright text-on-surface rounded-xl border border-outline-variant">
                   {selectedDateAppointments.length} {selectedDateAppointments.length === 1 ? 'turno agendado' : 'turnos agendados'}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setIsExportDayModalOpen(true)}
-                  className="px-3 py-2 bg-white text-on-surface hover:bg-surface border border-outline-variant rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all shadow-xs uppercase tracking-wider"
-                  title="Exportar agenda del día con pacientes, tratamientos, turnos y notas"
-                >
-                  <Download size={14} className="text-primary" />
-                  <span className="hidden xs:inline">Exportar Día</span>
-                  <span className="xs:hidden">Exportar</span>
-                </button>
                 <button
                   type="button"
                   onClick={() => handleOpenNewAppointment(formatLocalDate(selectedDate))}
