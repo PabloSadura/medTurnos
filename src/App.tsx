@@ -15,13 +15,13 @@ import { Profile } from './pages/Profile';
 import { Administration } from './pages/Administration';
 import { SystemAdmin } from './pages/SystemAdmin';
 import { ToastProvider } from './components/Toast';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { AuthProvider, useAuth, isAdminRole } from './contexts/AuthContext';
 import { GoogleDriveProvider } from './contexts/GoogleDriveContext';
 import { NAV_ITEMS } from './lib/navigation';
 
 function HomeRedirect() {
   const { permissions, profile } = useAuth();
-  const isSuperOrAdmin = profile?.role === 'admin' || profile?.role === 'superadmin' || profile?.role === 'super_admin';
+  const isSuperOrAdmin = isAdminRole(profile?.role);
   
   if (isSuperOrAdmin) {
     return <Navigate to="/system/dashboard" replace />;
@@ -43,7 +43,7 @@ function HomeRedirect() {
 
 function ProtectedRoute({ children, permission }: { children: React.ReactNode, permission?: string }) {
   const { permissions, profile } = useAuth();
-  const isSuperOrAdmin = profile?.role === 'admin' || profile?.role === 'superadmin' || profile?.role === 'super_admin';
+  const isSuperOrAdmin = isAdminRole(profile?.role);
   
   // Si el usuario es administrador y la ruta es de operaciones clínicas (solo para profesionales), redirigir al panel de control
   if (isSuperOrAdmin && permission && !['sys_dashboard', 'admin'].includes(permission)) {
@@ -84,7 +84,7 @@ function AppContent() {
     );
   }
 
-  const isSuperOrAdmin = profile?.role === 'admin' || profile?.role === 'superadmin' || profile?.role === 'super_admin' || user?.email === 'pablosadura@gmail.com';
+  const isSuperOrAdmin = isAdminRole(profile?.role);
   const isUserBlocked = user && !isSuperOrAdmin && (
     profile?.status === 'Inactivo' ||
     profile?.status === 'Bloqueado' ||

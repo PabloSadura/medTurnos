@@ -54,7 +54,8 @@ import {
   formatMonthLabel,
   generatePastMonths,
   getMonthsBetween,
-  computeMonthlyEvolution
+  computeMonthlyEvolution,
+  formatLocalDate
 } from '../lib/dashboardUtils';
 
 type TimeframePreset = '1m' | '3m' | '6m' | '12m' | 'specific' | 'custom';
@@ -511,6 +512,8 @@ export function Dashboard() {
     let totalCanceled = 0;
     let totalPending = 0;
     let totalRevenue = 0;
+    let totalProjectedRevenue = 0;
+    let totalPendingRevenue = 0;
     let packagesRevenue = 0;
     let packagesCount = 0;
     let appointmentsRevenue = 0;
@@ -523,6 +526,8 @@ export function Dashboard() {
       totalCanceled += m.canceled;
       totalPending += m.pending;
       totalRevenue += m.revenue;
+      totalProjectedRevenue += (m as any).projectedRevenue ?? m.revenue;
+      totalPendingRevenue += (m as any).pendingRevenue ?? 0;
       packagesRevenue += m.packagesRevenue;
       packagesCount += m.packagesCount;
       appointmentsRevenue += m.appointmentsRevenue;
@@ -553,13 +558,18 @@ export function Dashboard() {
       }
     });
 
-    const attendanceRate = totalAppointments > 0 ? Math.round((totalFinished / totalAppointments) * 100) : 0;
-    const absentRate = totalAppointments > 0 ? Math.round((totalAbsent / totalAppointments) * 100) : 0;
+    const concludedUniverse = totalFinished + totalAbsent;
+    const attendanceRate = concludedUniverse > 0 
+      ? Math.round((totalFinished / concludedUniverse) * 100) 
+      : (totalAppointments > 0 ? Math.round((totalFinished / totalAppointments) * 100) : 0);
+    const absentRate = concludedUniverse > 0 
+      ? Math.round((totalAbsent / concludedUniverse) * 100) 
+      : 0;
     const avgMonthlyRevenue = selectedMonths.length > 0 ? Math.round(totalRevenue / selectedMonths.length) : 0;
     const avgMonthlyAppointments = selectedMonths.length > 0 ? Math.round(totalAppointments / selectedMonths.length) : 0;
 
-    // Today specific stats
-    const todayStr = now.toISOString().split('T')[0];
+    // Today specific stats with local calendar date
+    const todayStr = formatLocalDate(now);
     const todayApps = rawAppointments.filter(a => getAppointmentDateString(a) === todayStr);
     const todayEvolutions = rawEvolutions.filter(ev => {
       const d = ev.date || (ev.createdAt?.toDate ? ev.createdAt.toDate().toISOString().split('T')[0] : '');
@@ -604,12 +614,15 @@ export function Dashboard() {
       totalCanceled,
       totalPending,
       totalRevenue,
+      totalProjectedRevenue,
+      totalPendingRevenue,
       appointmentsRevenue,
       packagesRevenue,
       packagesCount,
       uniquePatients: uniquePatientIds.size,
       attendanceRate,
       absentRate,
+      concludedUniverse,
       avgMonthlyRevenue,
       avgMonthlyAppointments,
       todayAppointments,
@@ -914,7 +927,7 @@ export function Dashboard() {
             <div className="flex justify-between items-start mb-2">
               <div>
                 <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
-                  Ingresos del Período
+                  Ingresos Reales Cobrados
                 </p>
                 <h3 className="text-2xl font-black text-emerald-700 mt-1">
                   ${periodSummary.totalRevenue.toLocaleString('es-AR')}
@@ -926,7 +939,7 @@ export function Dashboard() {
             </div>
             <div className="space-y-1 my-2 text-[11px] bg-surface-bright/70 p-2 rounded-xl border border-outline-variant/50">
               <div className="flex items-center justify-between">
-                <span className="text-on-surface-variant font-medium">Turnos / Consultas:</span>
+                <span className="text-on-surface-variant font-medium">Turnos Cobrados:</span>
                 <span className="font-bold text-on-surface">
                   ${periodSummary.appointmentsRevenue.toLocaleString('es-AR')}
                 </span>
@@ -939,10 +952,18 @@ export function Dashboard() {
                   ${periodSummary.packagesRevenue.toLocaleString('es-AR')} <span className="font-normal text-[10px] text-amber-900/80">({periodSummary.packagesCount})</span>
                 </span>
               </div>
+              {periodSummary.totalPendingRevenue > 0 && (
+                <div className="flex items-center justify-between pt-1 border-t border-outline-variant/40 text-[10px]">
+                  <span className="text-primary font-semibold">Proyectado (Total Período):</span>
+                  <span className="font-black text-primary">
+                    ${periodSummary.totalProjectedRevenue.toLocaleString('es-AR')}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
           <div className="pt-2 border-t border-outline-variant/40 flex items-center justify-between text-[11px]">
-            <span className="text-on-surface-variant font-medium">Promedio mensual</span>
+            <span className="text-on-surface-variant font-medium">Promedio mensual real</span>
             <span className="font-bold text-on-surface">
               ${periodSummary.avgMonthlyRevenue.toLocaleString('es-AR')}/mes
             </span>
@@ -959,7 +980,7 @@ export function Dashboard() {
           <div className="flex justify-between items-start mb-2">
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">
-                Tasa de Asistencia
+                Tasa de Asistencia (Concluidos)
               </p>
               <h3 className="text-2xl font-black text-primary mt-1">
                 {periodSummary.attendanceRate}%
@@ -970,9 +991,9 @@ export function Dashboard() {
             </div>
           </div>
           <div className="pt-2 border-t border-outline-variant/40 flex items-center justify-between text-[11px]">
-            <span className="text-on-surface-variant font-medium">Ausencias / Canc.</span>
+            <span className="text-on-surface-variant font-medium">Ausentismo clínico</span>
             <span className="font-bold text-rose-600">
-              {periodSummary.totalAbsent + periodSummary.totalCanceled} turnos
+              {periodSummary.absentRate}% ({periodSummary.totalAbsent} de {periodSummary.concludedUniverse})
             </span>
           </div>
         </motion.div>

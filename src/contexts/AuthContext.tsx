@@ -13,6 +13,22 @@ import {
   limit 
 } from 'firebase/firestore';
 
+export function normalizeRole(rawRole?: string): 'admin' | 'secretary' | 'medico' {
+  if (!rawRole) return 'medico';
+  const r = String(rawRole).toLowerCase().trim();
+  if (r === 'admin' || r === 'superadmin' || r === 'super_admin') {
+    return 'admin';
+  }
+  if (r === 'secretary' || r === 'secretaria') {
+    return 'secretary';
+  }
+  return 'medico';
+}
+
+export function isAdminRole(rawRole?: string): boolean {
+  return normalizeRole(rawRole) === 'admin';
+}
+
 interface AuthContextType {
   user: User | null;
   profile: any | null;
@@ -112,7 +128,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               const data = snap.data();
               setProfile(data);
 
-              const isSuperOrAdmin = data.role === 'admin' || data.role === 'superadmin' || data.role === 'super_admin' || firebaseUser.email === 'pablosadura@gmail.com';
+              const tokenResult = await firebaseUser.getIdTokenResult().catch(() => null);
+              const hasAdminClaim = Boolean(tokenResult?.claims?.admin === true || tokenResult?.claims?.role === 'admin');
+              const isSuperOrAdmin = isAdminRole(data.role) || hasAdminClaim;
               if (isSuperOrAdmin) {
                 setIsStaff(false);
                 setOwnerId(firebaseUser.uid);
@@ -125,7 +143,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 return;
               }
 
-              if (data.role === 'secretary') {
+              if (normalizeRole(data.role) === 'secretary') {
                 checkStaffStatus(firebaseUser, data);
                 return;
               }
@@ -147,15 +165,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
               setLoading(false);
             } else {
-              if (firebaseUser.email === 'pablosadura@gmail.com') {
-                const superAdminProfile = {
+              // Check if user has admin claims before falling back to staff check
+              const tokenResult = await firebaseUser.getIdTokenResult().catch(() => null);
+              if (tokenResult?.claims?.admin === true || tokenResult?.claims?.role === 'admin') {
+                setProfile({
                   uid: firebaseUser.uid,
                   email: firebaseUser.email,
-                  name: firebaseUser.displayName || 'Superadministrador',
+                  name: firebaseUser.displayName || 'Administrador',
                   role: 'admin',
                   status: 'Activo'
-                };
-                setProfile(superAdminProfile);
+                });
                 setIsStaff(false);
                 setOwnerId(firebaseUser.uid);
                 setPermissions(['sys_dashboard', 'admin']);

@@ -40,40 +40,40 @@ export function validatePassword(password: string): PasswordValidationResult {
     };
   }
 
-  // Check length (Firebase standard minimum is 6 characters)
-  if (trimmed.length < 6) {
-    feedback.push('Debe tener al menos 6 caracteres.');
+  // Check length (Clinical compliance requires at least 12 characters)
+  if (trimmed.length < 12) {
+    feedback.push('Debe tener al menos 12 caracteres (política de seguridad clínica).');
   }
 
   // Check uppercase
   if (!/[A-Z]/.test(trimmed)) {
-    feedback.push('Recomendado: incluir al menos una letra mayúscula (A-Z).');
+    feedback.push('Debe incluir al menos una letra mayúscula (A-Z).');
   }
 
   // Check lowercase
   if (!/[a-z]/.test(trimmed)) {
-    feedback.push('Recomendado: incluir al menos una letra minúscula (a-z).');
+    feedback.push('Debe incluir al menos una letra minúscula (a-z).');
   }
 
   // Check numbers
   if (!/[0-9]/.test(trimmed)) {
-    feedback.push('Recomendado: incluir al menos un número (0-9).');
+    feedback.push('Debe incluir al menos un número (0-9).');
   }
 
   // Check special characters
   if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(trimmed)) {
-    feedback.push('Recomendado: incluir al menos un carácter especial (ej. !@#$%^&*).');
+    feedback.push('Debe incluir al menos un carácter especial (ej. !@#$%^&*).');
   }
 
   // Check against common passwords
   if (COMMON_PASSWORDS.has(trimmed.toLowerCase())) {
-    feedback.push('La contraseña ingresada es demasiado común y predecible.');
+    feedback.push('La contraseña ingresada es predecible o demasiado común.');
   }
 
   // Calculate score (0 to 4)
   let score = 0;
-  if (trimmed.length >= 6) score++;
-  if (trimmed.length >= 10) score++;
+  if (trimmed.length >= 8) score++;
+  if (trimmed.length >= 12) score++;
   if (/[A-Z]/.test(trimmed) && /[a-z]/.test(trimmed)) score++;
   if (/[0-9]/.test(trimmed) && /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(trimmed)) score++;
 
@@ -98,7 +98,12 @@ export function validatePassword(password: string): PasswordValidationResult {
     color = 'text-emerald-500';
   }
 
-  const isValid = trimmed.length >= 6 && !COMMON_PASSWORDS.has(trimmed.toLowerCase());
+  const isValid = 
+    trimmed.length >= 12 && 
+    /[A-Z]/.test(trimmed) && 
+    /[a-z]/.test(trimmed) && 
+    /[0-9]/.test(trimmed) && 
+    !COMMON_PASSWORDS.has(trimmed.toLowerCase());
 
   return {
     isValid,

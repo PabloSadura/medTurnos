@@ -149,10 +149,13 @@ export interface Appointment {
   duration?: number;
   isOverturn?: boolean;
   manualOverturn?: boolean;
-  overturnReason?: 'time_overlap' | 'outside_hours' | 'manual' | null;
+  overturnReason?: 'time_overlap' | 'manual' | null;
+  isOutsideWorkingHours?: boolean;
+  outsideHoursReason?: string | null;
   overlappingAppointmentIds?: string[];
   overlapCount?: number;
   overlapUpdatedAt?: any;
+  clientActionId?: string;
   isOverturnTag?: string | null;
   status: 'pendiente' | 'confirmed' | 'confirmado' | 'in-session' | 'finished' | 'cancelled' | 'cancelado' | 'ausente';
   type: string;

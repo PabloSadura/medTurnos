@@ -76,7 +76,7 @@ export interface DetailedConflict {
 export interface ConflictResult {
   hasConflict: boolean;
   isOverturn: boolean;
-  overturnReason: 'time_overlap' | 'outside_hours' | 'manual' | null;
+  overturnReason: 'time_overlap' | 'manual' | null;
   conflictingAppointment?: any;
   overlappingAppointments: any[];
   overlappingAppointmentIds: string[];
@@ -355,6 +355,8 @@ export interface SuggestedSlot {
   isOverturn: boolean;
   isConflict: boolean;
   conflictSummary?: string;
+  isOutsideWorkingHours?: boolean;
+  outsideHoursReason?: string | null;
   label: string;
   shift: 'morning' | 'afternoon';
 }
@@ -492,7 +494,7 @@ export function getSuggestedAvailableSlots(
       const collision = checkScheduleCollision(date, timeStr, safeDuration, appointments, excludeAppointmentId);
       const outside = checkIsOutsideWorkingHours(date, timeStr, effectiveHours, safeDuration);
       const endTime = calculateEndTime(timeStr, safeDuration);
-      const isOverturn = collision.hasConflict || outside.isOutside;
+      const isOverturn = collision.hasConflict;
 
       suggested.push({
         time: timeStr,
@@ -500,6 +502,8 @@ export function getSuggestedAvailableSlots(
         isOverturn,
         isConflict: collision.hasConflict,
         conflictSummary: collision.conflictSummary,
+        isOutsideWorkingHours: outside.isOutside,
+        outsideHoursReason: outside.isOutside ? outside.reason : null,
         label: `${timeStr} - ${endTime} hs`,
         shift: 'morning'
       });
@@ -513,7 +517,7 @@ export function getSuggestedAvailableSlots(
       const collision = checkScheduleCollision(date, timeStr, safeDuration, appointments, excludeAppointmentId);
       const outside = checkIsOutsideWorkingHours(date, timeStr, effectiveHours, safeDuration);
       const endTime = calculateEndTime(timeStr, safeDuration);
-      const isOverturn = collision.hasConflict || outside.isOutside;
+      const isOverturn = collision.hasConflict;
 
       suggested.push({
         time: timeStr,
@@ -521,6 +525,8 @@ export function getSuggestedAvailableSlots(
         isOverturn,
         isConflict: collision.hasConflict,
         conflictSummary: collision.conflictSummary,
+        isOutsideWorkingHours: outside.isOutside,
+        outsideHoursReason: outside.isOutside ? outside.reason : null,
         label: `${timeStr} - ${endTime} hs`,
         shift: 'afternoon'
       });

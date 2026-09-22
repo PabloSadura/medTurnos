@@ -156,6 +156,8 @@ export function Agenda() {
     packageName: ''
   });
 
+  const [isSubmittingAppointment, setIsSubmittingAppointment] = useState(false);
+
   // Duration calculations - completely automatic based on selected treatment
   const effectiveNewAptDuration = useMemo(() => {
     return getEffectiveDuration(newApt.type, newApt.duration, treatments, 30);
@@ -172,8 +174,8 @@ export function Agenda() {
 
   const isNewAptOverturn = useMemo(() => {
     if (newApt.manualOverturn) return Boolean(newApt.isOverturn);
-    return newAptOutsideCheck.isOutside || newAptCollision.hasConflict || Boolean(newApt.isOverturn);
-  }, [newApt.manualOverturn, newApt.isOverturn, newAptOutsideCheck.isOutside, newAptCollision.hasConflict]);
+    return newAptCollision.hasConflict || Boolean(newApt.isOverturn);
+  }, [newApt.manualOverturn, newApt.isOverturn, newAptCollision.hasConflict]);
 
   // Occupied slots and suggested available free slots for new appointment date
   const newAptOccupiedSlots = useMemo(() => {
@@ -200,8 +202,8 @@ export function Agenda() {
 
   const isEditAptOverturn = useMemo(() => {
     if (editAptData.manualOverturn) return Boolean(editAptData.isOverturn);
-    return editAptOutsideCheck.isOutside || editAptCollision.hasConflict || Boolean(editAptData.isOverturn);
-  }, [editAptData.manualOverturn, editAptData.isOverturn, editAptOutsideCheck.isOutside, editAptCollision.hasConflict]);
+    return editAptCollision.hasConflict || Boolean(editAptData.isOverturn);
+  }, [editAptData.manualOverturn, editAptData.isOverturn, editAptCollision.hasConflict]);
 
   // Occupied slots and suggested available free slots for edit appointment date
   const editAptOccupiedSlots = useMemo(() => {
@@ -351,6 +353,8 @@ export function Agenda() {
 
   const handleSaveAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingAppointment) return;
+    setIsSubmittingAppointment(true);
     try {
       let patientId = newApt.patientId;
       let patientName = newApt.patientName;
@@ -450,6 +454,7 @@ export function Agenda() {
         patientPackageId: isPkg ? newApt.patientPackageId : undefined,
         packageName: isPkg ? (newApt.packageName || undefined) : undefined,
         userId: ownerId,
+        manualOverturn: Boolean(newApt.manualOverturn),
         status: 'pendiente',
         duration: finalDuration,
         attendance: attendanceCount,
@@ -466,15 +471,19 @@ export function Agenda() {
       if (result.isOverturn) {
         showToast(
           result.conflictSummary 
-            ? `⚡ Turno guardado como SOBRETURNO: ${result.conflictSummary}` 
-            : '⚡ Turno guardado como SOBRETURNO',
+            ? `⚡ Turno guardado como SOBRETURNO (solapamiento horario): ${result.conflictSummary}` 
+            : '⚡ Turno guardado como SOBRETURNO por solapamiento',
           'success'
         );
+      } else if (result.isOutsideWorkingHours) {
+        showToast(`Turno agendado correctamente (Fuera del horario habitual: ${result.outsideHoursReason || 'excepción de horario'})`, 'success');
       } else {
         showToast('Turno agendado correctamente', 'success');
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'appointments');
+    } finally {
+      setIsSubmittingAppointment(false);
     }
   };
 
@@ -642,7 +651,8 @@ export function Agenda() {
 
   const handleSaveEditedAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editAptData.id) return;
+    if (!editAptData.id || isSubmittingAppointment) return;
+    setIsSubmittingAppointment(true);
     try {
       const [year, month, day] = editAptData.date.split('-').map(Number);
       const [hours, minutes] = editAptData.time.split(':').map(Number);
@@ -663,7 +673,7 @@ export function Agenda() {
         treatmentId: matchedTreatment?.id || '',
         notes: editAptData.notes || '',
         userId: ownerId,
-        manualOverturn: editAptData.manualOverturn,
+        manualOverturn: Boolean(editAptData.manualOverturn),
         treatmentsList: treatments,
         workingHours
       }, true);
@@ -673,15 +683,19 @@ export function Agenda() {
       if (result.isOverturn) {
         showToast(
           result.conflictSummary
-            ? `⚡ Turno actualizado como SOBRETURNO: ${result.conflictSummary}`
+            ? `⚡ Turno actualizado como SOBRETURNO (solapamiento): ${result.conflictSummary}`
             : '⚡ Turno reprogramado como SOBRETURNO',
           'success'
         );
+      } else if (result.isOutsideWorkingHours) {
+        showToast(`Fecha y hora actualizadas (Fuera de horario habitual: ${result.outsideHoursReason || 'excepción'})`, 'success');
       } else {
         showToast('Fecha y hora del turno actualizadas correctamente', 'success');
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `appointments/${editAptData.id}`);
+    } finally {
+      setIsSubmittingAppointment(false);
     }
   };
 
@@ -2009,15 +2023,22 @@ export function Agenda() {
             </button>
             <button 
               type="submit"
-              disabled={!isCreatingNewPatient && !newApt.patientId}
+              disabled={(!isCreatingNewPatient && !newApt.patientId) || isSubmittingAppointment}
               className={cn(
                 "flex-1 px-4 py-2.5 text-white text-[12px] font-bold rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider",
-                newAptCollision.hasConflict || isNewAptOverturn
-                  ? "bg-purple-700 hover:bg-purple-800"
-                  : "bg-primary hover:bg-primary/90"
+                isSubmittingAppointment ? "opacity-70 cursor-not-allowed bg-slate-500" : (
+                  newAptCollision.hasConflict || isNewAptOverturn
+                    ? "bg-purple-700 hover:bg-purple-800"
+                    : "bg-primary hover:bg-primary/90"
+                )
               )}
             >
-              {newAptCollision.hasConflict ? (
+              {isSubmittingAppointment ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  GUARDANDO...
+                </>
+              ) : newAptCollision.hasConflict ? (
                 <>
                   <Zap size={14} className="fill-white" />
                   GUARDAR COMO SOBRETURNO
@@ -2542,14 +2563,22 @@ export function Agenda() {
             </button>
             <button
               type="submit"
+              disabled={isSubmittingAppointment}
               className={cn(
                 "flex-1 px-4 py-2.5 text-white text-[12px] font-bold rounded-lg shadow-sm transition-all uppercase tracking-widest flex items-center justify-center gap-2",
-                editAptCollision.hasConflict || isEditAptOverturn
-                  ? "bg-purple-700 hover:bg-purple-800"
-                  : "bg-primary hover:bg-primary/90"
+                isSubmittingAppointment ? "opacity-70 cursor-not-allowed bg-slate-500" : (
+                  editAptCollision.hasConflict || isEditAptOverturn
+                    ? "bg-purple-700 hover:bg-purple-800"
+                    : "bg-primary hover:bg-primary/90"
+                )
               )}
             >
-              {editAptCollision.hasConflict ? (
+              {isSubmittingAppointment ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Guardando...
+                </>
+              ) : editAptCollision.hasConflict ? (
                 <>
                   <Zap size={15} className="fill-white" />
                   Guardar como Sobreturno

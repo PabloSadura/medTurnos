@@ -35,7 +35,10 @@ export interface SaveAppointmentPayload {
 export interface SaveAppointmentResult {
   appointmentId: string;
   isOverturn: boolean;
-  overturnReason: 'time_overlap' | 'outside_hours' | 'manual' | null;
+  manualOverturn: boolean;
+  overturnReason: 'time_overlap' | 'manual' | null;
+  isOutsideWorkingHours: boolean;
+  outsideHoursReason: string | null;
   overlappingAppointmentIds: string[];
   overlapCount: number;
   conflictSummary?: string;
@@ -95,7 +98,7 @@ export async function saveAppointmentWithPersistenceCheck(
 
   // 3. Determine overturn status based on strict clinical business rules
   let isOverturn = false;
-  let overturnReason: 'time_overlap' | 'outside_hours' | 'manual' | null = null;
+  let overturnReason: 'time_overlap' | 'manual' | null = null;
   let overlappingAppointmentIds: string[] = [];
   let overlapCount = 0;
 
@@ -107,14 +110,12 @@ export async function saveAppointmentWithPersistenceCheck(
   } else if (manualOverturn === true) {
     isOverturn = true;
     overturnReason = 'manual';
-  } else {
-    // Check if outside doctor working hours
-    const outsideCheck = checkIsOutsideWorkingHours(date, time, workingHours, effectiveDuration);
-    if (outsideCheck.isOutside) {
-      isOverturn = true;
-      overturnReason = 'outside_hours';
-    }
   }
+
+  // Check outside doctor working hours independently
+  const outsideCheck = checkIsOutsideWorkingHours(date, time, workingHours, effectiveDuration);
+  const isOutsideWorkingHours = outsideCheck.isOutside;
+  const outsideHoursReason = outsideCheck.isOutside ? outsideCheck.reason : null;
 
   // 4. Construct Firestore document payload
   const appointmentData: Partial<Appointment> = {
@@ -141,6 +142,8 @@ export async function saveAppointmentWithPersistenceCheck(
     isOverturn,
     manualOverturn: Boolean(manualOverturn),
     overturnReason,
+    isOutsideWorkingHours,
+    outsideHoursReason,
     overlappingAppointmentIds,
     overlapCount,
     overlapUpdatedAt: serverTimestamp(),
@@ -167,7 +170,10 @@ export async function saveAppointmentWithPersistenceCheck(
   return {
     appointmentId: targetId || '',
     isOverturn,
+    manualOverturn: Boolean(manualOverturn),
     overturnReason,
+    isOutsideWorkingHours,
+    outsideHoursReason,
     overlappingAppointmentIds,
     overlapCount,
     conflictSummary: collision.conflictSummary

@@ -8,13 +8,9 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid != null;
     }
 
-    // Role-based Access Control via trusted database document (users/{uid}, profiles/{uid}), custom claims, or root superadmin email
+    // Role-based Access Control via trusted database document (users/{uid}, profiles/{uid}) or verified custom claims
     function isAdmin() {
       return isSignedIn() && (
-        ('email' in request.auth.token && (
-          request.auth.token.email == 'pablosadura@gmail.com' ||
-          request.auth.token.email.lower() == 'pablosadura@gmail.com'
-        )) ||
         (request.auth.token.get('admin', false) == true) ||
         (request.auth.token.get('role', '') in ['admin', 'superadmin', 'super_admin', 'Admin', 'Superadmin', 'SuperAdmin']) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&

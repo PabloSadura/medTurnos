@@ -8,6 +8,13 @@ export const MONTHS_SHORT_ES = [
   'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'
 ];
 
+export function formatLocalDate(date: Date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export function getAppointmentDateString(app: any): string {
   if (typeof app.date === 'string' && app.date.match(/^\d{4}-\d{2}-\d{2}/)) {
     return app.date.substring(0, 10);
@@ -229,6 +236,7 @@ export function computeMonthlyEvolution(
     let absent = 0;
     let canceled = 0;
     let appointmentsRevenue = 0;
+    let pendingRevenue = 0;
 
     monthApps.forEach(app => {
       const st = normalizeStatus(app.status);
@@ -241,6 +249,8 @@ export function computeMonthlyEvolution(
         canceled++;
       } else {
         pending++;
+        const projectedAppRev = Number(app.price || app.cost || 0);
+        pendingRevenue += projectedAppRev;
       }
     });
 
@@ -258,7 +268,12 @@ export function computeMonthlyEvolution(
     });
 
     const totalRevenue = appointmentsRevenue + packagesRevenue;
-    const attendanceRate = totalAppointments > 0 ? Math.round((finished / totalAppointments) * 100) : 0;
+    const projectedRevenue = totalRevenue + pendingRevenue;
+    const concludedUniverse = finished + absent;
+    const absentRate = concludedUniverse > 0 ? Math.round((absent / concludedUniverse) * 100) : 0;
+    const attendanceRate = concludedUniverse > 0 
+      ? Math.round((finished / concludedUniverse) * 100) 
+      : (totalAppointments > 0 ? Math.round((finished / totalAppointments) * 100) : 0);
     const totalTransactions = finished + packagesCount;
     const avgTicket = totalTransactions > 0 ? Math.round(totalRevenue / totalTransactions) : 0;
 
@@ -273,10 +288,13 @@ export function computeMonthlyEvolution(
       absent,
       canceled,
       attendanceRate,
+      absentRate,
       appointmentsRevenue,
       packagesRevenue,
       packagesCount,
       revenue: totalRevenue,
+      projectedRevenue,
+      pendingRevenue,
       avgTicket
     };
   });

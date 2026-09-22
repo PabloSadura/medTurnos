@@ -65,10 +65,39 @@ process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception thrown:", err);
 });
 
-// Password validation according to standard policy (minimum 6 chars for Firebase Auth)
+// Common passwords blacklist to protect clinical accounts against dictionary attacks
+const SERVER_COMMON_PASSWORDS = new Set([
+  '123456', 'password', '12345678', 'qwerty', '123456789', '12345',
+  '1234', '111111', '1234567', 'dragon', 'welcome', '123123',
+  'admin', 'administrator', 'admin123', 'admin1234', 'admin12345',
+  'password123', 'password1234', 'medturnos', 'medturnos123', 'medico123',
+  'secretaria123', '1234567890', '123456789012', 'qwertyuiop', '00000000',
+  'letmein', 'hospital', 'doctor', 'clinica', 'salud123'
+]);
+
+// Password validation according to clinical compliance policy (minimum 12 characters, complexity rules)
 function validateServerPassword(password: string): string | null {
-  if (!password || password.trim().length < 6) {
-    return "La contraseña debe tener al menos 6 caracteres.";
+  if (!password) {
+    return "La contraseña es obligatoria.";
+  }
+  const trimmed = password.trim();
+  if (trimmed.length < 12) {
+    return "La contraseña debe tener al menos 12 caracteres por normativa de seguridad médica.";
+  }
+  if (!/[A-Z]/.test(trimmed)) {
+    return "La contraseña debe incluir al menos una letra mayúscula (A-Z).";
+  }
+  if (!/[a-z]/.test(trimmed)) {
+    return "La contraseña debe incluir al menos una letra minúscula (a-z).";
+  }
+  if (!/[0-9]/.test(trimmed)) {
+    return "La contraseña debe incluir al menos un número (0-9).";
+  }
+  if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(trimmed)) {
+    return "La contraseña debe incluir al menos un carácter especial (ej. !@#$%^&*).";
+  }
+  if (SERVER_COMMON_PASSWORDS.has(trimmed.toLowerCase())) {
+    return "La contraseña ingresada es predecible o demasiado común. Por favor elija una más segura.";
   }
   return null;
 }
@@ -222,27 +251,15 @@ async function startServer() {
       return res.status(401).json({ error: "Usuario no autenticado." });
     }
 
-    const userEmail = user.email ? user.email.toLowerCase() : "";
-    const isMasterAdmin = 
-      userEmail === "pablosadura@gmail.com" || 
+    // Role check derived strictly from verified custom token claims or Firestore database authority
+    const hasAdminClaim = 
       user.admin === true || 
       user.role === "admin" || 
       user.role === "superadmin" || 
       user.role === "super_admin";
 
-    if (isMasterAdmin) {
-      (req as any).userProfile = { role: "admin", email: user.email, name: user.name || "Superadministrador" };
-      try {
-        const { adminDb } = getFirebaseAdmin();
-        if (adminDb) {
-          adminDb.collection("users").doc(user.uid).set({
-            role: "admin",
-            email: user.email,
-            name: user.name || "Superadministrador",
-            status: "Activo"
-          }, { merge: true }).catch(() => {});
-        }
-      } catch {}
+    if (hasAdminClaim) {
+      (req as any).userProfile = { role: "admin", email: user.email, name: user.name || "Administrador" };
       return next();
     }
 
@@ -252,7 +269,7 @@ async function startServer() {
         return res.status(503).json({ error: "Base de datos no disponible." });
       }
       const userDoc = await adminDb.collection("users").doc(user.uid).get();
-      const role = userDoc.exists ? userDoc.data()?.role : null;
+      const role = userDoc.exists ? String(userDoc.data()?.role || "").toLowerCase() : null;
       const isSuperOrAdmin = role === "admin" || role === "superadmin" || role === "super_admin";
       if (!userDoc.exists || !isSuperOrAdmin) {
         return res.status(403).json({ error: "Acceso denegado: Se requieren privilegios de Administrador o Superadministrador del Sistema." });
@@ -260,9 +277,6 @@ async function startServer() {
       (req as any).userProfile = userDoc.data();
       next();
     } catch (err: any) {
-      if (isMasterAdmin) {
-        return next();
-      }
       return res.status(403).json({ error: "Error al verificar autorización de administrador." });
     }
   }
@@ -377,13 +391,11 @@ async function startServer() {
     try {
       const { adminDb, auth } = getFirebaseAdmin();
 
-      // Check caller role in token claims, root master email, or Firestore
+      // Check caller role in token claims or Firestore
       let isCallerAdmin = false;
-      const callerEmail = (req as any).user?.email?.toLowerCase();
       const callerTokenRole = (req as any).user?.role || (req as any).user?.admin;
 
       if (
-        callerEmail === "pablosadura@gmail.com" ||
         callerTokenRole === "admin" ||
         callerTokenRole === "superadmin" ||
         callerTokenRole === "super_admin" ||
@@ -396,7 +408,7 @@ async function startServer() {
           const r = callerDoc.data()?.role?.toLowerCase();
           isCallerAdmin = callerDoc.exists && (r === "admin" || r === "superadmin" || r === "super_admin");
         } catch {
-          isCallerAdmin = callerEmail === "pablosadura@gmail.com";
+          isCallerAdmin = false;
         }
       }
 

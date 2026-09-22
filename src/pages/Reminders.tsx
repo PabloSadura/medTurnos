@@ -53,6 +53,7 @@ export function Reminders() {
   const [clinicAddress, setClinicAddress] = useState('Av. Libertador 1234');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [preferredTarget, setPreferredTarget] = useState<'app' | 'web'>(getStoredWhatsAppTarget);
+  const [sendingId, setSendingId] = useState<string | null>(null);
 
   const handleTogglePreferredTarget = (target: 'app' | 'web') => {
     setPreferredTarget(target);
@@ -254,42 +255,48 @@ export function Reminders() {
 
   // Quick WhatsApp Dispatch (App on Mobile, Web on PC)
   const handleQuickSend = async (apt: any) => {
-    const rawPhone = apt.phone;
-    if (!rawPhone || !cleanArgentineLocalPhone(rawPhone)) {
-      showToast('⚠️ El turno no tiene un teléfono celular válido');
-      return;
-    }
-    const cleanPhone = getWhatsAppNumber(rawPhone);
-    if (!cleanPhone || cleanPhone === '549') {
-      showToast('⚠️ Número telefónico no válido');
-      return;
-    }
-
-    const patientFirstName = apt.patientFirstName || getPatientFirstName(apt);
-    const formattedDate = apt.date ? formatDateFullTextSpanish(apt.date) : 'la fecha acordada';
-    const profName = apt.professionalName || apt.professional || loggedProfessionalName;
-
-    const rawMsg = template
-      .replace(/{nombre}/gi, patientFirstName)
-      .replace(/{fecha}/gi, formattedDate)
-      .replace(/{hora}/gi, apt.time || 'su horario')
-      .replace(/{profesional}/gi, profName)
-      .replace(/{clinica}/gi, clinicName)
-      .replace(/{direccion}/gi, clinicAddress)
-      .replace(/{tratamiento}/gi, apt.treatment || 'su consulta');
-
-    const result = dispatchWhatsAppMessage(cleanPhone, rawMsg, preferredTarget);
-
+    if (sendingId === apt.id) return;
+    setSendingId(apt.id);
     try {
-      await updateDoc(doc(db, 'appointments', apt.id), {
-        reminderSent: true,
-        reminderSentAt: serverTimestamp(),
-        reminderPhone: cleanPhone,
-        reminderChannel: result.targetUsed
-      });
-      showToast(result.targetUsed === 'app' ? '📱 Abriendo WhatsApp App...' : '💻 Abriendo WhatsApp Web...');
-    } catch (err) {
-      console.warn('Error updating status after quick send:', err);
+      const rawPhone = apt.phone;
+      if (!rawPhone || !cleanArgentineLocalPhone(rawPhone)) {
+        showToast('⚠️ El turno no tiene un teléfono celular válido');
+        return;
+      }
+      const cleanPhone = getWhatsAppNumber(rawPhone);
+      if (!cleanPhone || cleanPhone === '549') {
+        showToast('⚠️ Número telefónico no válido');
+        return;
+      }
+
+      const patientFirstName = apt.patientFirstName || getPatientFirstName(apt);
+      const formattedDate = apt.date ? formatDateFullTextSpanish(apt.date) : 'la fecha acordada';
+      const profName = apt.professionalName || apt.professional || loggedProfessionalName;
+
+      const rawMsg = template
+        .replace(/{nombre}/gi, patientFirstName)
+        .replace(/{fecha}/gi, formattedDate)
+        .replace(/{hora}/gi, apt.time || 'su horario')
+        .replace(/{profesional}/gi, profName)
+        .replace(/{clinica}/gi, clinicName)
+        .replace(/{direccion}/gi, clinicAddress)
+        .replace(/{tratamiento}/gi, apt.treatment || 'su consulta');
+
+      const result = dispatchWhatsAppMessage(cleanPhone, rawMsg, preferredTarget);
+
+      try {
+        await updateDoc(doc(db, 'appointments', apt.id), {
+          reminderSent: true,
+          reminderSentAt: serverTimestamp(),
+          reminderPhone: cleanPhone,
+          reminderChannel: result.targetUsed
+        });
+        showToast(result.targetUsed === 'app' ? '📱 Abriendo WhatsApp App...' : '💻 Abriendo WhatsApp Web...');
+      } catch (err) {
+        console.warn('Error updating status after quick send:', err);
+      }
+    } finally {
+      setSendingId(null);
     }
   };
 
@@ -755,13 +762,21 @@ export function Reminders() {
                     {hasPhone && (
                       <button
                         type="button"
+                        disabled={sendingId === apt.id}
                         onClick={() => handleQuickSend(apt)}
-                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs whitespace-nowrap"
+                        className={cn(
+                          "px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs whitespace-nowrap",
+                          sendingId === apt.id && "opacity-70 cursor-not-allowed"
+                        )}
                         title="Enviar recordatorio directamente por WhatsApp (App en celular o Web en PC)"
                       >
-                        <Send size={13} />
-                        <span className="hidden sm:inline">WhatsApp</span>
-                        <span className="sm:hidden">Enviar</span>
+                        {sendingId === apt.id ? (
+                          <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Send size={13} />
+                        )}
+                        <span className="hidden sm:inline">{sendingId === apt.id ? 'Enviando...' : 'WhatsApp'}</span>
+                        <span className="sm:hidden">{sendingId === apt.id ? '...' : 'Enviar'}</span>
                       </button>
                     )}
 
