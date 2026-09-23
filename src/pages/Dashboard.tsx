@@ -42,6 +42,7 @@ import {
 } from 'recharts';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
+import { TreatmentAnalyticsSection } from '../components/TreatmentAnalyticsSection';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, where, updateDoc, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -633,30 +634,7 @@ export function Dashboard() {
     };
   }, [monthlyEvolutionData, rawAppointments, rawEvolutions, rawPatientPackages, selectedMonths, now, treatments]);
 
-  // Packages purchased in the selected period
-  const periodPackages = useMemo(() => {
-    return rawPatientPackages
-      .filter(pkg => {
-        const d = pkg.purchaseDate || (pkg.createdAt?.toDate ? pkg.createdAt.toDate().toISOString().split('T')[0] : '');
-        return typeof d === 'string' && selectedMonths.some(m => d.startsWith(m));
-      })
-      .sort((a, b) => {
-        const dateA = a.purchaseDate || '';
-        const dateB = b.purchaseDate || '';
-        return dateB.localeCompare(dateA);
-      });
-  }, [rawPatientPackages, selectedMonths]);
 
-  // Donut chart status data for selected period
-  const statusPieData = useMemo(() => {
-    const list = [
-      { name: 'Finalizados', value: periodSummary.totalFinished, color: '#16A34A' },
-      { name: 'Pendientes / Conf.', value: periodSummary.totalPending, color: '#0284C7' },
-      { name: 'Ausentes', value: periodSummary.totalAbsent, color: '#EA580C' },
-      { name: 'Cancelados', value: periodSummary.totalCanceled, color: '#DC2626' },
-    ];
-    return list.filter(item => item.value > 0);
-  }, [periodSummary]);
 
   // Handler for opening reschedule modal
   const handleOpenEdit = (apt: any, e?: React.MouseEvent) => {
@@ -944,14 +922,6 @@ export function Dashboard() {
                   ${periodSummary.appointmentsRevenue.toLocaleString('es-AR')}
                 </span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-amber-800 font-medium flex items-center gap-1">
-                  <Package size={12} className="text-amber-600" /> Bonos y Paquetes:
-                </span>
-                <span className="font-bold text-amber-700">
-                  ${periodSummary.packagesRevenue.toLocaleString('es-AR')} <span className="font-normal text-[10px] text-amber-900/80">({periodSummary.packagesCount})</span>
-                </span>
-              </div>
               {periodSummary.totalPendingRevenue > 0 && (
                 <div className="flex items-center justify-between pt-1 border-t border-outline-variant/40 text-[10px]">
                   <span className="text-primary font-semibold">Proyectado (Total Período):</span>
@@ -1019,9 +989,7 @@ export function Dashboard() {
       </div>
 
       {/* Main Evolution Section: Chart & Controls */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 Cols: Evolution Chart */}
-        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-outline-variant shadow-sm space-y-6">
+      <div className="bg-white p-6 rounded-2xl border border-outline-variant shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
@@ -1337,10 +1305,7 @@ export function Dashboard() {
                   )}
 
                   {evolutionMetric === 'revenue' && (
-                    <>
-                      <Bar dataKey="appointmentsRevenue" name="Turnos / Consultas ($)" stackId="rev" fill="#16A34A" />
-                      <Bar dataKey="packagesRevenue" name="Bonos y Paquetes ($)" stackId="rev" fill="#F59E0B" radius={[4, 4, 0, 0]} />
-                    </>
+                    <Bar dataKey="revenue" name="Ingresos Cobrados ($)" fill="#16A34A" radius={[4, 4, 0, 0]} />
                   )}
 
                   {evolutionMetric === 'status' && (
@@ -1355,95 +1320,16 @@ export function Dashboard() {
               )}
             </ResponsiveContainer>
           </div>
-        </div>
-
-        {/* Right Col: Pie of Statuses & Attendance Health */}
-        <div className="bg-white p-6 rounded-2xl border border-outline-variant shadow-sm flex flex-col justify-between space-y-6">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-black text-on-surface uppercase tracking-wider flex items-center gap-2">
-                <PieChartIcon size={17} className="text-primary" />
-                Distribución de Estados
-              </h2>
-              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-surface-bright border border-outline-variant text-on-surface-variant">
-                {periodSummary.totalAppointments} Turnos
-              </span>
-            </div>
-            <p className="text-xs text-on-surface-variant">
-              Comportamiento y cumplimiento de citas en el período seleccionado.
-            </p>
-          </div>
-
-          <div className="h-[200px] w-full flex items-center justify-center relative">
-            {statusPieData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={statusPieData}
-                    innerRadius={55}
-                    outerRadius={78}
-                    paddingAngle={4}
-                    dataKey="value"
-                  >
-                    {statusPieData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '8px', fontSize: '11px', fontWeight: 600 }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="text-center opacity-40 py-8">
-                <PieChartIcon size={36} className="mx-auto mb-2 text-on-surface-variant" />
-                <p className="text-[11px] font-bold uppercase tracking-widest">Sin datos de turnos</p>
-              </div>
-            )}
-            
-            {statusPieData.length > 0 && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-2xl font-black text-on-surface">{periodSummary.attendanceRate}%</span>
-                <span className="text-[9px] uppercase font-black tracking-widest text-on-surface-variant">Efectividad</span>
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2.5 pt-2 border-t border-outline-variant/60">
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-600"></span>
-                <span className="text-on-surface-variant font-medium">Finalizados (Atendidos)</span>
-              </div>
-              <span className="font-bold text-on-surface">{periodSummary.totalFinished}</span>
-            </div>
-
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-sky-600"></span>
-                <span className="text-on-surface-variant font-medium">Confirmados / Pendientes</span>
-              </div>
-              <span className="font-bold text-on-surface">{periodSummary.totalPending}</span>
-            </div>
-
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-orange-500"></span>
-                <span className="text-on-surface-variant font-medium">Ausentes</span>
-              </div>
-              <span className="font-bold text-orange-700">{periodSummary.totalAbsent}</span>
-            </div>
-
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-600"></span>
-                <span className="text-on-surface-variant font-medium">Cancelados</span>
-              </div>
-              <span className="font-bold text-rose-700">{periodSummary.totalCanceled}</span>
-            </div>
-          </div>
-        </div>
       </div>
+
+      {/* Treatments Performance & Value Weighting Analytics Section */}
+      <TreatmentAnalyticsSection
+        rawAppointments={rawAppointments}
+        rawEvolutions={rawEvolutions}
+        treatments={treatments}
+        selectedMonths={selectedMonths}
+        timeframeLabel={timeframeLabel}
+      />
 
       {/* Monthly Comparative Evolution Table */}
       {selectedMonths.length > 1 && (
@@ -1479,8 +1365,6 @@ export function Dashboard() {
                     <th className="py-3 px-4 text-orange-700">Ausentes</th>
                     <th className="py-3 px-4 text-rose-700">Cancelados</th>
                     <th className="py-3 px-4">Tasa Asistencia</th>
-                    <th className="py-3 px-4 text-right">Turnos ($)</th>
-                    <th className="py-3 px-4 text-right text-amber-800">Bonos / Packs ($)</th>
                     <th className="py-3 px-4 text-right text-emerald-700">Facturación Total ($)</th>
                     <th className="py-3 px-4 text-right">Ticket Promedio</th>
                   </tr>
@@ -1517,15 +1401,6 @@ export function Dashboard() {
                             {m.attendanceRate}%
                           </span>
                         </td>
-                        <td className="py-3 px-4 text-right font-medium text-on-surface">
-                          ${m.appointmentsRevenue.toLocaleString('es-AR')}
-                        </td>
-                        <td className="py-3 px-4 text-right font-medium text-amber-700">
-                          ${m.packagesRevenue.toLocaleString('es-AR')}
-                          {m.packagesCount > 0 && (
-                            <span className="ml-1 text-[10px] text-amber-800/70 font-bold">({m.packagesCount})</span>
-                          )}
-                        </td>
                         <td className="py-3 px-4 text-right font-black text-emerald-700">
                           ${m.revenue.toLocaleString('es-AR')}
                           {diffRev !== null && (
@@ -1549,94 +1424,6 @@ export function Dashboard() {
           )}
         </div>
       )}
-
-      {/* Packages and Bonds Purchased Section */}
-      <div className="bg-white p-6 rounded-2xl border border-outline-variant shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-black text-on-surface uppercase tracking-wider flex items-center gap-2">
-              <Package size={17} className="text-amber-600" />
-              Compras de Bonos y Paquetes en el Período
-            </h2>
-            <p className="text-xs text-on-surface-variant mt-0.5">
-              Registro detallado de los paquetes y bonos adquiridos por pacientes en {timeframeLabel}.
-            </p>
-          </div>
-          <div className="flex items-center gap-2 self-start sm:self-auto">
-            <span className="text-xs font-bold px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-lg flex items-center gap-1.5">
-              <Package size={13} className="text-amber-600" />
-              {periodPackages.length} {periodPackages.length === 1 ? 'bono vendido' : 'bonos vendidos'}
-            </span>
-            <span className="text-xs font-black px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg">
-              ${periodSummary.packagesRevenue.toLocaleString('es-AR')}
-            </span>
-          </div>
-        </div>
-
-        {periodPackages.length === 0 ? (
-          <div className="p-8 text-center bg-surface rounded-xl border border-outline-variant/50">
-            <Package size={32} className="mx-auto text-on-surface-variant/40 mb-2" />
-            <p className="text-xs font-bold text-on-surface">No se registraron compras de bonos en este período</p>
-            <p className="text-[11px] text-on-surface-variant mt-0.5">
-              Cuando los pacientes compren paquetes o bonos en su ficha, aparecerán totalizados aquí.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-outline-variant text-[10px] font-black uppercase tracking-wider text-on-surface-variant bg-surface-bright">
-                  <th className="py-2.5 px-3">Fecha</th>
-                  <th className="py-2.5 px-3">Paciente</th>
-                  <th className="py-2.5 px-3">Bono / Paquete</th>
-                  <th className="py-2.5 px-3">Sesiones Restantes</th>
-                  <th className="py-2.5 px-3">Medio de Pago</th>
-                  <th className="py-2.5 px-3 text-right">Precio Cobrado</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-outline-variant/40">
-                {periodPackages.map((pkg) => {
-                  const rem = pkg.remainingSessions ?? pkg.totalSessions;
-                  const total = pkg.totalSessions;
-                  return (
-                    <tr key={pkg.id} className="hover:bg-surface/50 transition-colors">
-                      <td className="py-3 px-3 font-semibold text-on-surface-variant whitespace-nowrap">
-                        {pkg.purchaseDate || '—'}
-                      </td>
-                      <td className="py-3 px-3 font-bold text-on-surface">
-                        {pkg.patientName || 'Paciente'}
-                      </td>
-                      <td className="py-3 px-3">
-                        <span className="font-semibold text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 text-[11px]">
-                          {pkg.packageName || 'Paquete'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-1.5">
-                          <span className={cn(
-                            "px-2 py-0.5 rounded-md font-bold text-[10px]",
-                            rem > 0 
-                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
-                              : "bg-surface text-on-surface-variant"
-                          )}>
-                            {rem} de {total} disp.
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-3 font-medium text-on-surface-variant capitalize">
-                        {pkg.paymentMethod || 'Efectivo'}
-                      </td>
-                      <td className="py-3 px-3 text-right font-black text-emerald-700">
-                        ${Number(pkg.pricePaid || 0).toLocaleString('es-AR')}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
 
       {/* Upcoming Appointments Section */}
       <div className="bg-white p-6 rounded-2xl border border-outline-variant shadow-sm space-y-4">

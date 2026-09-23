@@ -923,7 +923,6 @@ export function Patients() {
                     </span>
                   </div>
                 </th>
-                <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Identificación</th>
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Contacto</th>
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Última Visita</th>
                 <th className="px-6 py-3 text-[11px] font-bold text-on-surface-variant uppercase tracking-wider">Estado</th>
@@ -964,7 +963,6 @@ export function Patients() {
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-3 text-[12px] text-on-surface font-mono">{patient.idNumber}</td>
                   <td className="px-6 py-3">
                     <div className="space-y-0.5">
                       <div className="flex items-center gap-2 text-on-surface-variant">
@@ -1066,16 +1064,6 @@ export function Patients() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">DNI / Identificación</label>
-              <input 
-                type="text"
-                value={formData.idNumber}
-                onChange={(e) => setFormData({ ...formData, idNumber: e.target.value })}
-                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
-                placeholder="Ej: 12.345.678" 
-              />
-            </div>
-            <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest flex items-center justify-between">
                 <span>Teléfono / WhatsApp</span>
                 <span className="text-[10px] text-primary font-semibold">Prefijo fijo +54 9</span>
@@ -1086,17 +1074,16 @@ export function Patients() {
                 showHelperText
               />
             </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Email</label>
-            <input 
-              type="email" 
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
-              placeholder="juan@example.com" 
-            />
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Email</label>
+              <input 
+                type="email" 
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-[13px] outline-none focus:ring-1 focus:ring-primary" 
+                placeholder="juan@example.com" 
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">

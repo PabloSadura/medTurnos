@@ -750,7 +750,7 @@ export function PackagesManager({ ownerId, treatments, inventory = [] }: Package
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" size={14} />
                 <input 
                   type="text" 
-                  placeholder="Filtrar pacientes por nombre o DNI..." 
+                  placeholder="Filtrar pacientes por nombre o teléfono..." 
                   value={patientSearchTerm}
                   onChange={(e) => setPatientSearchTerm(e.target.value)}
                   className="w-full pl-8 pr-3 py-1.5 bg-surface border border-outline-variant rounded-lg text-xs outline-none"
@@ -766,7 +766,7 @@ export function PackagesManager({ ownerId, treatments, inventory = [] }: Package
               >
                 {filteredPatientsForAssign.map((p) => (
                   <option key={p.id} value={p.id} className="py-1">
-                    {formatPatientLastNameFirst(p)} — DNI: {p.idNumber || 'Sin DNI'} {p.phone ? `(${p.phone})` : ''}
+                    {formatPatientLastNameFirst(p)} {p.phone ? `(${p.phone})` : ''}
                   </option>
                 ))}
               </select>

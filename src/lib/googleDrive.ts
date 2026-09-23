@@ -341,7 +341,9 @@ export async function generateAndUploadClinicalHistoryDoc({
   content += `1. DATOS PERSONALES DEL PACIENTE\n`;
   content += `------------------------------------------------------------------------\n`;
   content += `Nombre Completo: ${patient.name || '-'}\n`;
-  content += `Documento / DNI: ${patient.idNumber || '-'}\n`;
+  if (patient.idNumber) {
+    content += `Documento: ${patient.idNumber}\n`;
+  }
   content += `Fecha de Nacimiento: ${patient.birthDate || '-'}\n`;
   content += `Género: ${patient.gender === 'Male' ? 'Masculino' : patient.gender === 'Female' ? 'Femenino' : patient.gender || '-'}\n`;
   content += `Teléfono de Contacto: ${patient.phone || '-'}\n`;

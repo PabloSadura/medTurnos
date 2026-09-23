@@ -1538,27 +1538,23 @@ export function Agenda() {
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <PhoneInputArgentina
-                    value={newPatientData.phone}
-                    onChange={(val) => setNewPatientData({ ...newPatientData, phone: val })}
-                    placeholder="Área + Número"
-                  />
-                  <input 
-                    type="text" 
-                    placeholder="DNI/ID"
-                    value={newPatientData.idNumber}
-                    onChange={(e) => setNewPatientData({ ...newPatientData, idNumber: e.target.value })}
-                    className="w-full px-3 py-1.5 bg-white border border-outline-variant rounded text-[13px] outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-on-surface-variant uppercase ml-1">Fecha Nacimiento</label>
-                  <input 
-                    type="date" 
-                    value={newPatientData.birthDate}
-                    onChange={(e) => setNewPatientData({ ...newPatientData, birthDate: e.target.value })}
-                    className="w-full px-3 py-1.5 bg-white border border-outline-variant rounded text-[13px] outline-none focus:ring-1 focus:ring-primary"
-                  />
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-on-surface-variant uppercase ml-1">Teléfono / WhatsApp</label>
+                    <PhoneInputArgentina
+                      value={newPatientData.phone}
+                      onChange={(val) => setNewPatientData({ ...newPatientData, phone: val })}
+                      placeholder="Área + Número"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-on-surface-variant uppercase ml-1">Fecha Nacimiento</label>
+                    <input 
+                      type="date" 
+                      value={newPatientData.birthDate}
+                      onChange={(e) => setNewPatientData({ ...newPatientData, birthDate: e.target.value })}
+                      className="w-full px-3 py-1.5 bg-white border border-outline-variant rounded text-[13px] outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
                 </div>
               </div>
             ) : (
@@ -1567,7 +1563,7 @@ export function Agenda() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant pointer-events-none" />
                   <input 
                     type="text" 
-                    placeholder="Buscar paciente por nombre o DNI..."
+                    placeholder="Buscar paciente por nombre o teléfono..."
                     value={searchTerm}
                     onFocus={() => setIsPatientDropdownOpen(true)}
                     onChange={(e) => {
@@ -1653,9 +1649,9 @@ export function Agenda() {
                                   p.name
                                 )}
                               </span>
-                              {p.idNumber && (
+                              {p.phone && (
                                 <span className="ml-2 font-mono text-[11px] text-on-surface-variant bg-surface px-1.5 py-0.5 rounded border border-outline-variant">
-                                  DNI: {p.idNumber}
+                                  {formatArgentinePhoneWithPrefix(p.phone) || p.phone}
                                 </span>
                               )}
                             </div>

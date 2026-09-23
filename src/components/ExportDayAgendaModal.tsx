@@ -152,7 +152,6 @@ export function ExportDayAgendaModal({
       'Hora Fin',
       'Duración (min)',
       'Paciente',
-      'DNI / Documento',
       'Teléfono',
       'Email',
       'Tratamiento / Práctica',
@@ -172,7 +171,6 @@ export function ExportDayAgendaModal({
         escape(apt.endTime),
         escape(apt.duration),
         escape(apt.patientName),
-        escape(apt.patientDni || 'N/D'),
         escape(apt.patientPhone || 'N/D'),
         escape(apt.patientEmail || 'N/D'),
         escape(apt.treatmentName),
@@ -354,7 +352,6 @@ export function ExportDayAgendaModal({
                         <td className="py-2.5 px-3 align-top">
                           <div className="font-bold text-on-surface">{apt.patientName}</div>
                           <div className="text-[11px] text-on-surface-variant flex flex-col gap-0.5 mt-0.5">
-                            {apt.patientDni && <span>DNI: {apt.patientDni}</span>}
                             {apt.patientPhone && (
                               <span className="flex items-center gap-1">
                                 <Phone size={10} />
@@ -484,7 +481,7 @@ export function ExportDayAgendaModal({
             <tr className="bg-neutral-200">
               <th className="border border-black p-2 text-left w-20">Hora</th>
               <th className="border border-black p-2 text-left">Paciente</th>
-              <th className="border border-black p-2 text-left w-28">DNI / Teléfono</th>
+              <th className="border border-black p-2 text-left w-28">Teléfono</th>
               <th className="border border-black p-2 text-left">Tratamiento</th>
               <th className="border border-black p-2 text-left w-24">Estado</th>
               <th className="border border-black p-2 text-left">Notas y Observaciones</th>
@@ -506,7 +503,6 @@ export function ExportDayAgendaModal({
                   <div className="font-bold text-sm">{apt.patientName}</div>
                 </td>
                 <td className="border border-black p-2 align-top text-[11px]">
-                  {apt.patientDni && <div>DNI: {apt.patientDni}</div>}
                   {apt.patientPhone && <div>Tel: {apt.patientPhone}</div>}
                 </td>
                 <td className="border border-black p-2 align-top">

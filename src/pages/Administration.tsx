@@ -460,9 +460,9 @@ export function Administration() {
         a.click();
       } else {
         let csvContent = "data:text/csv;charset=utf-8,";
-        csvContent += "Pacientes\nNombre,Documento,Telefono\n";
+        csvContent += "Pacientes\nNombre,Telefono\n";
         patients.forEach((p: any) => {
-          csvContent += `${(p.name || '').replace(/,/g, '')},${p.idNumber || ''},${p.phone || ''}\n`;
+          csvContent += `${(p.name || '').replace(/,/g, '')},${p.phone || ''}\n`;
         });
         csvContent += "\nCitas\nFecha,Hora,Paciente,Tipo\n";
         appointments.forEach((a: any) => {

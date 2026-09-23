@@ -498,8 +498,7 @@ export function ClinicalHistoryModal({
                 </h4>
               </div>
               <p className="text-xs text-on-surface-variant flex items-center gap-2 mt-0.5">
-                {patient?.idNumber && <span>DNI: {patient.idNumber}</span>}
-                {patientAge !== null && <span>• {patientAge} años</span>}
+                {patientAge !== null && <span>{patientAge} años</span>}
                 {patient?.gender && <span>• {patient.gender === 'Male' ? 'Masculino' : patient.gender === 'Female' ? 'Femenino' : patient.gender}</span>}
               </p>
               {patient?.phone && (
