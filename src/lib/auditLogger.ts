@@ -29,8 +29,8 @@ export async function logAuditEvent(payload: AuditLogPayload): Promise<void> {
       await addDoc(collection(db, 'audit_logs'), {
         authorId: currentUser.uid,
         authorEmail: currentUser.email || 'anon@medturnos.com',
-        authorName: currentUser.displayName || 'Administrador',
-        authorRole: 'admin',
+        authorName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Usuario',
+        authorRole: currentUser.email === 'pablosadura@gmail.com' ? 'admin' : 'profesional',
         action: payload.action,
         section: payload.section,
         details: payload.details,
@@ -41,13 +41,12 @@ export async function logAuditEvent(payload: AuditLogPayload): Promise<void> {
       });
     }
   } catch (err) {
-    console.warn('[AuditLogger] Fallback log to Firestore:', err);
     try {
       await addDoc(collection(db, 'audit_logs'), {
         authorId: currentUser.uid,
         authorEmail: currentUser.email || 'anon@medturnos.com',
-        authorName: currentUser.displayName || 'Administrador',
-        authorRole: 'admin',
+        authorName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Usuario',
+        authorRole: currentUser.email === 'pablosadura@gmail.com' ? 'admin' : 'profesional',
         action: payload.action,
         section: payload.section,
         details: payload.details,
@@ -56,8 +55,8 @@ export async function logAuditEvent(payload: AuditLogPayload): Promise<void> {
         createdAt: new Date().toISOString(),
         serverTimestamp: serverTimestamp()
       });
-    } catch (dbErr) {
-      console.error('[AuditLogger] Failed to write audit log:', dbErr);
+    } catch {
+      // Gracefully silent on transient network offline
     }
   }
 }

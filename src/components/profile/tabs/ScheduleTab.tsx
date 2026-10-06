@@ -420,24 +420,69 @@ export function ScheduleTab({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <label htmlFor="appointment-duration" className="text-xs font-bold text-on-surface">
-                Duración Estándar de Consulta / Turno
+                Duración Estándar de Consulta / Turno (Libre)
               </label>
               <p className="text-[11px] text-on-surface-variant">
-                Determina el espaciado predeterminado de los intervalos en la agenda.
+                Configura libremente la duración en minutos (ej: 25 min, 30 min, etc.). Determina el espaciado predeterminado de los intervalos en la agenda.
               </p>
             </div>
-            <select
-              id="appointment-duration"
-              value={profile.appointmentDurationMinutes || 30}
-              onChange={(e) => onChange('appointmentDurationMinutes', Number(e.target.value))}
-              className="px-3 py-2 bg-white text-on-surface text-xs font-bold rounded-xl border border-outline-variant focus:border-primary outline-none cursor-pointer"
-            >
-              <option value={15}>15 minutos</option>
-              <option value={20}>20 minutos</option>
-              <option value={30}>30 minutos (Recomendado)</option>
-              <option value={45}>45 minutos</option>
-              <option value={60}>60 minutos (1 hora)</option>
-            </select>
+            <div className="flex items-center gap-2">
+              <div className="relative flex items-center">
+                <input
+                  id="appointment-duration"
+                  type="number"
+                  min={5}
+                  max={360}
+                  step={1}
+                  value={profile.appointmentDurationMinutes !== undefined && profile.appointmentDurationMinutes !== null && profile.appointmentDurationMinutes > 0 ? profile.appointmentDurationMinutes : ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      onChange('appointmentDurationMinutes', 0);
+                      return;
+                    }
+                    const parsed = parseInt(raw, 10);
+                    onChange('appointmentDurationMinutes', isNaN(parsed) ? 25 : parsed);
+                  }}
+                  onBlur={() => {
+                    const curr = Number(profile.appointmentDurationMinutes);
+                    if (!curr || curr < 5) {
+                      onChange('appointmentDurationMinutes', 25);
+                    } else if (curr > 480) {
+                      onChange('appointmentDurationMinutes', 480);
+                    }
+                  }}
+                  className="w-28 pl-3 pr-10 py-2 bg-white text-on-surface text-sm font-black rounded-xl border border-outline-variant focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+                  placeholder="25"
+                />
+                <span className="absolute right-3 text-xs font-bold text-on-surface-variant pointer-events-none">
+                  min
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick preset buttons */}
+          <div className="flex items-center gap-1.5 flex-wrap pt-1">
+            <span className="text-[11px] font-bold text-on-surface-variant mr-1">Opciones frecuentes:</span>
+            {[15, 20, 25, 30, 40, 45, 60].map((preset) => {
+              const isSelected = profile.appointmentDurationMinutes === preset;
+              return (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => onChange('appointmentDurationMinutes', preset)}
+                  className={cn(
+                    "px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer",
+                    isSelected
+                      ? "bg-primary text-white border-primary shadow-xs ring-1 ring-primary/40 font-black"
+                      : "bg-white text-on-surface border-outline-variant hover:bg-surface-bright hover:border-outline"
+                  )}
+                >
+                  {preset} min
+                </button>
+              );
+            })}
           </div>
 
           {/* Real-time Summary Cards */}

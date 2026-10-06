@@ -4,8 +4,6 @@ import {
   DollarSign, 
   Calendar, 
   Sparkles, 
-  BarChart2, 
-  Layers, 
   ArrowUpRight, 
   ArrowDownRight, 
   Info, 
@@ -15,20 +13,9 @@ import {
   HelpCircle,
   Gem,
   Award,
-  CheckCircle2
+  CheckCircle2,
+  ArrowUpDown
 } from 'lucide-react';
-import { 
-  ResponsiveContainer, 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  Tooltip, 
-  CartesianGrid, 
-  ReferenceLine, 
-  Legend, 
-  Cell 
-} from 'recharts';
 import { getAppointmentDateString, normalizeStatus, getAppointmentRevenue } from '../lib/dashboardUtils';
 import { cn } from '../lib/utils';
 
@@ -41,7 +28,6 @@ export interface TreatmentAnalyticsSectionProps {
 }
 
 export type TreatmentSortKey = 'total_revenue' | 'most_expensive' | 'total_turns' | 'revenue_per_turn_given';
-export type TreatmentChartView = 'comparison_bars' | 'revenue_per_turn' | 'prices_view';
 
 export interface TreatmentMetric {
   id: string;
@@ -75,7 +61,6 @@ export const TreatmentAnalyticsSection: React.FC<TreatmentAnalyticsSectionProps>
   timeframeLabel
 }) => {
   const [sortKey, setSortKey] = useState<TreatmentSortKey>('total_revenue');
-  const [chartView, setChartView] = useState<TreatmentChartView>('comparison_bars');
   const [searchTerm, setSearchTerm] = useState('');
   const [showMethodologyHelp, setShowMethodologyHelp] = useState(false);
 
@@ -357,28 +342,6 @@ export const TreatmentAnalyticsSection: React.FC<TreatmentAnalyticsSectionProps>
     return list;
   }, [metricsList, sortKey, searchTerm]);
 
-  // Chart data
-  const chartData = useMemo(() => {
-    const activeTreatments = sortedMetrics.filter(m => m.totalAppointments > 0 || m.totalRevenue > 0 || m.unitPrice > 0);
-    const displayList = (activeTreatments.length > 0 ? activeTreatments : sortedMetrics).slice(0, 10);
-
-    return displayList.map(m => {
-      const shortName = m.name.length > 20 ? m.name.slice(0, 18) + '…' : m.name;
-      return {
-        name: shortName,
-        fullName: m.name,
-        totalRevenue: m.totalRevenue,
-        totalAppointments: m.totalAppointments,
-        finishedAppointments: m.finishedAppointments,
-        unitPrice: m.unitPrice,
-        revenuePerTurnGiven: m.revenuePerTurnGiven,
-        isTopRevenue: m.isTopRevenue,
-        isMostExpensive: m.isMostExpensive,
-        isMostRequested: m.isMostRequested
-      };
-    });
-  }, [sortedMetrics]);
-
   // Export report to CSV
   const handleExportCSV = () => {
     if (metricsList.length === 0) return;
@@ -652,69 +615,40 @@ export const TreatmentAnalyticsSection: React.FC<TreatmentAnalyticsSectionProps>
         </div>
       </div>
 
-      {/* Interactive Controls & Visual Chart */}
-      <div className="space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          {/* Chart Display Mode */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-on-surface-variant uppercase tracking-wider">
-              Gráfico:
-            </span>
-            <div className="flex bg-surface-bright rounded-lg p-0.5 border border-outline-variant">
-              <button
-                type="button"
-                onClick={() => setChartView('comparison_bars')}
-                className={cn(
-                  "px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer flex items-center gap-1.5",
-                  chartView === 'comparison_bars'
-                    ? "bg-white text-emerald-800 shadow-xs font-black"
-                    : "text-on-surface-variant hover:text-on-surface"
-                )}
-              >
-                <Layers size={13} />
-                <span>Facturación ($) vs. Turnos Dados</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setChartView('prices_view')}
-                className={cn(
-                  "px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer flex items-center gap-1.5",
-                  chartView === 'prices_view'
-                    ? "bg-white text-purple-900 shadow-xs font-black"
-                    : "text-on-surface-variant hover:text-on-surface"
-                )}
-              >
-                <Gem size={13} />
-                <span>Precios y Ponderación ($)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setChartView('revenue_per_turn')}
-                className={cn(
-                  "px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer flex items-center gap-1.5",
-                  chartView === 'revenue_per_turn'
-                    ? "bg-white text-primary shadow-xs font-black"
-                    : "text-on-surface-variant hover:text-on-surface"
-                )}
-              >
-                <DollarSign size={13} />
-                <span>Facturación / Turno Dado</span>
-              </button>
-            </div>
+      {/* Comprehensive Treatments & Ponderations Table */}
+      <div className="space-y-3 pt-2">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div>
+            <h4 className="text-xs sm:text-sm font-black uppercase tracking-wider text-on-surface flex items-center gap-2">
+              <Award size={16} className="text-primary" />
+              Tabla de Ponderación de Tratamientos ({metricsList.length} prácticas registradas)
+            </h4>
+            <p className="text-[11px] text-on-surface-variant mt-0.5">
+              Compara directamente el dinero facturado, el valor de cada práctica (ponderación por precio) y los turnos dados.
+            </p>
           </div>
 
-          {/* Sort Key Selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-on-surface-variant uppercase tracking-wider">
-              Ordenar por:
-            </span>
-            <div className="flex bg-surface-bright rounded-lg p-0.5 border border-outline-variant text-xs">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+            {/* Search filter */}
+            <div className="relative w-full sm:w-56">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
+              <input
+                type="text"
+                placeholder="Buscar tratamiento..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 bg-surface border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+
+            {/* Sort controls */}
+            <div className="flex items-center gap-1 bg-surface-bright rounded-lg p-0.5 border border-outline-variant text-xs overflow-x-auto">
               <button
                 type="button"
                 onClick={() => setSortKey('total_revenue')}
                 className={cn(
-                  "px-2.5 py-1 font-bold rounded-md transition-all cursor-pointer",
-                  sortKey === 'total_revenue' ? "bg-white text-emerald-800 shadow-xs font-black" : "text-on-surface-variant"
+                  "px-2.5 py-1 font-bold rounded-md transition-all cursor-pointer whitespace-nowrap",
+                  sortKey === 'total_revenue' ? "bg-white text-emerald-800 shadow-xs font-black" : "text-on-surface-variant hover:text-on-surface"
                 )}
                 title="Líder en facturación: el que más facture"
               >
@@ -724,8 +658,8 @@ export const TreatmentAnalyticsSection: React.FC<TreatmentAnalyticsSectionProps>
                 type="button"
                 onClick={() => setSortKey('most_expensive')}
                 className={cn(
-                  "px-2.5 py-1 font-bold rounded-md transition-all cursor-pointer",
-                  sortKey === 'most_expensive' ? "bg-white text-purple-800 shadow-xs font-black" : "text-on-surface-variant"
+                  "px-2.5 py-1 font-bold rounded-md transition-all cursor-pointer whitespace-nowrap",
+                  sortKey === 'most_expensive' ? "bg-white text-purple-800 shadow-xs font-black" : "text-on-surface-variant hover:text-on-surface"
                 )}
                 title="El más ponderado: el más caro"
               >
@@ -735,228 +669,86 @@ export const TreatmentAnalyticsSection: React.FC<TreatmentAnalyticsSectionProps>
                 type="button"
                 onClick={() => setSortKey('total_turns')}
                 className={cn(
-                  "px-2.5 py-1 font-bold rounded-md transition-all cursor-pointer",
-                  sortKey === 'total_turns' ? "bg-white text-sky-800 shadow-xs font-black" : "text-on-surface-variant"
+                  "px-2.5 py-1 font-bold rounded-md transition-all cursor-pointer whitespace-nowrap",
+                  sortKey === 'total_turns' ? "bg-white text-sky-800 shadow-xs font-black" : "text-on-surface-variant hover:text-on-surface"
                 )}
                 title="El más pedido: el que más turnos dimos"
               >
-                Más Turnos Dados
+                Más Turnos
               </button>
               <button
                 type="button"
                 onClick={() => setSortKey('revenue_per_turn_given')}
                 className={cn(
-                  "px-2.5 py-1 font-bold rounded-md transition-all cursor-pointer",
-                  sortKey === 'revenue_per_turn_given' ? "bg-white text-amber-800 shadow-xs font-black" : "text-on-surface-variant"
+                  "px-2.5 py-1 font-bold rounded-md transition-all cursor-pointer whitespace-nowrap",
+                  sortKey === 'revenue_per_turn_given' ? "bg-white text-amber-800 shadow-xs font-black" : "text-on-surface-variant hover:text-on-surface"
                 )}
                 title="Rendimiento: facturación por cada turno dado"
               >
-                $/Turno Dado
+                $/Turno
               </button>
             </div>
           </div>
         </div>
 
-        {/* Visual Chart Box */}
-        <div className="bg-surface rounded-xl p-4 border border-outline-variant/60">
-          <div className="flex items-center justify-between mb-3 text-xs">
-            <div className="font-bold text-on-surface flex items-center gap-1.5">
-              <BarChart2 size={15} className="text-primary" />
-              {chartView === 'comparison_bars' && 'Comparativa: Facturación Total ($) vs. Cantidad de Turnos Dados'}
-              {chartView === 'prices_view' && 'Precios y Valor Unitario de Tratamientos (Identifica al Más Caro)'}
-              {chartView === 'revenue_per_turn' && 'Rendimiento: Facturación Generada por Cada Turno Dado ($/turno)'}
-            </div>
-            {chartView === 'prices_view' && clinicAvgPerTurnFinished > 0 && (
-              <div className="text-[11px] font-semibold text-on-surface-variant flex items-center gap-2">
-                <span className="w-3 h-0.5 bg-purple-500 inline-block border-t border-dashed border-purple-500"></span>
-                <span>Ticket Promedio Clínica: ${clinicAvgPerTurnFinished.toLocaleString('es-AR')}</span>
-              </div>
-            )}
-          </div>
-
-          <div className="h-[280px] w-full">
-            {chartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                {chartView === 'comparison_bars' ? (
-                  <BarChart data={chartData} margin={{ top: 15, right: 20, left: 10, bottom: 40 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                    <XAxis 
-                      dataKey="name" 
-                      angle={-20} 
-                      textAnchor="end" 
-                      interval={0} 
-                      tick={{ fontSize: 11, fill: '#475569', fontWeight: 600 }}
-                    />
-                    <YAxis 
-                      yAxisId="left"
-                      orientation="left"
-                      tick={{ fontSize: 11, fill: '#0284C7' }}
-                      label={{ value: 'Turnos Dados', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#0284C7' }}
-                    />
-                    <YAxis 
-                      yAxisId="right"
-                      orientation="right"
-                      tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`}
-                      tick={{ fontSize: 11, fill: '#16A34A' }}
-                      label={{ value: 'Facturación ($)', angle: 90, position: 'insideRight', fontSize: 10, fill: '#16A34A' }}
-                    />
-                    <Tooltip 
-                      formatter={(val: any, name: string) => [
-                        name === 'totalAppointments' ? `${val} turnos dados` : `$${Number(val).toLocaleString('es-AR')}`, 
-                        name === 'totalAppointments' ? 'Turnos Dados (Más Pedido)' : 'Facturación Total (Líder)'
-                      ]}
-                      labelFormatter={(label, payload) => {
-                        const it = payload?.[0]?.payload;
-                        return it?.fullName || label;
-                      }}
-                      contentStyle={{ borderRadius: '8px', fontSize: '11px', fontWeight: 600 }}
-                    />
-                    <Legend 
-                      wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }}
-                      formatter={(val) => val === 'totalAppointments' ? 'Turnos Dados (Demanda)' : 'Facturación Total Cobrada ($)'}
-                    />
-                    <Bar yAxisId="left" dataKey="totalAppointments" name="totalAppointments" fill="#0284C7" radius={[4, 4, 0, 0]} />
-                    <Bar yAxisId="right" dataKey="totalRevenue" name="totalRevenue" fill="#16A34A" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                ) : chartView === 'prices_view' ? (
-                  <BarChart data={chartData} margin={{ top: 15, right: 20, left: 10, bottom: 40 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                    <XAxis 
-                      dataKey="name" 
-                      angle={-20} 
-                      textAnchor="end" 
-                      interval={0} 
-                      tick={{ fontSize: 11, fill: '#475569', fontWeight: 600 }}
-                    />
-                    <YAxis 
-                      tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`} 
-                      tick={{ fontSize: 11, fill: '#7C3AED' }}
-                    />
-                    <Tooltip 
-                      formatter={(val: any) => [`$${Number(val).toLocaleString('es-AR')}`, 'Precio / Valor de Lista']}
-                      labelFormatter={(label, payload) => {
-                        const it = payload?.[0]?.payload;
-                        return it?.fullName ? `${it.fullName}` : label;
-                      }}
-                      contentStyle={{ borderRadius: '8px', fontSize: '11px', fontWeight: 600 }}
-                    />
-                    {clinicAvgPerTurnFinished > 0 && (
-                      <ReferenceLine 
-                        y={clinicAvgPerTurnFinished} 
-                        stroke="#7C3AED" 
-                        strokeDasharray="4 4" 
-                        label={{ 
-                          value: `Promedio: $${clinicAvgPerTurnFinished.toLocaleString('es-AR')}`, 
-                          position: 'top', 
-                          fill: '#6D28D9', 
-                          fontSize: 10, 
-                          fontWeight: 'bold' 
-                        }} 
-                      />
-                    )}
-                    <Bar dataKey="unitPrice" name="Precio / Valor Unitario ($)" radius={[6, 6, 0, 0]}>
-                      {chartData.map((entry, index) => {
-                        const isMostExp = entry.isMostExpensive;
-                        return <Cell key={`cell-${index}`} fill={isMostExp ? '#7C3AED' : '#A78BFA'} />;
-                      })}
-                    </Bar>
-                  </BarChart>
-                ) : (
-                  <BarChart data={chartData} margin={{ top: 15, right: 20, left: 10, bottom: 40 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                    <XAxis 
-                      dataKey="name" 
-                      angle={-20} 
-                      textAnchor="end" 
-                      interval={0} 
-                      tick={{ fontSize: 11, fill: '#475569', fontWeight: 600 }}
-                    />
-                    <YAxis 
-                      tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`} 
-                      tick={{ fontSize: 11, fill: '#64748B' }}
-                    />
-                    <Tooltip 
-                      formatter={(val: any) => [`$${Number(val).toLocaleString('es-AR')}`, 'Facturación / Turno Dado']}
-                      labelFormatter={(label, payload) => {
-                        const it = payload?.[0]?.payload;
-                        return it?.fullName ? `${it.fullName}` : label;
-                      }}
-                      contentStyle={{ borderRadius: '8px', fontSize: '11px', fontWeight: 600 }}
-                    />
-                    {clinicAvgPerTurnGiven > 0 && (
-                      <ReferenceLine 
-                        y={clinicAvgPerTurnGiven} 
-                        stroke="#EF4444" 
-                        strokeDasharray="4 4" 
-                        label={{ 
-                          value: `Media: $${clinicAvgPerTurnGiven.toLocaleString('es-AR')}`, 
-                          position: 'top', 
-                          fill: '#DC2626', 
-                          fontSize: 10, 
-                          fontWeight: 'bold' 
-                        }} 
-                      />
-                    )}
-                    <Bar dataKey="revenuePerTurnGiven" name="Facturación / Turno Dado ($)" radius={[6, 6, 0, 0]}>
-                      {chartData.map((entry, index) => {
-                        const isTop = entry.isTopRevenue;
-                        return <Cell key={`cell-${index}`} fill={isTop ? '#10B981' : '#0284C7'} />;
-                      })}
-                    </Bar>
-                  </BarChart>
-                )}
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-xs text-on-surface-variant font-medium">
-                Sin datos suficientes para graficar en este período.
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Comprehensive Treatments Table */}
-      <div className="space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h4 className="text-xs font-black uppercase tracking-wider text-on-surface flex items-center gap-2">
-              <Award size={14} className="text-primary" />
-              Tabla de Tratamientos ({metricsList.length} prácticas registradas)
-            </h4>
-            <p className="text-[11px] text-on-surface-variant">
-              Compara de forma directa el dinero facturado, el valor de cada práctica y los turnos dados.
-            </p>
-          </div>
-
-          {/* Search treatment filter */}
-          <div className="relative w-full sm:w-64">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
-            <input
-              type="text"
-              placeholder="Buscar tratamiento..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 bg-surface border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary"
-            />
-          </div>
-        </div>
-
-        <div className="overflow-x-auto border border-outline-variant rounded-xl">
+        <div className="overflow-x-auto border border-outline-variant rounded-xl shadow-xs">
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-outline-variant text-[10px] font-black uppercase tracking-wider text-on-surface-variant bg-surface-bright">
+              <tr className="border-b border-outline-variant text-[10px] font-black uppercase tracking-wider text-on-surface-variant bg-surface-bright select-none">
                 <th className="py-3 px-4">Tratamiento</th>
-                <th className="py-3 px-4 text-right bg-emerald-50/60 text-emerald-950 font-black">
-                  Facturación Total (Líder)
+                <th 
+                  onClick={() => setSortKey('total_revenue')}
+                  className={cn(
+                    "py-3 px-4 text-right cursor-pointer transition-colors",
+                    sortKey === 'total_revenue' ? "bg-emerald-100 text-emerald-950 font-black" : "bg-emerald-50/70 text-emerald-900 hover:bg-emerald-100/60"
+                  )}
+                  title="Ordenar por facturación total"
+                >
+                  <div className="flex items-center justify-end gap-1">
+                    <span>Facturación Total (Líder)</span>
+                    <ArrowUpDown size={11} className={sortKey === 'total_revenue' ? 'text-emerald-700' : 'opacity-40'} />
+                  </div>
                 </th>
-                <th className="py-3 px-4 text-right bg-purple-50/60 text-purple-950 font-black">
-                  Precio / Valor (El Más Caro)
+                <th 
+                  onClick={() => setSortKey('most_expensive')}
+                  className={cn(
+                    "py-3 px-4 text-right cursor-pointer transition-colors",
+                    sortKey === 'most_expensive' ? "bg-purple-100 text-purple-950 font-black" : "bg-purple-50/70 text-purple-900 hover:bg-purple-100/60"
+                  )}
+                  title="Ordenar por precio / más ponderado"
+                >
+                  <div className="flex items-center justify-end gap-1">
+                    <span>Precio / Valor (El Más Caro)</span>
+                    <ArrowUpDown size={11} className={sortKey === 'most_expensive' ? 'text-purple-700' : 'opacity-40'} />
+                  </div>
                 </th>
-                <th className="py-3 px-4 text-center bg-sky-50/60 text-sky-950 font-black">
-                  Turnos Dados (El Más Pedido)
+                <th 
+                  onClick={() => setSortKey('total_turns')}
+                  className={cn(
+                    "py-3 px-4 text-center cursor-pointer transition-colors",
+                    sortKey === 'total_turns' ? "bg-sky-100 text-sky-950 font-black" : "bg-sky-50/70 text-sky-900 hover:bg-sky-100/60"
+                  )}
+                  title="Ordenar por turnos dados"
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    <span>Turnos Dados (El Más Pedido)</span>
+                    <ArrowUpDown size={11} className={sortKey === 'total_turns' ? 'text-sky-700' : 'opacity-40'} />
+                  </div>
                 </th>
                 <th className="py-3 px-3 text-center">Atendidos</th>
-                <th className="py-3 px-4 text-right">Facturación / Turno Dado</th>
+                <th 
+                  onClick={() => setSortKey('revenue_per_turn_given')}
+                  className={cn(
+                    "py-3 px-4 text-right cursor-pointer transition-colors",
+                    sortKey === 'revenue_per_turn_given' ? "bg-amber-100 text-amber-950 font-black" : "hover:bg-surface text-on-surface"
+                  )}
+                  title="Ordenar por facturación por turno dado"
+                >
+                  <div className="flex items-center justify-end gap-1">
+                    <span>Facturación / Turno Dado</span>
+                    <ArrowUpDown size={11} className={sortKey === 'revenue_per_turn_given' ? 'text-amber-700' : 'opacity-40'} />
+                  </div>
+                </th>
                 <th className="py-3 px-4 text-center">Clasificación</th>
               </tr>
             </thead>

@@ -59,7 +59,15 @@ export function Agenda() {
     // Fetch Working Hours
     getDoc(doc(db, 'users', ownerId)).then(docSnap => {
       if (docSnap.exists() && docSnap.data().schedule) {
-        setWorkingHours(docSnap.data().schedule);
+        const sched = docSnap.data().schedule;
+        setWorkingHours(sched);
+        if (sched.appointmentDurationMinutes && Number(sched.appointmentDurationMinutes) > 0) {
+          const profMin = Number(sched.appointmentDurationMinutes);
+          setNewApt(prev => ({
+            ...prev,
+            duration: prev.duration === 30 ? profMin : prev.duration
+          }));
+        }
       }
     });
     if (!isNewAppointmentOpen) {
@@ -160,8 +168,9 @@ export function Agenda() {
 
   // Duration calculations - completely automatic based on selected treatment
   const effectiveNewAptDuration = useMemo(() => {
-    return getEffectiveDuration(newApt.type, newApt.duration, treatments, 30);
-  }, [newApt.type, newApt.duration, treatments]);
+    const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+    return getEffectiveDuration(newApt.type, newApt.duration, treatments, profDefault);
+  }, [newApt.type, newApt.duration, treatments, workingHours]);
 
   // Calculate outside working hours with duration awareness
   const newAptOutsideCheck = useMemo(() => {
@@ -188,8 +197,9 @@ export function Agenda() {
 
   // Duration calculations for edit appointment - completely automatic based on selected treatment
   const effectiveEditAptDuration = useMemo(() => {
-    return getEffectiveDuration(editAptData.type, editAptData.duration, treatments, 30);
-  }, [editAptData.type, editAptData.duration, treatments]);
+    const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+    return getEffectiveDuration(editAptData.type, editAptData.duration, treatments, profDefault);
+  }, [editAptData.type, editAptData.duration, treatments, workingHours]);
 
   // Calculate outside working hours with duration awareness for edited appointment
   const editAptOutsideCheck = useMemo(() => {
@@ -267,8 +277,9 @@ export function Agenda() {
 
   // Helper to open new appointment with full clean state
   const handleOpenNewAppointment = (targetDate?: string, targetTime?: string) => {
+    const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
     const matchedTreatment = treatments[0];
-    const initialDuration = matchedTreatment?.duration ? Number(matchedTreatment.duration) : 30;
+    const initialDuration = matchedTreatment?.duration ? Number(matchedTreatment.duration) : profDefault;
     const finalDate = targetDate || formatLocalDate(selectedDate || new Date());
     const availableSlots = getSuggestedAvailableSlots(finalDate, initialDuration, appointments, workingHours);
     const freeSlot = availableSlots.find(s => !s.isConflict);

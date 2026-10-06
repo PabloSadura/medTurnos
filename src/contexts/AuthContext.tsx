@@ -235,26 +235,60 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   setPermissions(['all', 'dashboard', 'agenda', 'patients', 'treatments', 'inventory', 'reminders']);
                   setLoading(false);
                 } else {
-                  // Initialize basic clinician profile for new authenticated user
-                  const newProfData = {
-                    id: userObj.uid,
-                    email: userObj.email,
-                    name: userObj.displayName || userObj.email?.split('@')[0] || 'Profesional',
-                    role: 'medico',
-                    status: 'Activo',
-                    userId: userObj.uid,
-                    createdAt: serverTimestamp(),
-                    updatedAt: serverTimestamp()
-                  };
+                  // Check if an admin-created user profile exists under the same email before creating a blank profile
+                  let matchedByEmailData: any = null;
+                  if (userObj.email) {
+                    try {
+                      const qUserEmail = query(
+                        collection(db, 'users'),
+                        where('email', '==', userObj.email.trim().toLowerCase()),
+                        limit(1)
+                      );
+                      const qUserEmailSnap = await getDocs(qUserEmail);
+                      if (!qUserEmailSnap.empty) {
+                        matchedByEmailData = qUserEmailSnap.docs[0].data();
+                      }
+                    } catch {
+                      // Ignore query restriction if non-admin
+                    }
+                  }
+
+                  const newProfData = matchedByEmailData
+                    ? {
+                        ...matchedByEmailData,
+                        id: userObj.uid,
+                        authUid: userObj.uid,
+                        authVerified: true,
+                        updatedAt: serverTimestamp()
+                      }
+                    : {
+                        id: userObj.uid,
+                        authUid: userObj.uid,
+                        authVerified: true,
+                        email: userObj.email?.toLowerCase(),
+                        name: userObj.displayName || userObj.email?.split('@')[0] || 'Profesional',
+                        role: 'medico',
+                        status: 'Activo',
+                        userId: userObj.uid,
+                        createdAt: serverTimestamp(),
+                        updatedAt: serverTimestamp()
+                      };
                   try {
                     await setDoc(userRef, newProfData, { merge: true });
                   } catch (e) {
                     console.warn('[Auth] Could not create initial user profile in Firestore:', e);
                   }
                   setProfile(newProfData);
-                  setIsStaff(false);
-                  setOwnerId(userObj.uid);
-                  setPermissions(['all', 'dashboard', 'agenda', 'patients', 'treatments', 'inventory', 'reminders']);
+                  const resolvedRole = normalizeRole(newProfData.role);
+                  setIsStaff(resolvedRole === 'secretary');
+                  setOwnerId(newProfData.userId || userObj.uid);
+                  setPermissions(
+                    resolvedRole === 'admin'
+                      ? ['sys_dashboard', 'admin']
+                      : resolvedRole === 'secretary'
+                      ? (newProfData.permissions || ['agenda', 'patients'])
+                      : ['all', 'dashboard', 'agenda', 'patients', 'treatments', 'inventory', 'reminders']
+                  );
                   setLoading(false);
                 }
               }

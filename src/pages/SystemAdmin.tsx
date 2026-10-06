@@ -12,7 +12,7 @@ import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { db } from '../lib/firebase';
+import { db, provisionUserInFirebaseAuth } from '../lib/firebase';
 import { doc, deleteDoc, serverTimestamp, collection, getDocs, setDoc, updateDoc, addDoc, increment } from 'firebase/firestore';
 import { seedAllCollections } from '../lib/dbSeeder';
 import { ReferralRecord } from '../types';
@@ -52,6 +52,8 @@ export function SystemAdmin() {
   // Modal & Form
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedProf, setSelectedProf] = useState<any>(null);
+  const [userToDelete, setUserToDelete] = useState<any>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [form, setForm] = useState({
     name: '',
     email: '',
@@ -293,35 +295,47 @@ export function SystemAdmin() {
   };
 
   const handleGeneratePassword = () => {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghijkmnopqrstuvwxyz';
+    const digits = '23456789';
+    const specials = '!@#$%&*';
+    const allChars = upper + lower + digits + specials;
     let pwd = '';
-    for (let i = 0; i < 10; i++) {
-      pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+    pwd += upper.charAt(Math.floor(Math.random() * upper.length));
+    pwd += lower.charAt(Math.floor(Math.random() * lower.length));
+    pwd += digits.charAt(Math.floor(Math.random() * digits.length));
+    pwd += specials.charAt(Math.floor(Math.random() * specials.length));
+    for (let i = 0; i < 8; i++) {
+      pwd += allChars.charAt(Math.floor(Math.random() * allChars.length));
     }
     setForm(prev => ({ ...prev, password: pwd }));
-    showToast(`Contraseña generada: ${pwd}`, 'info');
+    showToast(`Contraseña segura generada: ${pwd}`, 'info');
   };
 
   const handleSaveProf = async () => {
-    if (!form.name.trim() || !form.email.trim()) {
+    const cleanName = form.name.trim();
+    const cleanEmail = form.email.trim().toLowerCase();
+    const cleanPassword = (form.password || '').trim();
+
+    if (!cleanName || !cleanEmail) {
       showToast('El nombre y el correo electrónico son obligatorios.', 'error');
       return;
     }
 
     // Format validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(form.email.trim())) {
+    if (!emailRegex.test(cleanEmail)) {
       showToast('Por favor ingrese un formato de correo electrónico válido.', 'error');
       return;
     }
 
-    if (!selectedProf && !form.password) {
-      showToast('La contraseña es obligatoria para dar de alta nuevos usuarios.', 'error');
+    if (!selectedProf && !cleanPassword) {
+      showToast('La contraseña es obligatoria para dar de alta nuevos usuarios en Firebase Authentication.', 'error');
       return;
     }
 
-    if (form.password && form.password.trim().length < 6) {
-      showToast('La contraseña debe tener al menos 6 caracteres.', 'error');
+    if (cleanPassword && cleanPassword.length < 6) {
+      showToast('La contraseña debe tener al menos 6 caracteres para registrarse en Firebase Authentication.', 'error');
       return;
     }
 
@@ -331,23 +345,105 @@ export function SystemAdmin() {
     }
 
     try {
-      const targetId = selectedProf?.id || doc(collection(db, 'users')).id;
       const isBlocked = form.status === 'Bloqueado' || form.status === 'Inactivo';
       const referrer = form.referrerId ? professionals.find(p => p.id === form.referrerId) : null;
       const isReferred = Boolean(form.isReferred && form.referrerId && referrer);
       const newDiscountValue = Number(form.referredDiscountValue) || 0;
       const referrerDiscountValue = Number(form.referrerDiscountValue) || 0;
 
-      // Build complete user payload
+      const permissionsList = (form.role === 'admin' || form.role === 'superadmin' || form.role === 'super_admin')
+        ? ['sys_dashboard', 'admin']
+        : form.role === 'medico'
+        ? ['all']
+        : ['agenda', 'patients'];
+
+      // 1. Provision or verify the user in Firebase Authentication FIRST
+      let clientAuthUid: string | null = null;
+      let createdInClientAuth = false;
+      let clientAlreadyExisted = false;
+      let clientAuthError: string | undefined;
+
+      if (cleanPassword) {
+        const authProvisionRes = await provisionUserInFirebaseAuth({
+          email: cleanEmail,
+          password: cleanPassword,
+          displayName: cleanName
+        });
+        clientAuthUid = authProvisionRes.uid;
+        createdInClientAuth = authProvisionRes.createdInAuth;
+        clientAlreadyExisted = authProvisionRes.alreadyExisted;
+        clientAuthError = authProvisionRes.error;
+      }
+
+      // 2. Call backend endpoint to sync Firebase Admin Auth (passwords, existing users, custom claims)
+      let backendUid: string | null = null;
+      let backendVerifiedInAuth = false;
+      let backendCreatedInAuth = false;
+      let backendErrorMsg: string | null = null;
+
+      try {
+        const { ok, data } = await apiFetch('/api/staff/manage', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: cleanEmail,
+            password: cleanPassword || undefined,
+            name: cleanName,
+            role: form.role,
+            permissions: permissionsList,
+            status: form.status,
+            userId: clientAuthUid || selectedProf?.authUid || selectedProf?.id || undefined,
+            staffId: selectedProf?.id || undefined,
+            authUid: clientAuthUid || selectedProf?.authUid || undefined,
+            createdInClientAuth,
+            activePlanId: form.activePlanId || 'plus',
+            planId: form.activePlanId || 'plus',
+            paymentStatus: form.paymentStatus || 'al_dia',
+            isBlocked: isBlocked
+          })
+        });
+
+        if (ok && data) {
+          backendUid = data.authUid || data.uid || null;
+          backendVerifiedInAuth = Boolean(data.verifiedInAuth || data.createdInAuth);
+          backendCreatedInAuth = Boolean(data.createdInAuth);
+          if (data.notice) backendErrorMsg = data.notice;
+        } else if (!ok) {
+          backendErrorMsg = data?.error || 'Error en el servidor al gestionar la cuenta de autenticación.';
+        }
+      } catch (backendErr: any) {
+        console.warn("[SystemAdmin] Backend auth sync notice:", backendErr);
+        backendErrorMsg = backendErr?.message || null;
+      }
+
+      const resolvedAuthUid = clientAuthUid || backendUid || selectedProf?.authUid || null;
+      const isAuthVerified = Boolean(
+        createdInClientAuth ||
+        clientAlreadyExisted ||
+        backendCreatedInAuth ||
+        backendVerifiedInAuth ||
+        resolvedAuthUid
+      );
+
+      // Verify that when creating a new user (or assigning password to an unlinked user), Firebase Auth creation succeeded
+      if ((!selectedProf || cleanPassword) && !isAuthVerified) {
+        const reason = clientAuthError || backendErrorMsg || 'No se pudo registrar el usuario en Firebase Authentication.';
+        showToast(`Error en Firebase Authentication: ${reason}`, 'error');
+        return;
+      }
+
+      const targetId = resolvedAuthUid || selectedProf?.id || doc(collection(db, 'users')).id;
+      const authUid = resolvedAuthUid || targetId;
+
+      // Build complete user payload keyed by the Firebase Authentication UID
       const userPayload: any = {
-        name: form.name.trim(),
-        email: form.email.trim().toLowerCase(),
+         ...(selectedProf ? selectedProf : {}),
+        id: targetId,
+        authUid: authUid,
+        authVerified: true,
+        name: cleanName,
+        email: cleanEmail,
         role: form.role,
-        permissions: (form.role === 'admin' || form.role === 'superadmin' || form.role === 'super_admin')
-          ? ['sys_dashboard', 'admin']
-          : form.role === 'medico'
-          ? ['all']
-          : ['agenda', 'patients'],
+        permissions: permissionsList,
         status: form.status,
         isBlocked: isBlocked,
         paymentStatus: form.paymentStatus || 'al_dia',
@@ -399,41 +495,26 @@ export function SystemAdmin() {
         userPayload.customBonus = null;
       }
 
-      // 1. Direct Firestore write using authenticated client SDK (immediate and 100% reliable)
+      // 3. Persist to Firestore under the real Firebase Authentication UID (users/{targetId})
       await setDoc(doc(db, 'users', targetId), userPayload, { merge: true });
 
-      // 2. Call backend endpoint to handle Firebase Auth (account creation, passwords, and custom claims)
-      let authUid = targetId;
-      try {
-        const { ok, data } = await apiFetch('/api/staff/manage', {
-          method: 'POST',
-          body: JSON.stringify({
-            email: form.email.trim().toLowerCase(),
-            password: form.password?.trim() || undefined,
-            name: form.name.trim(),
-            role: form.role,
-            permissions: userPayload.permissions,
-            status: form.status,
-            userId: targetId,
-            staffId: selectedProf?.id,
-            activePlanId: form.activePlanId || 'plus',
-            planId: form.activePlanId || 'plus',
-            paymentStatus: form.paymentStatus || 'al_dia',
-            isBlocked: isBlocked,
-            customBonus: userPayload.customBonus,
-            referralInfo: userPayload.referralInfo,
-            referralDiscount: userPayload.referralDiscount
-          })
-        });
+      // If editing an older user whose previous Firestore doc ID differed from their new Firebase Auth UID, remove the old orphan doc
+      if (selectedProf?.id && selectedProf.id !== targetId) {
+        await deleteDoc(doc(db, 'users', selectedProf.id)).catch(() => {});
+      }
 
-        if (ok && data?.uid) {
-          authUid = data.uid;
-          if (authUid && authUid !== targetId) {
-            await setDoc(doc(db, 'users', authUid), userPayload, { merge: true }).catch(() => {});
-          }
-        }
-      } catch (backendErr) {
-        console.warn("[SystemAdmin] Backend auth sync notice:", backendErr);
+      // If role is secretary, ensure staff collection document is also created/updated with the Auth UID
+      if (form.role === 'secretary') {
+        await setDoc(doc(db, 'staff', targetId), {
+          name: cleanName,
+          email: cleanEmail,
+          role: 'secretary',
+          status: form.status,
+          permissions: permissionsList,
+          authUid: authUid,
+          userId: user?.uid || targetId,
+          updatedAt: serverTimestamp()
+        }, { merge: true }).catch(() => {});
       }
 
       // 3. Grant rewards to referrer and log in referrals collection if this is a new referral
@@ -494,14 +575,19 @@ export function SystemAdmin() {
       if (isReferred && referrer) {
         showToast(
           selectedProf
-            ? 'Profesional actualizado. Bonificaciones y descuentos sincronizados.'
-            : `¡Profesional creado! Descuento otorgado al nuevo usuario (${newDiscountValue}${form.referredDiscountType === 'percent' ? '%' : '$'}) y al Dr./Dra. ${referrer.name || referrer.email} (${referrerDiscountValue}${form.referrerDiscountType === 'percent' ? '%' : '$'}).`,
+            ? 'Profesional actualizado en Firebase Auth y Firestore. Bonificaciones sincronizadas.'
+            : `¡Profesional creado en Firebase Authentication! Descuento otorgado al nuevo usuario (${newDiscountValue}${form.referredDiscountType === 'percent' ? '%' : '$'}) y al Dr./Dra. ${referrer.name || referrer.email} (${referrerDiscountValue}${form.referrerDiscountType === 'percent' ? '%' : '$'}).`,
           'success'
         );
       } else if (form.hasCustomBonus && Number(form.customBonusValue) > 0) {
-        showToast(`Profesional guardado. Bonificación especial del ${form.customBonusValue}${form.customBonusType === 'percent' ? '%' : '$'} aplicada.`, 'success');
+        showToast(`Usuario registrado en Firebase Auth. Bonificación especial del ${form.customBonusValue}${form.customBonusType === 'percent' ? '%' : '$'} aplicada.`, 'success');
       } else {
-        showToast(selectedProf ? 'Profesional actualizado exitosamente' : 'Nuevo profesional dado de alta exitosamente', 'success');
+        showToast(
+          selectedProf
+            ? 'Usuario actualizado y sincronizado con Firebase Authentication'
+            : 'Nuevo usuario creado en Firebase Authentication y dado de alta exitosamente',
+          'success'
+        );
       }
 
       setIsModalOpen(false);
@@ -608,40 +694,88 @@ export function SystemAdmin() {
     }
   };
 
-  const handleDeleteProf = async (id: string, name?: string) => {
-    if (user && id === user.uid) {
-      showToast('No puede eliminar su propia cuenta de administrador.', 'error');
+  const handleDeleteProf = (profOrId: any, name?: string) => {
+    const targetObj = typeof profOrId === 'object' && profOrId !== null
+      ? profOrId
+      : professionals.find(p => p.id === profOrId) || { id: profOrId, name: name || 'Usuario' };
+
+    const targetId = targetObj.id;
+    const targetEmail = (targetObj.email || '').trim().toLowerCase();
+    const currentEmail = (user?.email || '').trim().toLowerCase();
+
+    if ((user && (targetId === user.uid || targetObj.authUid === user.uid)) || (targetEmail && targetEmail === currentEmail)) {
+      showToast('No puede eliminar su propia cuenta de administrador activa.', 'error');
       return;
     }
-    const displayName = name ? `al usuario "${name}"` : 'este usuario';
-    if (!confirm(`¿Está seguro de eliminar ${displayName}? Se revocarán todos sus accesos y se eliminarán sus registros del sistema.`)) return;
 
+    setUserToDelete(targetObj);
+  };
+
+  const confirmDeleteProf = async () => {
+    if (!userToDelete) return;
+    const targetId = userToDelete.id;
+    const targetAuthUid = userToDelete.authUid;
+    const targetEmail = (userToDelete.email || '').trim().toLowerCase();
+    const displayName = userToDelete.name || userToDelete.email || targetId;
+
+    setIsDeletingUser(true);
     try {
-      // 1. Intentar eliminar a través del backend protegido (elimina en Firebase Auth, Firestore y registra auditoría)
-      let backendHandled = false;
-      try {
-        const { ok, data } = await apiFetch('/api/staff/delete', {
-          method: 'POST',
-          body: JSON.stringify({ userId: id })
-        });
-        if (ok && data?.success) {
-          backendHandled = true;
+      // 1. Eliminar directamente en Firestore con credenciales del administrador autenticado
+      const idsToClean = Array.from(new Set([targetId, targetAuthUid].filter(Boolean)));
+      for (const docId of idsToClean) {
+        await deleteDoc(doc(db, 'users', docId));
+        await deleteDoc(doc(db, 'profiles', docId)).catch(() => {});
+        await deleteDoc(doc(db, 'staff', docId)).catch(() => {});
+      }
+
+      // Si existieran documentos duplicados con el mismo email en users, limpiarlos también
+      if (targetEmail) {
+        const duplicateDocs = professionals.filter(
+          p => (p.email || '').trim().toLowerCase() === targetEmail && !idsToClean.includes(p.id)
+        );
+        for (const dup of duplicateDocs) {
+          await deleteDoc(doc(db, 'users', dup.id)).catch(() => {});
+          await deleteDoc(doc(db, 'profiles', dup.id)).catch(() => {});
+          await deleteDoc(doc(db, 'staff', dup.id)).catch(() => {});
         }
+      }
+
+      // 2. Invocar al endpoint administrativo para dar de baja en Firebase Authentication y registrar auditoría
+      try {
+        await apiFetch('/api/staff/delete', {
+          method: 'POST',
+          body: JSON.stringify({
+            userId: targetId,
+            authUid: targetAuthUid || targetId,
+            email: targetEmail
+          })
+        });
       } catch (backendErr) {
-        console.warn('Backend delete endpoint warning, applying direct Firestore deletion:', backendErr);
+        console.warn('Aviso al sincronizar baja en Firebase Auth:', backendErr);
       }
 
-      // 2. Fallback / Confirmación directa en Firestore
-      if (!backendHandled) {
-        await deleteDoc(doc(db, 'users', id));
-        await deleteDoc(doc(db, 'profiles', id)).catch(() => {});
-        await deleteDoc(doc(db, 'staff', id)).catch(() => {});
+      // 3. Actualizar estado inmediatamente en el Panel de Control
+      setProfessionals(prev =>
+        prev.filter(p => {
+          if (idsToClean.includes(p.id)) return false;
+          if (targetEmail && (p.email || '').trim().toLowerCase() === targetEmail) return false;
+          return true;
+        })
+      );
+
+      setUserToDelete(null);
+      if (selectedProf && (selectedProf.id === targetId || selectedProf.email === userToDelete.email)) {
+        setIsModalOpen(false);
+        setSelectedProf(null);
       }
 
-      showToast(`Usuario ${name || ''} eliminado exitosamente del sistema`);
-      fetchProfessionals();
+      showToast(`Usuario "${displayName}" eliminado definitivamente del sistema`, 'success');
+      await fetchProfessionals();
     } catch (error: any) {
-      showToast(error.message || 'Error al eliminar usuario.', 'error');
+      console.error('Error al eliminar usuario:', error);
+      showToast('Error al eliminar usuario: ' + (error.message || 'Permisos insuficientes'), 'error');
+    } finally {
+      setIsDeletingUser(false);
     }
   };
 
@@ -1051,11 +1185,12 @@ export function SystemAdmin() {
                             <Settings size={17} />
                           </button>
                           <button 
-                            onClick={() => handleDeleteProf(p.id, p.name)}
-                            className="p-2 hover:bg-error-container/20 rounded-lg text-error transition-colors cursor-pointer"
-                            title="Eliminar"
+                            onClick={() => handleDeleteProf(p)}
+                            className="p-2 hover:bg-error/15 bg-error/5 border border-error/20 rounded-lg text-error transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-bold uppercase"
+                            title="Eliminar usuario"
                           >
-                            <Trash2 size={17} />
+                            <Trash2 size={15} />
+                            <span>Eliminar</span>
                           </button>
                         </div>
                       </div>
@@ -1064,6 +1199,16 @@ export function SystemAdmin() {
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <span className="text-[10px] font-bold px-2 py-0.5 bg-surface rounded-full text-on-surface-variant uppercase tracking-tighter">
                           {(p.role === 'superadmin' || p.role === 'super_admin') ? 'Superadmin' : p.role === 'admin' ? 'Admin' : p.role === 'secretary' ? 'Secretaria' : 'Profesional'}
+                        </span>
+
+                        <span className={cn(
+                          "inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full",
+                          (p.authUid || p.authVerified)
+                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                            : "bg-amber-50 text-amber-800 border border-amber-200"
+                        )}>
+                          <Key size={10} />
+                          {(p.authUid || p.authVerified) ? "Auth Activo" : "Asignar clave Auth"}
                         </span>
 
                         {p.referralInfo?.isReferred && (
@@ -1182,6 +1327,18 @@ export function SystemAdmin() {
                                 <p className="text-[13px] font-bold text-on-surface">{p.name || 'Sin nombre'}</p>
                                 <p className="text-[11px] text-on-surface-variant">{p.email}</p>
                                 <div className="flex items-center gap-1 flex-wrap mt-0.5">
+                                  <span
+                                    className={cn(
+                                      "inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded border",
+                                      (p.authUid || p.authVerified)
+                                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                        : "bg-amber-50 text-amber-800 border-amber-200"
+                                    )}
+                                    title={(p.authUid || p.authVerified) ? `Vinculado en Firebase Auth (UID: ${p.authUid || p.id})` : "Edite este usuario y asigne una contraseña para crear su cuenta en Firebase Authentication"}
+                                  >
+                                    <Key size={9} />
+                                    {(p.authUid || p.authVerified) ? "Firebase Auth Activo" : "Pendiente clave Auth"}
+                                  </span>
                                   {p.referralInfo?.isReferred && (
                                     <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded">
                                       <Gift size={9} />
@@ -1288,11 +1445,12 @@ export function SystemAdmin() {
                                 <Settings size={16} />
                               </button>
                               <button 
-                                onClick={() => handleDeleteProf(p.id, p.name)}
-                                className="p-1.5 hover:bg-error-container/20 rounded-lg text-error transition-colors cursor-pointer"
-                                title="Eliminar"
+                                onClick={() => handleDeleteProf(p)}
+                                className="px-2.5 py-1.5 hover:bg-error/15 bg-error/5 border border-error/25 rounded-lg text-error transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-black uppercase tracking-wider"
+                                title="Eliminar usuario del sistema"
                               >
-                                <Trash2 size={16} />
+                                <Trash2 size={14} />
+                                <span className="hidden xl:inline">Eliminar</span>
                               </button>
                             </div>
                           </td>
@@ -2076,22 +2234,99 @@ export function SystemAdmin() {
             </div>
           </div>
 
-          <div className="flex gap-3 pt-4">
-            <button 
-              onClick={() => setIsModalOpen(false)}
-              className="flex-1 py-2.5 bg-surface border border-outline-variant rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-outline-variant transition-all font-sans cursor-pointer"
-            >
-              Cancelar
-            </button>
-            <button 
-              onClick={handleSaveProf}
-              className="flex-1 py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-primary/90 transition-all flex items-center justify-center gap-2 font-sans cursor-pointer"
-            >
-              <Save size={14} />
-              {selectedProf ? "Actualizar" : "Crear Alta"}
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-outline-variant">
+            {selectedProf ? (
+              <button
+                type="button"
+                onClick={() => handleDeleteProf(selectedProf)}
+                className="px-4 py-2.5 bg-error/10 text-error border border-error/25 rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-error hover:text-white transition-all flex items-center gap-1.5 font-sans cursor-pointer"
+              >
+                <Trash2 size={14} />
+                Eliminar Usuario
+              </button>
+            ) : (
+              <div />
+            )}
+            <div className="flex gap-3 ml-auto">
+              <button 
+                onClick={() => setIsModalOpen(false)}
+                className="px-5 py-2.5 bg-surface border border-outline-variant rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-outline-variant transition-all font-sans cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={handleSaveProf}
+                className="px-5 py-2.5 bg-primary text-white rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-primary/90 transition-all flex items-center justify-center gap-2 font-sans cursor-pointer"
+              >
+                <Save size={14} />
+                {selectedProf ? "Actualizar" : "Crear Alta"}
+              </button>
+            </div>
           </div>
         </div>
+      </Modal>
+
+      {/* Modal de Confirmación para Eliminar Usuario */}
+      <Modal
+        isOpen={Boolean(userToDelete)}
+        onClose={() => !isDeletingUser && setUserToDelete(null)}
+        title="Confirmar Eliminación de Usuario"
+        className="max-w-md font-sans"
+      >
+        {userToDelete && (
+          <div className="space-y-5">
+            <div className="p-4 bg-error/10 border border-error/25 rounded-xl flex items-start gap-3.5">
+              <div className="p-2.5 bg-error text-white rounded-xl shrink-0 mt-0.5">
+                <Trash2 size={20} />
+              </div>
+              <div className="space-y-1">
+                <h4 className="text-sm font-black text-on-surface">
+                  ¿Está seguro de eliminar a este usuario del sistema?
+                </h4>
+                <p className="text-xs text-on-surface-variant leading-relaxed">
+                  Esta acción revocará de inmediato su acceso a la plataforma y eliminará su perfil tanto de la base de datos como de Firebase Authentication.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-surface rounded-xl border border-outline-variant space-y-2 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="font-bold text-on-surface-variant uppercase tracking-wider text-[10px]">Nombre:</span>
+                <span className="font-black text-on-surface">{userToDelete.name || 'Sin nombre'}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="font-bold text-on-surface-variant uppercase tracking-wider text-[10px]">Email:</span>
+                <span className="font-bold text-on-surface">{userToDelete.email || 'Sin email'}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="font-bold text-on-surface-variant uppercase tracking-wider text-[10px]">Rol:</span>
+                <span className="font-black uppercase text-primary text-[10px] px-2 py-0.5 bg-primary/10 rounded-md">
+                  {userToDelete.role || 'medico'}
+                </span>
+              </div>
+            </div>
+
+            <div className="pt-3 flex justify-end gap-3 border-t border-outline-variant">
+              <button
+                type="button"
+                disabled={isDeletingUser}
+                onClick={() => setUserToDelete(null)}
+                className="px-5 py-2.5 rounded-xl border border-outline-variant text-xs font-bold uppercase tracking-widest text-on-surface-variant hover:bg-surface transition-all cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingUser}
+                onClick={confirmDeleteProf}
+                className="px-6 py-2.5 rounded-xl bg-error text-white text-xs font-black uppercase tracking-widest shadow-md hover:bg-error/90 transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50"
+              >
+                <Trash2 size={15} />
+                {isDeletingUser ? 'Eliminando...' : 'Sí, Eliminar Usuario'}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Plan Specific Configuration Modal */}

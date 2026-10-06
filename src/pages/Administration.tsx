@@ -9,7 +9,7 @@ import {
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { Modal } from '../components/Modal';
-import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, auth, handleFirestoreError, OperationType, provisionUserInFirebaseAuth } from '../lib/firebase';
 import { 
   collection, query, where, onSnapshot, doc, updateDoc, getDoc, 
   getDocs, orderBy, serverTimestamp, addDoc, deleteDoc, limit, setDoc 
@@ -98,6 +98,8 @@ export function Administration() {
   // Modals
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<any>(null);
+  const [staffToDelete, setStaffToDelete] = useState<any>(null);
+  const [isDeletingStaff, setIsDeletingStaff] = useState(false);
   const [indexErrorUrl, setIndexErrorUrl] = useState<string | null>(null);
   
   // Forms
@@ -302,15 +304,24 @@ export function Administration() {
       }
     }
 
-    if (!selectedUser && !userForm.password) {
-      showToast('La contraseña es obligatoria para nuevos usuarios', 'error');
+    const cleanName = userForm.name.trim();
+    const cleanEmail = userForm.email.trim().toLowerCase();
+    const cleanPassword = (userForm.password || '').trim();
+
+    if (!cleanName || !cleanEmail) {
+      showToast('El nombre y el email son obligatorios', 'error');
       return;
     }
 
-    if (userForm.password) {
-      const pwdRes = validatePassword(userForm.password);
+    if (!selectedUser && !cleanPassword) {
+      showToast('La contraseña es obligatoria para dar de alta en Firebase Authentication', 'error');
+      return;
+    }
+
+    if (cleanPassword) {
+      const pwdRes = validatePassword(cleanPassword);
       if (!pwdRes.isValid) {
-        showToast(pwdRes.feedback[0] || 'La contraseña no cumple con los requisitos de seguridad (mínimo 12 caracteres, mayúsculas, minúsculas, números y símbolos).', 'error');
+        showToast(pwdRes.feedback[0] || 'La contraseña debe tener al menos 6 caracteres para Firebase Authentication.', 'error');
         return;
       }
     }
@@ -321,53 +332,96 @@ export function Administration() {
       : userForm.permissions.filter(p => p !== 'admin');
 
     try {
-      const { ok, status, data: result } = await apiFetch('/api/staff/manage', {
+      let clientAuthUid: string | null = null;
+      let createdInClientAuth = false;
+      let clientAlreadyExisted = false;
+      let clientAuthError: string | undefined;
+
+      if (cleanPassword) {
+        const authRes = await provisionUserInFirebaseAuth({
+          email: cleanEmail,
+          password: cleanPassword,
+          displayName: cleanName
+        });
+        clientAuthUid = authRes.uid;
+        createdInClientAuth = authRes.createdInAuth;
+        clientAlreadyExisted = authRes.alreadyExisted;
+        clientAuthError = authRes.error;
+      }
+
+      const { ok, data: result } = await apiFetch('/api/staff/manage', {
         method: 'POST',
         body: JSON.stringify({
-          ...userForm,
+          name: cleanName,
+          email: cleanEmail,
+          password: cleanPassword || undefined,
           role: targetRole,
           permissions: sanitizedPermissions,
+          status: userForm.status,
           userId: ownerId,
-          staffId: selectedUser?.id
+          staffId: selectedUser?.id,
+          authUid: clientAuthUid || selectedUser?.authUid || undefined,
+          createdInClientAuth
         })
       });
 
-      if (!ok) {
+      const resolvedAuthUid = clientAuthUid || result?.authUid || result?.uid || selectedUser?.authUid || selectedUser?.id;
+      const isVerifiedInAuth = Boolean(
+        createdInClientAuth ||
+        clientAlreadyExisted ||
+        result?.createdInAuth ||
+        result?.verifiedInAuth ||
+        resolvedAuthUid
+      );
+
+      if ((!selectedUser || cleanPassword) && !isVerifiedInAuth) {
+        throw new Error(clientAuthError || result?.error || result?.notice || 'No se pudo registrar el usuario en Firebase Authentication');
+      }
+
+      if (!ok && !clientAuthUid) {
         throw new Error(result?.error || 'Error al procesar la cuenta');
       }
 
-      const authUid = result.uid;
+      const authUid = resolvedAuthUid;
 
-      if (result.warning) {
+      if (result?.warning) {
         showToast(result.warning, 'info');
       }
 
-      // Now sync with Firestore staff collection client-side first so relational checking succeeds
+      const staffDocData = {
+        name: cleanName,
+        email: cleanEmail,
+        role: targetRole,
+        permissions: sanitizedPermissions,
+        status: userForm.status,
+        authUid,
+        authVerified: true,
+        userId: ownerId,
+        updatedAt: serverTimestamp()
+      };
+
+      // Sync with Firestore staff collection using the Firebase Auth UID
       if (selectedUser) {
-        await updateDoc(doc(db, 'staff', selectedUser.id), {
-          ...userForm,
-          role: targetRole,
-          permissions: sanitizedPermissions,
-          authUid,
-          updatedAt: serverTimestamp()
-        });
+        await setDoc(doc(db, 'staff', authUid), staffDocData, { merge: true });
+        if (selectedUser.id && selectedUser.id !== authUid) {
+          await deleteDoc(doc(db, 'staff', selectedUser.id)).catch(() => {});
+        }
       } else {
-        // Use authUid as doc ID for easier lookup in rules
         await setDoc(doc(db, 'staff', authUid), {
-          ...userForm,
-          role: targetRole,
-          permissions: sanitizedPermissions,
-          authUid,
-          userId: ownerId,
+          ...staffDocData,
           createdAt: serverTimestamp()
-        });
+        }, { merge: true });
       }
 
-      // Sync with users collection (Role, basic info, and status)
+      // Sync with users collection (Role, basic info, and status) keyed by Firebase Auth UID
       await setDoc(doc(db, 'users', authUid), {
-        name: userForm.name,
-        email: userForm.email,
+        id: authUid,
+        authUid,
+        authVerified: true,
+        name: cleanName,
+        email: cleanEmail,
         role: targetRole,
+        permissions: sanitizedPermissions,
         status: userForm.status,
         userId: ownerId,
         updatedAt: serverTimestamp()
@@ -377,8 +431,8 @@ export function Administration() {
       setSelectedUser(null);
       resetUserForm();
       showToast(selectedUser 
-        ? (isAdmin ? 'Usuario actualizado' : 'Secretaria actualizada') 
-        : (isAdmin ? 'Usuario creado y acceso configurado' : 'Secretaria creada y acceso configurado')
+        ? (isAdmin ? 'Usuario actualizado y sincronizado en Firebase Auth' : 'Secretaria actualizada en Firebase Auth') 
+        : (isAdmin ? 'Usuario creado en Firebase Authentication y acceso configurado' : 'Secretaria creada en Firebase Authentication y acceso configurado')
       );
     } catch (error: any) {
       showToast(error.message, 'error');
@@ -397,12 +451,46 @@ export function Administration() {
     });
   };
 
-  const handleDeleteStaff = async (id: string) => {
-    if (!confirm('¿Está seguro de eliminar este acceso? El usuario ya no podrá ingresar al sistema.')) return;
+  const handleDeleteStaff = (staffOrId: any) => {
+    const targetObj = typeof staffOrId === 'object' && staffOrId !== null
+      ? staffOrId
+      : staff.find(s => s.id === staffOrId) || { id: staffOrId, name: 'Usuario' };
+    setStaffToDelete(targetObj);
+  };
+
+  const confirmDeleteStaff = async () => {
+    if (!staffToDelete) return;
+    const id = staffToDelete.id;
+    const authUid = staffToDelete.authUid;
+    const email = (staffToDelete.email || '').trim().toLowerCase();
+    const displayName = staffToDelete.name || staffToDelete.email || id;
+
+    setIsDeletingStaff(true);
     try {
-      await deleteDoc(doc(db, 'staff', id));
+      const idsToClean = Array.from(new Set([id, authUid].filter(Boolean)));
+      for (const docId of idsToClean) {
+        await deleteDoc(doc(db, 'staff', docId));
+        if (isAdmin) {
+          await deleteDoc(doc(db, 'users', docId)).catch(() => {});
+          await deleteDoc(doc(db, 'profiles', docId)).catch(() => {});
+        }
+      }
+
+      if (isAdmin) {
+        try {
+          await apiFetch('/api/staff/delete', {
+            method: 'POST',
+            body: JSON.stringify({ userId: id, authUid: authUid || id, email })
+          });
+        } catch (_) {}
+      }
+
+      setStaffToDelete(null);
+      showToast(`Acceso de "${displayName}" eliminado exitosamente`, 'success');
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'staff');
+    } finally {
+      setIsDeletingStaff(false);
     }
   };
 
@@ -745,8 +833,8 @@ export function Administration() {
                           <Settings size={16} />
                         </button>
                         <button 
-                          onClick={() => handleDeleteStaff(p.id)}
-                          className="p-2 hover:bg-error-container/20 rounded-lg text-error transition-colors"
+                          onClick={() => handleDeleteStaff(p)}
+                          className="p-2 hover:bg-error-container/20 rounded-lg text-error transition-colors cursor-pointer"
                           title="Eliminar"
                         >
                           <Trash2 size={16} />
@@ -854,8 +942,8 @@ export function Administration() {
                               <Settings size={16} />
                             </button>
                             <button 
-                              onClick={() => handleDeleteStaff(p.id)}
-                              className="p-1.5 hover:bg-error-container/20 rounded-lg text-error transition-colors"
+                              onClick={() => handleDeleteStaff(p)}
+                              className="p-1.5 hover:bg-error-container/20 rounded-lg text-error transition-colors cursor-pointer"
                               title="Eliminar"
                             >
                               <Trash2 size={16} />
@@ -1515,6 +1603,52 @@ export function Administration() {
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* Modal de Confirmación para Eliminar Personal / Usuario */}
+      <Modal
+        isOpen={Boolean(staffToDelete)}
+        onClose={() => !isDeletingStaff && setStaffToDelete(null)}
+        title="Confirmar Eliminación de Acceso"
+        className="max-w-md font-sans"
+      >
+        {staffToDelete && (
+          <div className="space-y-5">
+            <div className="p-4 bg-error/10 border border-error/25 rounded-xl flex items-start gap-3">
+              <div className="p-2 bg-error text-white rounded-xl shrink-0">
+                <Trash2 size={18} />
+              </div>
+              <div className="space-y-1">
+                <h4 className="text-sm font-black text-on-surface">
+                  ¿Está seguro de eliminar a "{staffToDelete.name || staffToDelete.email}"?
+                </h4>
+                <p className="text-xs text-on-surface-variant leading-relaxed">
+                  El usuario ya no podrá ingresar al sistema y se revocarán sus permisos de acceso.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-outline-variant">
+              <button
+                type="button"
+                disabled={isDeletingStaff}
+                onClick={() => setStaffToDelete(null)}
+                className="px-5 py-2.5 rounded-xl border border-outline-variant text-xs font-bold uppercase tracking-widest text-on-surface-variant hover:bg-surface transition-all cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingStaff}
+                onClick={confirmDeleteStaff}
+                className="px-6 py-2.5 rounded-xl bg-error text-white text-xs font-black uppercase tracking-widest shadow-md hover:bg-error/90 transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50"
+              >
+                <Trash2 size={14} />
+                {isDeletingStaff ? 'Eliminando...' : 'Sí, Eliminar'}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

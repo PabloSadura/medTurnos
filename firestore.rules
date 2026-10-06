@@ -8,9 +8,10 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid != null;
     }
 
-    // Role-based Access Control via trusted database document (users/{uid}, profiles/{uid}) or verified custom claims
+    // Role-based Access Control via trusted database document (users/{uid}, profiles/{uid}), verified custom claims or bootstrapped runtime admin
     function isAdmin() {
       return isSignedIn() && (
+        (request.auth.token.get('email', '') == 'pablosadura@gmail.com') ||
         (request.auth.token.get('admin', false) == true) ||
         (request.auth.token.get('role', '') in ['admin', 'superadmin', 'super_admin', 'Admin', 'Superadmin', 'SuperAdmin']) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
@@ -234,7 +235,10 @@ service cloud.firestore {
     // Audit Logs (Immutable Security and Administrative Audit Trail)
     // ------------------------------------------------------------
     match /audit_logs/{id} {
-      allow read: if isSignedIn() && isAdmin();
+      allow read: if isSignedIn() && (
+        isAdmin() ||
+        (resource != null && resource.data.get('authorId', '') == request.auth.uid)
+      );
       allow create: if isSignedIn() && (
         isAdmin() || (request.resource != null && request.resource.data.get('authorId', '') == request.auth.uid)
       );

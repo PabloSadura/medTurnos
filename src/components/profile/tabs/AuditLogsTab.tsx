@@ -13,7 +13,7 @@ import {
   ChevronRight,
   Database
 } from 'lucide-react';
-import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { collection, query, orderBy, limit, getDocs, where } from 'firebase/firestore';
 import { db, auth } from '../../../lib/firebase';
 import { AuditLogEntry } from '../../../types/profile';
 import { cn } from '../../../lib/utils';
@@ -50,17 +50,19 @@ export function AuditLogsTab() {
       }
 
       // Firestore fallback
-      const q = query(
-        collection(db, 'audit_logs'),
-        orderBy('createdAt', 'desc'),
-        limit(50)
-      );
-      const snapshot = await getDocs(q);
-      const items: AuditLogEntry[] = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...(doc.data() as any)
-      }));
-      setLogs(items);
+      if (currentUser) {
+        const isAdminUser = currentUser.email === 'pablosadura@gmail.com';
+        const q = isAdminUser
+          ? query(collection(db, 'audit_logs'), orderBy('createdAt', 'desc'), limit(50))
+          : query(collection(db, 'audit_logs'), where('authorId', '==', currentUser.uid), limit(50));
+        const snapshot = await getDocs(q);
+        const items: AuditLogEntry[] = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...(doc.data() as any)
+        }));
+        items.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        setLogs(items);
+      }
     } catch (err: any) {
       console.warn('Audit logs fetch note:', err);
       // If index is building or empty, show empty state gracefully

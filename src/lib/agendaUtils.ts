@@ -485,7 +485,8 @@ export function getSuggestedAvailableSlots(
   const aEndMin = timeToMinutes(effectiveHours.afternoonEnd || '18:00');
 
   const suggested: SuggestedSlot[] = [];
-  const STEP_MINUTES = 15; // 15-minute resolution for scheduling precision
+  // Resolution: use 15 minutes when duration is a multiple of 15, otherwise 5 minutes (e.g. 25 min, 20 min, 10 min)
+  const STEP_MINUTES = (safeDuration % 15 === 0) ? 15 : 5;
 
   // 1. Morning Shift Slots
   if (morningActive && mEndMin - mStartMin >= safeDuration) {
