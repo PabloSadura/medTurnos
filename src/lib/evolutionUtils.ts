@@ -107,3 +107,60 @@ export function checkEvolutionEditability(evolution: any): EvolutionEditability 
     message: 'Edición cerrada (superó 24hs)'
   };
 }
+
+const SPANISH_MONTHS_SHORT = [
+  'ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN',
+  'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'
+];
+
+/**
+ * Formats an evolution date string ('YYYY-MM-DD' or Date/Timestamp) into the standard format:
+ * "12 - JUN - 2026"
+ */
+export function formatEvolutionDate(dateInput?: any): string {
+  if (!dateInput || dateInput === '-') return '-';
+
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    // Already formatted like "12 - JUN - 2026"
+    if (/^\d{1,2}\s*-\s*[A-Z]{3}\s*-\s*\d{4}$/i.test(trimmed)) {
+      return trimmed.toUpperCase();
+    }
+    // Standard YYYY-MM-DD (optionally followed by time)
+    const match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (match) {
+      const year = match[1];
+      const monthIdx = parseInt(match[2], 10) - 1;
+      const day = String(parseInt(match[3], 10)).padStart(2, '0');
+      const monthName = SPANISH_MONTHS_SHORT[monthIdx];
+      if (monthName) {
+        return `${day} - ${monthName} - ${year}`;
+      }
+    }
+  }
+
+  // Fallback for Date or Firestore Timestamp
+  let d: Date | null = null;
+  if (dateInput instanceof Date) {
+    d = dateInput;
+  } else if (typeof dateInput?.toDate === 'function') {
+    d = dateInput.toDate();
+  } else if (typeof dateInput?.seconds === 'number') {
+    d = new Date(dateInput.seconds * 1000);
+  } else if (typeof dateInput === 'string' || typeof dateInput === 'number') {
+    const parsed = new Date(dateInput);
+    if (!isNaN(parsed.getTime())) {
+      d = parsed;
+    }
+  }
+
+  if (d && !isNaN(d.getTime())) {
+    const day = String(d.getDate()).padStart(2, '0');
+    const monthName = SPANISH_MONTHS_SHORT[d.getMonth()] || 'ENE';
+    const year = d.getFullYear();
+    return `${day} - ${monthName} - ${year}`;
+  }
+
+  return String(dateInput);
+}
+

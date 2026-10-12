@@ -56,8 +56,8 @@ export function Agenda() {
   useEffect(() => {
     if (!ownerId) return;
 
-    // Fetch Working Hours
-    getDoc(doc(db, 'users', ownerId)).then(docSnap => {
+    // Subscribe to Working Hours in real-time from profile (Días y horarios)
+    const unsubscribeSchedule = onSnapshot(doc(db, 'users', ownerId), (docSnap) => {
       if (docSnap.exists() && docSnap.data().schedule) {
         const sched = docSnap.data().schedule;
         setWorkingHours(sched);
@@ -65,17 +65,22 @@ export function Agenda() {
           const profMin = Number(sched.appointmentDurationMinutes);
           setNewApt(prev => ({
             ...prev,
-            duration: prev.duration === 30 ? profMin : prev.duration
+            duration: (!prev.duration || prev.duration === 30) ? profMin : prev.duration
           }));
         }
       }
     });
+
+    return () => unsubscribeSchedule();
+  }, [ownerId]);
+
+  useEffect(() => {
     if (!isNewAppointmentOpen) {
       setIsCreatingNewPatient(false);
       setNewPatientData({ firstName: '', lastName: '', name: '', phone: '', idNumber: '', birthDate: '' });
       setSearchTerm('');
     }
-  }, [isNewAppointmentOpen, ownerId]);
+  }, [isNewAppointmentOpen]);
 
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [reminderModalApt, setReminderModalApt] = useState<any | null>(null);
@@ -279,7 +284,7 @@ export function Agenda() {
   const handleOpenNewAppointment = (targetDate?: string, targetTime?: string) => {
     const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
     const matchedTreatment = treatments[0];
-    const initialDuration = matchedTreatment?.duration ? Number(matchedTreatment.duration) : profDefault;
+    const initialDuration = getEffectiveDuration(matchedTreatment, null, treatments, profDefault);
     const finalDate = targetDate || formatLocalDate(selectedDate || new Date());
     const availableSlots = getSuggestedAvailableSlots(finalDate, initialDuration, appointments, workingHours);
     const freeSlot = availableSlots.find(s => !s.isConflict);
@@ -641,8 +646,9 @@ export function Agenda() {
       showToast('No se puede modificar la fecha u hora de un turno ya finalizado.', 'warning');
       return;
     }
+    const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
     const matched = treatments.find(t => t.name === (apt.type || apt.treatment));
-    const initialDuration = Number(apt.duration) || (matched?.duration ? Number(matched.duration) : 30);
+    const initialDuration = getEffectiveDuration(matched, apt.duration, treatments, profDefault);
     setEditAptData({
       id: apt.id,
       patientId: apt.patientId || '',
@@ -1813,19 +1819,25 @@ export function Agenda() {
               onChange={(e) => {
                 const selected = e.target.value;
                 const matched = treatments.find(t => t.name === selected);
+                const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+                const nextDuration = getEffectiveDuration(matched, null, treatments, profDefault);
                 setNewApt(prev => ({
                   ...prev,
                   type: selected,
-                  duration: matched?.duration ? Number(matched.duration) : (prev.duration || 30)
+                  duration: nextDuration
                 }));
               }}
             >
               <option value="">Seleccione tratamiento...</option>
-              {treatments.map(t => (
-                <option key={t.id} value={t.name}>
-                  {t.name} ({t.duration || 30} min) {t.cost ? `— $${Number(t.cost).toLocaleString()}` : ''}
-                </option>
-              ))}
+              {treatments.map(t => {
+                const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+                const dispDur = getEffectiveDuration(t, null, treatments, profDefault);
+                return (
+                  <option key={t.id} value={t.name}>
+                    {t.name} ({dispDur} min) {t.cost ? `— $${Number(t.cost).toLocaleString()}` : ''}
+                  </option>
+                );
+              })}
             </select>
           </div>
 
@@ -2407,20 +2419,26 @@ export function Agenda() {
               onChange={(e) => {
                 const selected = e.target.value;
                 const matched = treatments.find(t => t.name === selected);
+                const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+                const nextDuration = getEffectiveDuration(matched, null, treatments, profDefault);
                 setEditAptData(prev => ({
                   ...prev,
                   type: selected,
-                  duration: matched?.duration ? Number(matched.duration) : (prev.duration || 30)
+                  duration: nextDuration
                 }));
               }}
               className="w-full px-3 py-2 bg-surface rounded-lg border border-outline-variant text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
             >
               {treatments.length > 0 ? (
-                treatments.map((t) => (
-                  <option key={t.id} value={t.name}>{t.name} ({t.duration}m)</option>
-                ))
+                treatments.map((t) => {
+                  const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+                  const dispDur = getEffectiveDuration(t, null, treatments, profDefault);
+                  return (
+                    <option key={t.id} value={t.name}>{t.name} ({dispDur}m)</option>
+                  );
+                })
               ) : (
-                <option value="Check-up General">Check-up General (30m)</option>
+                <option value="Check-up General">Check-up General ({Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30}m)</option>
               )}
             </select>
           </div>

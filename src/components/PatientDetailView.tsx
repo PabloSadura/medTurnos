@@ -17,13 +17,15 @@ import { PatientPackagesView } from './PatientPackagesView';
 import { PatientDriveFiles } from './PatientDriveFiles';
 import { PatientEvolutionPhotos } from './PatientEvolutionPhotos';
 import { consumePackageSession } from '../lib/packageUtils';
-import { checkEvolutionEditability } from '../lib/evolutionUtils';
+import { checkEvolutionEditability, formatEvolutionDate } from '../lib/evolutionUtils';
 import { PatientPackage } from '../types';
 import { 
   splitFullName, formatPatientFullName, getPatientFirstName, 
   getPatientLastName, formatPatientLastNameFirst 
 } from '../lib/patientNameUtils';
 import { formatArgentinePhoneWithPrefix } from '../lib/phoneUtils';
+import { getSuggestedAvailableSlots, getEffectiveDuration } from '../lib/agendaUtils';
+import { SuggestedSlotsPicker } from './SuggestedSlotsPicker';
 
 interface PatientDetailViewProps {
   patient: any;
@@ -60,6 +62,8 @@ export function PatientDetailView({
   const [historySearchTerm, setHistorySearchTerm] = useState('');
   const [patientPackages, setPatientPackages] = useState<PatientPackage[]>([]);
   const [patientAppointments, setPatientAppointments] = useState<any[]>([]);
+  const [allDoctorAppointments, setAllDoctorAppointments] = useState<any[]>([]);
+  const [workingHours, setWorkingHours] = useState<any>(null);
   const [editingEvolution, setEditingEvolution] = useState<any | null>(null);
 
   // Automatically open evolution entry if navigated from appointment or requested
@@ -190,6 +194,13 @@ export function PatientDetailView({
       setEvolutions(docs.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')));
     }, (error) => handleFirestoreError(error, OperationType.LIST, `patients/${patient.id}/evolutions`));
 
+    // Subscribe to profile working hours (Días y horarios)
+    const unsubscribeSchedule = onSnapshot(doc(db, 'users', ownerId), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().schedule) {
+        setWorkingHours(docSnap.data().schedule);
+      }
+    });
+
     // Fetch appointments to calculate KPIs and link with evolutions
     const appQ = query(
       collection(db, 'appointments'),
@@ -197,6 +208,7 @@ export function PatientDetailView({
     );
     const unsubscribeApps = onSnapshot(appQ, (snapshot) => {
       const allApps: any[] = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setAllDoctorAppointments(allApps);
       const apps: any[] = allApps.filter((a: any) => a.patientId === patient.id);
 
       apps.sort((a: any, b: any) => {
@@ -287,6 +299,7 @@ export function PatientDetailView({
     });
 
     return () => {
+      unsubscribeSchedule();
       unsubscribeEvolutions();
       unsubscribeApps();
       unsubscribePackages();
@@ -751,6 +764,9 @@ export function PatientDetailView({
         const pFn = patient.firstName || parsed.firstName || '';
         const pLn = patient.lastName || parsed.lastName || '';
 
+        const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+        const effectiveNextDuration = getEffectiveDuration(nextAptData.treatment || combinedTreatmentName, null, treatments, profDefault);
+
         const newAptRef = doc(collection(db, 'appointments'));
         batch.set(newAptRef, {
           id: newAptRef.id,
@@ -764,6 +780,7 @@ export function PatientDetailView({
           doctorEmail: user?.email || '',
           date: nextAptData.date,
           time: nextAptData.time,
+          duration: effectiveNextDuration,
           treatment: nextAptData.treatment || combinedTreatmentName,
           treatmentId: nextAptData.treatmentId || evolutionTreatments[0]?.treatmentId || '',
           type: nextAptData.treatment || combinedTreatmentName,
@@ -892,7 +909,7 @@ export function PatientDetailView({
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-xs font-bold text-on-surface font-mono">{entry.date}</span>
+            <span className="text-xs font-bold text-on-surface font-mono">{formatEvolutionDate(entry.date)}</span>
 
             {/* Badge de estado de edición (24 Horas) */}
             {editability.canEdit ? (
@@ -1033,6 +1050,7 @@ export function PatientDetailView({
       (e.note || '').toLowerCase().includes(term) ||
       (e.doctor || '').toLowerCase().includes(term) ||
       (e.date || '').includes(term) ||
+      formatEvolutionDate(e.date).toLowerCase().includes(term) ||
       (Array.isArray(e.items) && e.items.some((it: any) => (it.treatmentName || '').toLowerCase().includes(term)))
     );
   }, [evolutions, historySearchTerm]);
@@ -1394,6 +1412,24 @@ export function PatientDetailView({
                   ))}
                 </select>
               </div>
+
+              {(() => {
+                const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+                const activeNextTreatment = nextAptData.treatment || (evolutionTreatments[0]?.treatmentName || '');
+                const nextDuration = getEffectiveDuration(activeNextTreatment, null, treatments, profDefault);
+                const suggestedNextSlots = getSuggestedAvailableSlots(nextAptData.date, nextDuration, allDoctorAppointments, workingHours);
+                return (
+                  <SuggestedSlotsPicker
+                    slots={suggestedNextSlots}
+                    selectedTime={nextAptData.time}
+                    onSelectTime={(time) => setNextAptData(prev => ({ ...prev, time }))}
+                    duration={nextDuration}
+                    treatmentName={activeNextTreatment}
+                    dateStr={nextAptData.date}
+                    workingHours={workingHours}
+                  />
+                );
+              })()}
 
               <div className="space-y-1">
                 <label className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider">Notas para la próxima cita (Opcional)</label>

@@ -15,7 +15,7 @@ import {
 import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { sendEmailVerification, sendPasswordResetEmail } from 'firebase/auth';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth, isAdminRole } from '../contexts/AuthContext';
 import { useGoogleDrive } from '../contexts/GoogleDriveContext';
 import { cn } from '../lib/utils';
 import { logAuditEvent } from '../lib/auditLogger';
@@ -69,7 +69,7 @@ export function Profile() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isStaff = authProfile?.role === 'secretary' || profile.role === 'secretary';
-  const isAdmin = authProfile?.role === 'admin' || profile.role === 'admin';
+  const isAdmin = isAdminRole(authProfile?.role) || isAdminRole(profile.role);
 
   useEffect(() => {
     if (verifyEmailCooldown <= 0) return;
@@ -173,7 +173,7 @@ export function Profile() {
 
     if (isInfoDirty) sections.push('Información General');
 
-    const isScheduleDirty =
+    const isScheduleDirty = !isAdmin && (
       JSON.stringify(profile.workingDays) !== JSON.stringify(initialProfile.workingDays) ||
       profile.morningStart !== initialProfile.morningStart ||
       profile.morningEnd !== initialProfile.morningEnd ||
@@ -182,7 +182,8 @@ export function Profile() {
       profile.afternoonEnd !== initialProfile.afternoonEnd ||
       profile.afternoonActive !== initialProfile.afternoonActive ||
       profile.appointmentDurationMinutes !== initialProfile.appointmentDurationMinutes ||
-      profile.clinicalPracticeActive !== initialProfile.clinicalPracticeActive;
+      profile.clinicalPracticeActive !== initialProfile.clinicalPracticeActive
+    );
 
     if (isScheduleDirty) sections.push('Horarios y Atención');
 
@@ -190,7 +191,7 @@ export function Profile() {
       isDirty: sections.length > 0,
       modifiedSections: sections
     };
-  }, [profile, initialProfile, loading]);
+  }, [profile, initialProfile, loading, isAdmin]);
 
   // Form Validation
   const validateForm = (): boolean => {
@@ -232,7 +233,7 @@ export function Profile() {
     }
 
     // Schedule Validations
-    if (!isStaff && profile.workingDays.length > 0 && profile.clinicalPracticeActive) {
+    if (!isStaff && !isAdmin && profile.workingDays.length > 0 && profile.clinicalPracticeActive) {
       if (!profile.morningActive && !profile.afternoonActive) {
         errors.schedule = 'Debe activar al menos un turno (mañana o tarde) para los días laborales seleccionados.';
       }
@@ -488,7 +489,7 @@ export function Profile() {
           <span>Información General</span>
         </button>
 
-        {!isStaff && (
+        {!isStaff && !isAdmin && (
           <button
             role="tab"
             id="tab-schedule"
@@ -578,7 +579,7 @@ export function Profile() {
         />
       )}
 
-      {activeTab === 'schedule' && !isStaff && (
+      {activeTab === 'schedule' && !isStaff && !isAdmin && (
         <ScheduleTab
           profile={profile}
           onChange={handleFieldChange}

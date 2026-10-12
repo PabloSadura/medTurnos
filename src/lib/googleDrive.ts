@@ -1,15 +1,18 @@
 import firebaseConfig from '../../firebase-applet-config.json';
+import { formatEvolutionDate } from './evolutionUtils';
 
 export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile';
 
 export const DEFAULT_GOOGLE_CLIENT_ID = '410876856184-50cmm871petrptm30kn2ciloahlqe87b.apps.googleusercontent.com';
 
 export const getGoogleClientId = (): string => {
+  const customClientId = localStorage.getItem('medturnos_custom_oauth_client_id');
+  const envClientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID as string | undefined;
   return (
-    ((import.meta as any).env?.VITE_GOOGLE_CLIENT_ID as string) ||
-    localStorage.getItem('medturnos_custom_oauth_client_id') ||
-    (firebaseConfig as any).oAuthClientId ||
-    DEFAULT_GOOGLE_CLIENT_ID
+    (envClientId && envClientId.trim()) ||
+    (customClientId && customClientId.trim()) ||
+    DEFAULT_GOOGLE_CLIENT_ID ||
+    (firebaseConfig as any).oAuthClientId
   );
 };
 
@@ -41,20 +44,98 @@ declare global {
           initTokenClient: (config: {
             client_id: string;
             scope: string;
+            prompt?: string;
+            include_granted_scopes?: boolean;
             callback: (response: {
               access_token?: string;
               error?: string;
+              error_description?: string;
               expires_in?: number;
               token_type?: string;
+              scope?: string;
             }) => void;
             error_callback?: (err: any) => void;
           }) => {
             requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
           };
+          hasGrantedAllScopes?: (tokenResponse: any, firstScope: string, ...restScopes: string[]) => boolean;
+          hasGrantedAnyScope?: (tokenResponse: any, firstScope: string, ...restScopes: string[]) => boolean;
           revoke: (token: string, done: () => void) => void;
         };
       };
     };
+  }
+}
+
+/**
+ * Helper to parse Google Drive API error responses into readable messages
+ */
+async function parseDriveApiError(res: Response, fallbackPrefix: string): Promise<Error> {
+  let detail = '';
+  try {
+    const errJson = await res.json();
+    const apiMsg = errJson?.error?.message || errJson?.error_description || '';
+    const reason = errJson?.error?.errors?.[0]?.reason || errJson?.error?.status || '';
+    if (res.status === 401) {
+      detail = 'La sesión de Google Drive expiró o el token no es válido. Por favor, desconecta y vuelve a conectar tu cuenta de Google Drive.';
+    } else if (res.status === 403) {
+      if (reason === 'insufficientPermissions' || apiMsg.toLowerCase().includes('insufficient permission')) {
+        detail = 'Permisos insuficientes en Google Drive. Al conectar tu cuenta, asegúrate de marcar la casilla para autorizar a MedTurnos a crear carpetas y subir archivos.';
+      } else if (reason === 'accessNotConfigured' || apiMsg.includes('has not been used in project')) {
+        detail = 'La API de Google Drive no está habilitada para este proyecto OAuth. Reconecta la cuenta de Google Drive.';
+      } else {
+        detail = apiMsg || 'Acceso denegado por Google Drive (403).';
+      }
+    } else if (res.status === 404) {
+      detail = 'La carpeta o archivo de destino no existe o fue eliminado en Google Drive (404).';
+    } else {
+      detail = apiMsg || `HTTP ${res.status}`;
+    }
+  } catch {
+    const text = await res.text().catch(() => '');
+    detail = text || `HTTP ${res.status}`;
+  }
+  const error = new Error(`${fallbackPrefix}: ${detail}`);
+  (error as any).status = res.status;
+  return error;
+}
+
+/**
+ * Verify that an access token has active permission to use Google Drive API
+ */
+export async function verifyDriveAccess(accessToken: string): Promise<{ ok: boolean; status?: number; error?: string }> {
+  if (!accessToken) return { ok: false, error: 'Sin token de acceso' };
+  try {
+    const res = await fetch('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress,displayName)', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      const err = await parseDriveApiError(res, 'Verificación de Drive');
+      return { ok: false, status: res.status, error: err.message };
+    }
+    return { ok: true, status: 200 };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Error de red al verificar Google Drive' };
+  }
+}
+
+/**
+ * Verify if a specific folder ID exists and is not in trash
+ */
+export async function verifyDriveFolderExists(folderId: string, accessToken: string): Promise<boolean> {
+  if (!folderId || !accessToken) return false;
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=id,name,mimeType,trashed`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
+    if (!res.ok) return false;
+    const data = await res.json();
+    return Boolean(data && data.id && !data.trashed && data.mimeType === 'application/vnd.google-apps.folder');
+  } catch {
+    return false;
   }
 }
 
@@ -66,13 +147,30 @@ export async function fetchGoogleUserInfo(accessToken: string): Promise<GoogleUs
     const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return {
-      email: data.email || '',
-      name: data.name || data.email?.split('@')[0] || 'Usuario Google',
-      picture: data.picture,
-    };
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        email: data.email || '',
+        name: data.name || data.email?.split('@')[0] || 'Usuario Google',
+        picture: data.picture,
+      };
+    }
+    // Fallback to Drive about endpoint if userinfo scope was not returned
+    const driveRes = await fetch('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress,displayName,photoLink)', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (driveRes.ok) {
+      const driveData = await driveRes.json();
+      const u = driveData?.user;
+      if (u) {
+        return {
+          email: u.emailAddress || '',
+          name: u.displayName || u.emailAddress?.split('@')[0] || 'Usuario Google',
+          picture: u.photoLink,
+        };
+      }
+    }
+    return null;
   } catch (err) {
     console.error('Error fetching Google userinfo:', err);
     return null;
@@ -88,7 +186,8 @@ export async function findDriveFolder(
   accessToken?: string
 ): Promise<string | null> {
   if (!accessToken) return null;
-  let q = `mimeType = 'application/vnd.google-apps.folder' and name = '${folderName.replace(/'/g, "\\'")}' and trashed = false`;
+  const escapedName = folderName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  let q = `mimeType = 'application/vnd.google-apps.folder' and name = '${escapedName}' and trashed = false`;
   if (parentFolderId) {
     q += ` and '${parentFolderId}' in parents`;
   }
@@ -101,7 +200,10 @@ export async function findDriveFolder(
   );
 
   if (!res.ok) {
-    const errorText = await res.text();
+    if (res.status === 401 || res.status === 403) {
+      throw await parseDriveApiError(res, 'Error al consultar carpetas en Google Drive');
+    }
+    const errorText = await res.text().catch(() => '');
     console.error('Error finding drive folder:', errorText);
     return null;
   }
@@ -135,14 +237,13 @@ export async function createDriveFolder(
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/json; charset=UTF-8',
     },
     body: JSON.stringify(metadata),
   });
 
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Error al crear carpeta en Drive: ${errText}`);
+    throw await parseDriveApiError(res, 'Error al crear carpeta en Drive');
   }
 
   const data = await res.json();
@@ -164,9 +265,19 @@ export async function getOrCreateAppRootFolder(accessToken: string): Promise<str
  * Searches for existing folder by patient name (or with DNI) and creates it if not present.
  */
 export async function getOrCreatePatientFolder(
-  patient: { id: string; name: string; idNumber?: string },
-  accessToken: string
+  patient: { id: string; name: string; idNumber?: string; driveFolderId?: string },
+  accessToken: string,
+  knownFolderId?: string | null
 ): Promise<string> {
+  // 0. If we already have a candidate folder ID, verify if it actually exists and is accessible in Drive
+  const candidateId = knownFolderId || patient.driveFolderId;
+  if (candidateId) {
+    const isValid = await verifyDriveFolderExists(candidateId, accessToken);
+    if (isValid) {
+      return candidateId;
+    }
+  }
+
   const rootFolderId = await getOrCreateAppRootFolder(accessToken);
   const cleanName = (patient.name || 'Paciente').trim();
   const patientFolderNameWithDni = patient.idNumber ? `${cleanName} (DNI ${patient.idNumber})` : cleanName;
@@ -191,7 +302,7 @@ export async function getOrCreatePatientFolder(
 }
 
 /**
- * Upload a binary or text file to Google Drive using multipart upload
+ * Upload a binary or text file to Google Drive using RFC 2387 multipart/related upload
  */
 export async function uploadFileToDrive({
   file,
@@ -208,13 +319,28 @@ export async function uploadFileToDrive({
   description?: string;
   category?: string;
 }): Promise<DriveFileItem> {
+  if (!accessToken) {
+    throw new Error('No hay conexión activa con Google Drive.');
+  }
+
   const name = fileName || (file instanceof File ? file.name : 'archivo_adjunto');
   const mimeType = file.type || 'application/octet-stream';
+
+  // Ensure parent folder exists before uploading; if not, fallback to root folder
+  let validParentId = parentFolderId;
+  if (validParentId) {
+    const parentExists = await verifyDriveFolderExists(validParentId, accessToken);
+    if (!parentExists) {
+      validParentId = await getOrCreateAppRootFolder(accessToken);
+    }
+  } else {
+    validParentId = await getOrCreateAppRootFolder(accessToken);
+  }
 
   const metadata = {
     name,
     mimeType,
-    parents: [parentFolderId],
+    parents: validParentId ? [validParentId] : undefined,
     description: description || `Subido desde MedTurnos - Categoría: ${category || 'General'}`,
     properties: {
       category: category || 'General',
@@ -222,9 +348,14 @@ export async function uploadFileToDrive({
     },
   };
 
-  const form = new FormData();
-  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json; charset=UTF-8' }));
-  form.append('file', file, name);
+  const boundary = '-------MedTurnosDriveBoundary' + Date.now().toString(16) + Math.random().toString(16).slice(2);
+  const metadataPart = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`;
+  const mediaPartHeader = `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`;
+  const closeDelimiter = `\r\n--${boundary}--`;
+
+  const multipartBody = new Blob([metadataPart, mediaPartHeader, file, closeDelimiter], {
+    type: `multipart/related; boundary=${boundary}`,
+  });
 
   const res = await fetch(
     'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,webViewLink,webContentLink,size,createdTime,description,properties',
@@ -232,14 +363,14 @@ export async function uploadFileToDrive({
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
       },
-      body: form,
+      body: multipartBody,
     }
   );
 
   if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Fallo al subir archivo a Google Drive: ${errorText}`);
+    throw await parseDriveApiError(res, 'Fallo al subir archivo a Google Drive');
   }
 
   const data = await res.json();
@@ -272,8 +403,7 @@ export async function listFilesInPatientFolder(
   );
 
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Error al listar archivos: ${errText}`);
+    throw await parseDriveApiError(res, 'Error al listar archivos');
   }
 
   const data = await res.json();
@@ -300,8 +430,7 @@ export async function deleteDriveFile(fileId: string, accessToken: string): Prom
   });
 
   if (!res.ok && res.status !== 404) {
-    const err = await res.text();
-    throw new Error(`Error al eliminar archivo de Drive: ${err}`);
+    throw await parseDriveApiError(res, 'Error al eliminar archivo de Drive');
   }
 }
 
@@ -354,7 +483,7 @@ export async function generateAndUploadClinicalHistoryDoc({
   content += `2. RESUMEN Y ANTECEDENTES CLÍNICOS\n`;
   content += `------------------------------------------------------------------------\n`;
   content += `Cantidad de Registros / Evoluciones: ${evolutions.length}\n`;
-  content += `Última Actualización: ${evolutions.length > 0 ? evolutions[0].date || '-' : 'Sin visitas registradas'}\n\n`;
+  content += `Última Actualización: ${evolutions.length > 0 ? formatEvolutionDate(evolutions[0].date) : 'Sin visitas registradas'}\n\n`;
 
   content += `------------------------------------------------------------------------\n`;
   content += `3. EVOLUCIONES Y REGISTRO DE ATENCIONES CRONOLÓGICAS\n`;
@@ -365,7 +494,7 @@ export async function generateAndUploadClinicalHistoryDoc({
   } else {
     evolutions.forEach((evo, idx) => {
       content += `REGISTRO #${idx + 1}\n`;
-      content += `Fecha: ${evo.date || '-'}\n`;
+      content += `Fecha: ${formatEvolutionDate(evo.date)}\n`;
       content += `Tratamiento / Procedimiento: ${evo.treatment || 'Consulta General'}\n`;
       content += `Profesional: ${evo.doctorName || doctorName || 'Médico'}\n`;
       content += `Estado: ${evo.status || 'Completado'}\n`;

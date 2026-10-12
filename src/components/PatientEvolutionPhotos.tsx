@@ -43,6 +43,7 @@ import { compressImage } from '../lib/imageUtils';
 import { useToast } from './Toast';
 import { useGoogleDrive } from '../contexts/GoogleDriveContext';
 import { uploadFileToDrive, getOrCreatePatientFolder } from '../lib/googleDrive';
+import { formatEvolutionDate } from '../lib/evolutionUtils';
 import { cn } from '../lib/utils';
 
 interface PatientEvolutionPhotosProps {
@@ -66,18 +67,19 @@ const STAGE_PRESETS = [
 
 export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: PatientEvolutionPhotosProps) {
   const { showToast } = useToast();
-  const { isConnected: isDriveConnected, accessToken, rootFolderId } = useGoogleDrive();
+  const { isConnected: isDriveConnected, isConnecting, accessToken, connectGoogleDrive, ensureFreshToken } = useGoogleDrive();
 
   // Patient folder in Google Drive
-  const [patientFolderId, setPatientFolderId] = useState<string | null>(patient?.driveFolderId || null);
+  const [patientFolderId, setPatientFolderId] = useState<string | null>(null);
   const [checkingFolder, setCheckingFolder] = useState<boolean>(false);
 
   // Ensure / verify that a folder with the patient's name exists
-  const ensurePatientFolder = async (): Promise<string | null> => {
-    if (!accessToken || !patient?.id) return null;
+  const ensurePatientFolder = async (notifySuccess = false): Promise<string | null> => {
+    const token = accessToken || (notifySuccess ? await ensureFreshToken() : null);
+    if (!token || !patient?.id) return null;
     setCheckingFolder(true);
     try {
-      const pFolderId = await getOrCreatePatientFolder(patient, accessToken);
+      const pFolderId = await getOrCreatePatientFolder(patient, token, patientFolderId || patient?.driveFolderId);
       setPatientFolderId(pFolderId);
       if (!patient.driveFolderId || patient.driveFolderId !== pFolderId) {
         try {
@@ -90,9 +92,15 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
           // Non-blocking
         }
       }
+      if (notifySuccess) {
+        showToast(`Carpeta de ${patient.name} verificada y activa en Google Drive.`, 'success');
+      }
       return pFolderId;
     } catch (err: any) {
       console.error('Error ensuring patient folder in Drive:', err);
+      if (notifySuccess) {
+        showToast(err?.message || 'Error al crear o verificar la carpeta en Google Drive.', 'error');
+      }
       return null;
     } finally {
       setCheckingFolder(false);
@@ -101,7 +109,9 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
 
   useEffect(() => {
     if (isDriveConnected && accessToken && patient?.id) {
-      ensurePatientFolder();
+      void ensurePatientFolder(false);
+    } else {
+      setPatientFolderId(null);
     }
   }, [isDriveConnected, accessToken, patient?.id]);
 
@@ -356,28 +366,43 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
       let targetFolderId: string | undefined = undefined;
 
       // Google Drive: Ensure folder with patient name exists first, then save photo inside that folder
-      if (saveToDrive && isDriveConnected && accessToken && compressedBlob) {
+      if (saveToDrive && isDriveConnected && compressedBlob) {
         try {
-          // 1. Obtener o crear primero la carpeta con el nombre del paciente
-          const pFolderId = patientFolderId || (await ensurePatientFolder()) || (await getOrCreatePatientFolder(patient, accessToken));
-          setPatientFolderId(pFolderId);
-          targetFolderId = pFolderId;
+          const token = accessToken || (await ensureFreshToken());
+          if (token) {
+            // 1. Obtener o crear primero la carpeta verificada con el nombre del paciente
+            const pFolderId = await getOrCreatePatientFolder(patient, token, patientFolderId || patient?.driveFolderId);
+            setPatientFolderId(pFolderId);
+            targetFolderId = pFolderId;
 
-          const fileName = `Evolucion_${patient.name.replace(/\s+/g, '_')}_${formDate}_${formStage.replace(/[^a-zA-Z0-9]/g, '_')}.jpg`;
-          
-          // 2. Guardar la foto dentro de esa carpeta
-          const driveFile = await uploadFileToDrive({
-            file: compressedBlob,
-            fileName,
-            parentFolderId: pFolderId,
-            accessToken,
-            category: 'Evolución Fotográfica',
-            description: `Foto de Evolución Clínica (${formStage}) para ${patient.name}. Guardada en su carpeta personal. Notas: ${formNotes || 'Sin notas'}`,
-          });
-          driveFileId = driveFile.id;
-          driveViewLink = driveFile.webViewLink;
-        } catch (driveErr) {
+            if (!patient.driveFolderId || patient.driveFolderId !== pFolderId) {
+              updateDoc(doc(db, 'patients', patient.id), {
+                driveFolderId: pFolderId,
+                driveFolderName: patient.name,
+                updatedAt: serverTimestamp(),
+              }).catch(() => {});
+            }
+
+            const fileName = `Evolucion_${patient.name.replace(/\s+/g, '_')}_${formDate}_${formStage.replace(/[^a-zA-Z0-9]/g, '_')}.jpg`;
+            
+            // 2. Guardar la foto dentro de esa carpeta
+            const driveFile = await uploadFileToDrive({
+              file: compressedBlob,
+              fileName,
+              parentFolderId: pFolderId,
+              accessToken: token,
+              category: 'Evolución Fotográfica',
+              description: `Foto de Evolución Clínica (${formStage}) para ${patient.name}. Guardada en su carpeta personal. Notas: ${formNotes || 'Sin notas'}`,
+            });
+            driveFileId = driveFile.id;
+            driveViewLink = driveFile.webViewLink;
+          }
+        } catch (driveErr: any) {
           console.warn('Could not save copy to Google Drive, proceeding with Firestore save:', driveErr);
+          showToast(
+            `La foto se guardó en la ficha, pero no pudo subirse a Google Drive: ${driveErr?.message || 'Error de conexión'}`,
+            'warning'
+          );
         }
       }
 
@@ -580,7 +605,7 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
           </div>
         </div>
 
-        {isDriveConnected && (
+        {isDriveConnected ? (
           <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
             {patientFolderId ? (
               <a
@@ -596,15 +621,28 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
             ) : (
               <button
                 type="button"
-                onClick={() => ensurePatientFolder()}
+                onClick={() => { void ensurePatientFolder(true); }}
                 disabled={checkingFolder}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-colors cursor-pointer"
                 title="Crear o verificar carpeta del paciente en Google Drive"
               >
                 {checkingFolder ? <Loader2 size={13} className="animate-spin" /> : <FolderPlus size={13} />}
                 Crear carpeta en Drive
               </button>
             )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+            <button
+              type="button"
+              onClick={() => { void connectGoogleDrive(); }}
+              disabled={isConnecting}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-white hover:bg-primary/90 transition-colors cursor-pointer disabled:opacity-50 shadow-2xs"
+              title="Conectar cuenta de Google Drive para respaldar fotos y crear carpetas"
+            >
+              {isConnecting ? <Loader2 size={13} className="animate-spin" /> : <Cloud size={13} />}
+              {isConnecting ? 'Conectando...' : 'Conectar Google Drive'}
+            </button>
           </div>
         )}
       </div>
@@ -682,7 +720,7 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
                   >
                     {photos.map((p, idx) => (
                       <option key={`before-${p.id}`} value={p.id}>
-                        {p.title} ({p.date}) {p.isBeforePhoto ? '★ Inicial' : ''}
+                        {p.title} ({formatEvolutionDate(p.date)}) {p.isBeforePhoto ? '★ Inicial' : ''}
                       </option>
                     ))}
                   </select>
@@ -703,7 +741,7 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
                   >
                     {photos.map((p, idx) => (
                       <option key={`after-${p.id}`} value={p.id}>
-                        {p.title} ({p.date}) {p.isAfterPhoto ? '★ Actual' : ''}
+                        {p.title} ({formatEvolutionDate(p.date)}) {p.isAfterPhoto ? '★ Actual' : ''}
                       </option>
                     ))}
                   </select>
@@ -808,7 +846,7 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
                 {/* Badges on top of images */}
                 <div className="absolute top-3 left-3 z-10 pointer-events-none flex flex-col items-start gap-1">
                   <span className="px-2.5 py-1 rounded-full bg-emerald-600/90 text-white text-[11px] font-black uppercase tracking-wider backdrop-blur-sm shadow-md">
-                    Antes: {beforePhoto.date}
+                    Antes: {formatEvolutionDate(beforePhoto.date)}
                   </span>
                   <span className="px-2 py-0.5 rounded bg-black/60 text-white text-[10px] font-medium backdrop-blur-sm">
                     {beforePhoto.title}
@@ -817,7 +855,7 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
 
                 <div className="absolute top-3 right-3 z-10 pointer-events-none flex flex-col items-end gap-1">
                   <span className="px-2.5 py-1 rounded-full bg-blue-600/90 text-white text-[11px] font-black uppercase tracking-wider backdrop-blur-sm shadow-md">
-                    Después: {afterPhoto.date}
+                    Después: {formatEvolutionDate(afterPhoto.date)}
                   </span>
                   <span className="px-2 py-0.5 rounded bg-black/60 text-white text-[10px] font-medium backdrop-blur-sm">
                     {afterPhoto.title}
@@ -860,7 +898,7 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
                     <span className="text-xs font-bold text-emerald-950">{beforePhoto.title}</span>
                   </div>
                   <span className="text-[11px] font-medium text-emerald-800 flex items-center gap-1">
-                    <Calendar size={12} /> {beforePhoto.date}
+                    <Calendar size={12} /> {formatEvolutionDate(beforePhoto.date)}
                   </span>
                 </div>
 
@@ -922,7 +960,7 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
                     <span className="text-xs font-bold text-blue-950">{afterPhoto.title}</span>
                   </div>
                   <span className="text-[11px] font-medium text-blue-800 flex items-center gap-1">
-                    <Calendar size={12} /> {afterPhoto.date}
+                    <Calendar size={12} /> {formatEvolutionDate(afterPhoto.date)}
                   </span>
                 </div>
 
@@ -1028,7 +1066,7 @@ export function PatientEvolutionPhotos({ patient, ownerId, treatments = [] }: Pa
 
                     <div className="absolute bottom-2 left-2">
                       <span className="px-2 py-0.5 bg-black/70 text-white text-[10px] font-bold rounded backdrop-blur-xs">
-                        #{index + 1} • {photo.date}
+                        #{index + 1} • {formatEvolutionDate(photo.date)}
                       </span>
                     </div>
                   </div>

@@ -30,6 +30,8 @@ import {
   generateAndUploadClinicalHistoryDoc,
   DriveFileItem 
 } from '../lib/googleDrive';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { useToast } from './Toast';
 import { cn } from '../lib/utils';
 
@@ -68,10 +70,10 @@ export function PatientDriveFiles({ patient, evolutions = [], doctorName = 'Dr. 
     googleUser, 
     connectGoogleDrive, 
     disconnectGoogleDrive,
-    isExpired 
+    ensureFreshToken
   } = useGoogleDrive();
 
-  const [folderId, setFolderId] = useState<string | null>(null);
+  const [folderId, setFolderId] = useState<string | null>((patient as any)?.driveFolderId || null);
   const [files, setFiles] = useState<DriveFileItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -83,15 +85,34 @@ export function PatientDriveFiles({ patient, evolutions = [], doctorName = 'Dr. 
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const syncFolderToFirestore = async (pFolderId: string) => {
+    if (!patient?.id || !pFolderId) return;
+    if ((patient as any)?.driveFolderId === pFolderId) return;
+    try {
+      await updateDoc(doc(db, 'patients', patient.id), {
+        driveFolderId: pFolderId,
+        driveFolderName: patient.name,
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Non-blocking
+    }
+  };
+
   // Load patient folder and files when connected
-  const loadPatientFiles = async () => {
-    if (!accessToken || !patient?.id) return;
+  const loadPatientFiles = async (showFolderCreatedToast = false) => {
+    const token = accessToken || (await ensureFreshToken());
+    if (!token || !patient?.id) return;
     setLoading(true);
     try {
-      const pFolderId = await getOrCreatePatientFolder(patient, accessToken);
+      const pFolderId = await getOrCreatePatientFolder(patient, token, folderId);
       setFolderId(pFolderId);
-      const items = await listFilesInPatientFolder(pFolderId, accessToken);
+      await syncFolderToFirestore(pFolderId);
+      const items = await listFilesInPatientFolder(pFolderId, token);
       setFiles(items);
+      if (showFolderCreatedToast) {
+        showToast(`Carpeta de ${patient.name} verificada y lista en Google Drive.`, 'success');
+      }
     } catch (err: any) {
       console.error('Error loading patient files from Drive:', err);
       showToast(err.message || 'Error al cargar archivos desde Google Drive', 'error');
@@ -102,7 +123,7 @@ export function PatientDriveFiles({ patient, evolutions = [], doctorName = 'Dr. 
 
   useEffect(() => {
     if (isConnected && accessToken) {
-      loadPatientFiles();
+      void loadPatientFiles(false);
     } else {
       setFiles([]);
       setFolderId(null);
@@ -111,31 +132,34 @@ export function PatientDriveFiles({ patient, evolutions = [], doctorName = 'Dr. 
 
   // Handle direct file upload
   const handleFileUpload = async (uploadedFiles: FileList | null) => {
-    if (!uploadedFiles || uploadedFiles.length === 0 || !accessToken) return;
+    if (!uploadedFiles || uploadedFiles.length === 0) return;
+    const token = accessToken || (await ensureFreshToken());
+    if (!token) return;
 
     setUploading(true);
     try {
-      let targetFolderId = folderId;
-      if (!targetFolderId) {
-        targetFolderId = await getOrCreatePatientFolder(patient, accessToken);
-        setFolderId(targetFolderId);
-      }
+      const targetFolderId = await getOrCreatePatientFolder(patient, token, folderId);
+      setFolderId(targetFolderId);
+      await syncFolderToFirestore(targetFolderId);
 
       for (let i = 0; i < uploadedFiles.length; i++) {
         const file = uploadedFiles[i];
         await uploadFileToDrive({
           file,
           parentFolderId: targetFolderId,
-          accessToken,
+          accessToken: token,
           category: selectedCategory,
           description: fileDescription || `Archivo médico subido para ${patient.name}`,
         });
       }
 
-      showToast(`Se ${uploadedFiles.length === 1 ? 'subió 1 archivo' : `subieron ${uploadedFiles.length} archivos`} correctamente a Google Drive.`);
+      showToast(
+        `Se ${uploadedFiles.length === 1 ? 'subió 1 archivo' : `subieron ${uploadedFiles.length} archivos`} correctamente a la carpeta de ${patient.name} en Google Drive.`,
+        'success'
+      );
       setFileDescription('');
       if (fileInputRef.current) fileInputRef.current.value = '';
-      await loadPatientFiles();
+      await loadPatientFiles(false);
     } catch (err: any) {
       console.error('Error uploading file to Drive:', err);
       showToast(err.message || 'Error al subir archivo a Google Drive', 'error');
@@ -146,29 +170,28 @@ export function PatientDriveFiles({ patient, evolutions = [], doctorName = 'Dr. 
 
   // Generate and save Clinical History
   const handleGenerateHistory = async () => {
-    if (!accessToken) {
+    const token = accessToken || (await ensureFreshToken());
+    if (!token) {
       showToast('Debes estar conectado a Google Drive para guardar la historia clínica.', 'warning');
       return;
     }
 
     setGeneratingHistory(true);
     try {
-      let targetFolderId = folderId;
-      if (!targetFolderId) {
-        targetFolderId = await getOrCreatePatientFolder(patient, accessToken);
-        setFolderId(targetFolderId);
-      }
+      const targetFolderId = await getOrCreatePatientFolder(patient, token, folderId);
+      setFolderId(targetFolderId);
+      await syncFolderToFirestore(targetFolderId);
 
       const docItem = await generateAndUploadClinicalHistoryDoc({
         patient,
         evolutions,
         doctorName,
         parentFolderId: targetFolderId,
-        accessToken,
+        accessToken: token,
       });
 
-      showToast(`Historia clínica generada y guardada en Google Drive: ${docItem.name}`);
-      await loadPatientFiles();
+      showToast(`Historia clínica generada y guardada en Google Drive: ${docItem.name}`, 'success');
+      await loadPatientFiles(false);
     } catch (err: any) {
       console.error('Error generating clinical history:', err);
       showToast(err.message || 'Error al generar la historia clínica en Drive', 'error');
@@ -309,7 +332,7 @@ export function PatientDriveFiles({ patient, evolutions = [], doctorName = 'Dr. 
         </div>
 
         <div className="flex items-center gap-2 self-end sm:self-center">
-          {folderId && (
+          {folderId ? (
             <a
               href={`https://drive.google.com/drive/folders/${folderId}`}
               target="_blank"
@@ -321,11 +344,22 @@ export function PatientDriveFiles({ patient, evolutions = [], doctorName = 'Dr. 
               Ver en Drive
               <ExternalLink size={11} className="text-on-surface-variant" />
             </a>
+          ) : (
+            <button
+              type="button"
+              onClick={() => { void loadPatientFiles(true); }}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-primary/10 text-primary text-[11px] font-bold uppercase tracking-wider rounded-lg border border-primary/20 hover:bg-primary/20 transition-all cursor-pointer disabled:opacity-50"
+              title="Crear o verificar carpeta del paciente en Google Drive"
+            >
+              <Folder size={13} />
+              Crear Carpeta en Drive
+            </button>
           )}
 
           <button
             type="button"
-            onClick={loadPatientFiles}
+            onClick={() => { void loadPatientFiles(false); }}
             disabled={loading}
             className="p-1.5 text-on-surface-variant hover:text-on-surface rounded-lg hover:bg-surface-dim transition-all"
             title="Refrescar lista"

@@ -69,7 +69,8 @@ export async function saveAppointmentWithPersistenceCheck(
   } = payload;
 
   const treatmentName = treatment || type || 'Consulta';
-  const effectiveDuration = getEffectiveDuration(treatmentName, duration, treatmentsList, 30);
+  const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+  const effectiveDuration = getEffectiveDuration(treatmentName, duration, treatmentsList, profDefault);
   const calculatedEnd = calculateEndTime(time, effectiveDuration);
 
   // 1. Fetch fresh appointments from Firestore for this date and user to avoid stale client cache

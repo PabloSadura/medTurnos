@@ -1,9 +1,11 @@
-import { Bell, Menu, PanelLeft, Cloud } from 'lucide-react';
-import { Link, useLocation } from 'react-router-dom';
+import { useState, useRef, useEffect } from 'react';
+import { Bell, Menu, PanelLeft, Cloud, AlertTriangle, CreditCard, Sparkles, CheckCircle2, ChevronRight, X } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { auth } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useGoogleDrive } from '../contexts/GoogleDriveContext';
+import { useSystemNotifications } from '../hooks/useSystemNotifications';
 import { cn } from '../lib/utils';
 
 export function TopAppBar() {
@@ -11,7 +13,37 @@ export function TopAppBar() {
   const user = auth.currentUser || authUser;
   const { isCollapsed, toggleSidebar, openMobile } = useSidebar();
   const { isConnected: isDriveConnected, connectGoogleDrive, isConnecting: isDriveConnecting } = useGoogleDrive();
+  const {
+    notifications,
+    totalCount,
+    hasNotifications,
+    hasCriticalAlerts
+  } = useSystemNotifications();
+
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const notifContainerRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (notifContainerRef.current && !notifContainerRef.current.contains(event.target as Node)) {
+        setIsNotifOpen(false);
+      }
+    };
+    if (isNotifOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isNotifOpen]);
+
+  // Close dropdown on route change
+  useEffect(() => {
+    setIsNotifOpen(false);
+  }, [location.pathname, location.search]);
 
   const getSectionTitle = () => {
     const path = location.pathname;
@@ -111,16 +143,166 @@ export function TopAppBar() {
           </button>
         )}
 
-        <button 
-          id="topbar-notifications-btn"
-          type="button"
-          className="p-2 rounded-xl hover:bg-surface text-on-surface-variant transition-all border border-transparent hover:border-outline-variant relative cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
-          title="Notificaciones"
-          aria-label="Ver notificaciones del sistema"
-        >
-          <Bell className="w-4 h-4" />
-          <span className="absolute top-2 right-2 w-2 h-2 bg-primary rounded-full ring-2 ring-white"></span>
-        </button>
+        {/* Dynamic Notifications Icon & Dropdown */}
+        <div className="relative" ref={notifContainerRef}>
+          <button 
+            id="topbar-notifications-btn"
+            type="button"
+            onClick={() => setIsNotifOpen((prev) => !prev)}
+            className={cn(
+              "p-2 rounded-xl transition-all border relative cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center",
+              isNotifOpen
+                ? "bg-primary/10 text-primary border-primary/30"
+                : hasCriticalAlerts
+                  ? "bg-amber-50/70 text-amber-700 border-amber-200/80 hover:bg-amber-100/70"
+                  : hasNotifications
+                    ? "bg-primary/5 text-primary border-primary/20 hover:bg-primary/10"
+                    : "hover:bg-surface text-on-surface-variant border-transparent hover:border-outline-variant"
+            )}
+            title={
+              hasNotifications
+                ? `${totalCount} ${totalCount === 1 ? 'notificación activa' : 'notificaciones activas'}`
+                : "Sin notificaciones pendientes"
+            }
+            aria-label="Ver notificaciones del sistema"
+          >
+            <Bell className={cn("w-4 h-4 transition-transform", hasNotifications && "scale-105")} />
+            {hasNotifications && (
+              <span
+                className={cn(
+                  "absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black text-white flex items-center justify-center ring-2 ring-white shadow-xs",
+                  hasCriticalAlerts ? "bg-error" : "bg-primary"
+                )}
+              >
+                {totalCount}
+              </span>
+            )}
+          </button>
+
+          {isNotifOpen && (
+            <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl border border-outline-variant shadow-xl z-50 overflow-hidden font-sans">
+              <div className="px-4 py-3 bg-surface-bright border-b border-outline-variant flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-primary" />
+                  <h3 className="text-xs font-black uppercase tracking-wider text-on-surface">
+                    Notificaciones Activas
+                  </h3>
+                  {hasNotifications && (
+                    <span className={cn(
+                      "text-[10px] font-black px-2 py-0.5 rounded-full",
+                      hasCriticalAlerts
+                        ? "bg-error/10 text-error"
+                        : "bg-primary/10 text-primary"
+                    )}>
+                      {totalCount}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsNotifOpen(false)}
+                  className="p-1 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface transition-colors cursor-pointer"
+                  aria-label="Cerrar panel de notificaciones"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="max-h-96 overflow-y-auto divide-y divide-outline-variant/60">
+                {notifications.length === 0 ? (
+                  <div className="p-6 text-center space-y-2">
+                    <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+                      <CheckCircle2 className="w-5 h-5" />
+                    </div>
+                    <p className="text-xs font-bold text-on-surface">Todo al día</p>
+                    <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                      No hay alertas de stock bajo ni facturas próximas a vencer en este momento.
+                    </p>
+                  </div>
+                ) : (
+                  notifications.map((notif) => {
+                    const isStock = notif.type === 'stock';
+                    const isInvoice = notif.type === 'invoice';
+                    const isMotivational = notif.type === 'motivational';
+
+                    return (
+                      <button
+                        key={notif.id}
+                        type="button"
+                        onClick={() => {
+                          setIsNotifOpen(false);
+                          navigate(notif.link);
+                        }}
+                        className="w-full text-left p-3.5 hover:bg-surface transition-colors flex items-start gap-3 cursor-pointer group"
+                      >
+                        <div
+                          className={cn(
+                            "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
+                            isInvoice
+                              ? "bg-amber-100 text-amber-800"
+                              : isStock
+                                ? "bg-error/10 text-error"
+                                : "bg-primary/10 text-primary"
+                          )}
+                        >
+                          {isInvoice && <CreditCard className="w-4 h-4" />}
+                          {isStock && <AlertTriangle className="w-4 h-4" />}
+                          {isMotivational && <Sparkles className="w-4 h-4" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              className={cn(
+                                "text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded",
+                                isInvoice
+                                  ? "bg-amber-50 text-amber-800 border border-amber-200"
+                                  : isStock
+                                    ? "bg-error/10 text-error border border-error/20"
+                                    : "bg-primary/10 text-primary border border-primary/20"
+                              )}
+                            >
+                              {isInvoice
+                                ? "Facturación"
+                                : isStock
+                                  ? "Stock Bajo"
+                                  : "Motivación del Día"}
+                            </span>
+                            <span className="text-[10px] text-on-surface-variant font-medium truncate">
+                              {notif.time}
+                            </span>
+                          </div>
+                          <p className="text-xs font-bold text-on-surface mt-1 leading-snug">
+                            {notif.title}
+                          </p>
+                          <p className="text-[11px] text-on-surface-variant mt-0.5 leading-relaxed">
+                            {notif.message}
+                          </p>
+                        </div>
+                        <ChevronRight className="w-4 h-4 text-on-surface-variant/40 group-hover:text-primary shrink-0 self-center transition-colors" />
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="px-4 py-2.5 bg-surface-bright border-t border-outline-variant flex items-center justify-between">
+                <span className="text-[10px] text-on-surface-variant font-medium">
+                  Stock bajo • Vencimientos • Turnos de hoy
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsNotifOpen(false);
+                    navigate('/admin?tab=notifications');
+                  }}
+                  className="text-[10px] font-black text-primary uppercase tracking-wider hover:underline cursor-pointer"
+                >
+                  Ver panel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         <Link
           to="/profile"

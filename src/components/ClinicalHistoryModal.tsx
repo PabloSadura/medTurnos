@@ -16,6 +16,9 @@ import { PatientPackage } from '../types';
 import { consumePackageSession } from '../lib/packageUtils';
 import { formatPatientLastNameFirst, splitFullName } from '../lib/patientNameUtils';
 import { cn } from '../lib/utils';
+import { formatEvolutionDate } from '../lib/evolutionUtils';
+import { getSuggestedAvailableSlots, getEffectiveDuration } from '../lib/agendaUtils';
+import { SuggestedSlotsPicker } from './SuggestedSlotsPicker';
 
 interface ClinicalHistoryModalProps {
   isOpen: boolean;
@@ -43,6 +46,8 @@ export function ClinicalHistoryModal({
   const [isSaving, setIsSaving] = useState(false);
   const [pastEvolutions, setPastEvolutions] = useState<any[]>([]);
   const [patientPackages, setPatientPackages] = useState<PatientPackage[]>([]);
+  const [workingHours, setWorkingHours] = useState<any>(null);
+  const [allDoctorAppointments, setAllDoctorAppointments] = useState<any[]>([]);
 
   // Multi-treatment state for evolution
   const [evolutionTreatments, setEvolutionTreatments] = useState<Array<{
@@ -219,18 +224,19 @@ export function ClinicalHistoryModal({
     });
 
     // Reset and prepare next appointment scheduling
+    const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
     setScheduleNextApt(false);
     setNextAptData({
       date: getDateOffset(7),
       time: appointment.time || '10:00',
       treatment: appointment.type || appointment.treatment || 'Control / Seguimiento',
-      duration: appointment.duration || 30,
+      duration: getEffectiveDuration(appointment.type || appointment.treatment, appointment.duration, treatments, profDefault),
       notes: '',
       status: 'pendiente'
     });
 
     setActiveTab('current');
-  }, [isOpen, appointment, treatments]);
+  }, [isOpen, appointment, treatments, workingHours]);
 
   // Load past evolutions and packages for this patient
   useEffect(() => {
@@ -267,7 +273,25 @@ export function ClinicalHistoryModal({
       setPatientPackages([]);
     });
 
-    return () => unsubscribe();
+    // Subscribe to profile working hours & all appointments for suggested slots
+    const unsubscribeSchedule = onSnapshot(doc(db, 'users', ownerId), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().schedule) {
+        setWorkingHours(docSnap.data().schedule);
+      }
+    });
+
+    const unsubscribeAllApps = onSnapshot(
+      query(collection(db, 'appointments'), where('userId', '==', ownerId)),
+      (snapshot) => {
+        setAllDoctorAppointments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
+    );
+
+    return () => {
+      unsubscribe();
+      unsubscribeSchedule();
+      unsubscribeAllApps();
+    };
   }, [isOpen, patient?.id, ownerId]);
 
   const pastEvolutionsTotalSpent = pastEvolutions.reduce((acc: number, entry: any) => {
@@ -900,14 +924,36 @@ export function ClinicalHistoryModal({
                         value={nextAptData.duration}
                         onChange={(e) => setNextAptData(prev => ({ ...prev, duration: Number(e.target.value) || 30 }))}
                       >
-                        <option value={15}>15 minutos</option>
-                        <option value={30}>30 minutos</option>
-                        <option value={45}>45 minutos</option>
-                        <option value={60}>60 minutos (1 h)</option>
-                        <option value={90}>90 minutos (1.5 h)</option>
+                        {(() => {
+                          const profMin = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+                          const baseOptions = [15, 20, 25, 30, 40, 45, 60, 90];
+                          const options = baseOptions.includes(profMin) ? baseOptions : [...baseOptions, profMin].sort((a, b) => a - b);
+                          return options.map(opt => (
+                            <option key={opt} value={opt}>
+                              {opt} minutos{opt === profMin ? ' (Promedio Perfil)' : ''}
+                            </option>
+                          ));
+                        })()}
                       </select>
                     </div>
                   </div>
+
+                  {(() => {
+                    const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+                    const nextDuration = Number(nextAptData.duration) > 0 ? Number(nextAptData.duration) : profDefault;
+                    const suggestedNextSlots = getSuggestedAvailableSlots(nextAptData.date, nextDuration, allDoctorAppointments, workingHours);
+                    return (
+                      <SuggestedSlotsPicker
+                        slots={suggestedNextSlots}
+                        selectedTime={nextAptData.time}
+                        onSelectTime={(time) => setNextAptData(prev => ({ ...prev, time }))}
+                        duration={nextDuration}
+                        treatmentName={nextAptData.treatment}
+                        dateStr={nextAptData.date}
+                        workingHours={workingHours}
+                      />
+                    );
+                  })()}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {/* Motivo / Tratamiento */}
@@ -982,8 +1028,8 @@ export function ClinicalHistoryModal({
                       <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary" />
                       <div className="flex justify-between items-start pl-1 gap-2">
                         <div>
-                          <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block">
-                            {entry.date} {entry.doctor ? `• Dr. ${entry.doctor}` : ''}
+                          <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block font-mono">
+                            {formatEvolutionDate(entry.date)} {entry.doctor ? `• Dr. ${entry.doctor}` : ''}
                           </span>
                           <h5 className="text-[12px] font-black text-on-surface">{entry.treatment}</h5>
                         </div>

@@ -44,6 +44,7 @@ export function GoogleDriveTab({
 
   const [isDisconnectModalOpen, setIsDisconnectModalOpen] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [verifyingRoot, setVerifyingRoot] = useState(false);
 
   const handleConfirmDisconnect = async () => {
     setIsDisconnecting(true);
@@ -56,6 +57,21 @@ export function GoogleDriveTab({
       showToast('Error al desconectar Google Drive', 'error');
     } finally {
       setIsDisconnecting(false);
+    }
+  };
+
+  const handleOpenOrCreateRootFolder = async () => {
+    setVerifyingRoot(true);
+    try {
+      const id = rootFolderId || (await getRootFolderId());
+      if (id) {
+        showToast('Carpeta raíz de MedTurnos verificada en Google Drive', 'success');
+        window.open(`https://drive.google.com/drive/folders/${id}`, '_blank');
+      } else {
+        showToast('No se pudo verificar la carpeta raíz. Intenta reconectar tu cuenta de Google Drive.', 'error');
+      }
+    } finally {
+      setVerifyingRoot(false);
     }
   };
 
@@ -73,7 +89,9 @@ export function GoogleDriveTab({
                 Almacenamiento en Google Drive
               </h3>
               <p className="text-xs text-on-surface-variant">
-                Copia de seguridad externa para fotos clínicas, radiografías y consentimientos médicos.
+                {isAdmin
+                  ? 'Copia de seguridad externa para fotos clínicas, radiografías y consentimientos médicos.'
+                  : 'Vincula tu cuenta de Google Drive para crear carpetas por paciente, subir estudios y respaldar fotos de evolución.'}
               </p>
             </div>
           </div>
@@ -93,7 +111,9 @@ export function GoogleDriveTab({
         <div className="space-y-2">
           <label className="text-xs font-bold text-on-surface flex items-center justify-between">
             <span>Alcance de la Cuenta Conectada</span>
-            <span className="text-[10px] text-primary font-bold">Configuración para Administrador</span>
+            <span className="text-[10px] text-primary font-bold">
+              {isAdmin ? 'Configuración para Administrador' : 'Configuración del Profesional'}
+            </span>
           </label>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -118,9 +138,13 @@ export function GoogleDriveTab({
                 )}
               </div>
               <div>
-                <p className="text-xs font-black text-on-surface">Drive Institucional (Recomendado)</p>
+                <p className="text-xs font-black text-on-surface">
+                  {isAdmin ? 'Drive Institucional (Recomendado)' : 'Drive del Consultorio / Clínica (Recomendado)'}
+                </p>
                 <p className="text-[11px] text-on-surface-variant mt-0.5 leading-relaxed">
-                  Esta cuenta servirá como repositorio institucional para radiografías, estudios y consentimientos de todos los profesionales y pacientes de la clínica.
+                  {isAdmin
+                    ? 'Esta cuenta servirá como repositorio institucional para radiografías, estudios y consentimientos de todos los profesionales y pacientes de la clínica.'
+                    : 'Organiza automáticamente una carpeta raíz para el consultorio y una subcarpeta individual por cada paciente atendido.'}
                 </p>
               </div>
             </button>
@@ -146,9 +170,11 @@ export function GoogleDriveTab({
                 )}
               </div>
               <div>
-                <p className="text-xs font-black text-on-surface">Drive Personal del Administrador</p>
+                <p className="text-xs font-black text-on-surface">
+                  {isAdmin ? 'Drive Personal del Administrador' : 'Drive Personal del Profesional'}
+                </p>
                 <p className="text-[11px] text-on-surface-variant mt-0.5 leading-relaxed">
-                  Solo respaldará los archivos de los pacientes asignados directamente a su agenda propia.
+                  Solo respaldará los archivos, estudios y fotografías clínicas de los pacientes asignados directamente a tu agenda.
                 </p>
               </div>
             </button>
@@ -176,16 +202,13 @@ export function GoogleDriveTab({
               <>
                 <button
                   type="button"
-                  onClick={async () => {
-                    const id = rootFolderId || await getRootFolderId();
-                    if (id) window.open(`https://drive.google.com/drive/folders/${id}`, '_blank');
-                    else window.open('https://drive.google.com', '_blank');
-                  }}
-                  className="px-3.5 py-2 bg-primary/10 text-primary hover:bg-primary/20 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer min-h-[40px]"
-                  title="Abrir carpeta raíz en Google Drive"
+                  onClick={handleOpenOrCreateRootFolder}
+                  disabled={verifyingRoot}
+                  className="px-3.5 py-2 bg-primary/10 text-primary hover:bg-primary/20 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer min-h-[40px] disabled:opacity-50"
+                  title="Verificar y abrir carpeta raíz en Google Drive"
                 >
-                  <FolderOpen size={14} />
-                  <span>Carpeta MedTurnos</span>
+                  {verifyingRoot ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
+                  <span>{rootFolderId ? 'Carpeta MedTurnos' : 'Crear / Abrir Carpeta Raíz'}</span>
                   <ExternalLink size={12} />
                 </button>
 

@@ -16,6 +16,8 @@ import {
 } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useSearchParams } from 'react-router-dom';
+import { useSystemNotifications } from '../hooks/useSystemNotifications';
 import { comparePatientsByLastName } from '../lib/patientNameUtils';
 import { syncSingleUserPlan } from '../lib/planSyncService';
 import { apiFetch } from '../lib/apiClient';
@@ -37,11 +39,25 @@ export function Administration() {
   const { showToast } = useToast();
   const { ownerId, profile, user } = useAuth();
   const isAdmin = profile?.role === 'admin';
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [patientsCount, setPatientsCount] = useState(0);
   const [appointmentsCount, setAppointmentsCount] = useState(0);
   const [staff, setStaff] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const {
+    notifications,
+    stockNotifications,
+    invoiceNotifications,
+    motivationalNotifications
+  } = useSystemNotifications();
+
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam && ['overview', 'users', 'notifications', 'backup', 'theme', 'billing'].includes(tabParam)) {
+      setActiveTab(tabParam as AdminTab);
+    }
+  }, [searchParams]);
 
   // Plans & Billing Management
   const [dbPlans, setDbPlans] = useState<any[]>([]);
@@ -112,7 +128,6 @@ export function Administration() {
     status: 'Activo'
   });
 
-  const [notifications, setNotifications] = useState<any[]>([]);
   const [selectedTheme, setSelectedTheme] = useState('#00478D');
   const [isDarkMode, setIsDarkMode] = useState(false);
 
@@ -134,25 +149,6 @@ export function Administration() {
       setStaff(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       setLoading(false);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'staff'));
-
-    // Fetch Real Notifications (Stock Alerts)
-    const unsubscribeStock = onSnapshot(
-      query(collection(db, 'stocks'), where('userId', '==', ownerId)),
-      (stockSnap) => {
-        const alerts = stockSnap.docs
-          .map(d => d.data())
-          .filter(d => d.stock <= d.minStock)
-          .map((d, index) => ({
-            id: `stock-${index}`,
-            type: 'stock',
-            message: `Stock crítico: ${d.name} (${d.stock} ${d.unit || 'uds'})`,
-            time: 'Alerta Activa',
-            status: 'warning'
-          }));
-        setNotifications(alerts);
-      },
-      (error) => handleFirestoreError(error, OperationType.LIST, 'stocks')
-    );
 
     let unsubscribeUser = () => {};
 
@@ -281,7 +277,6 @@ export function Administration() {
       unsubscribePatients();
       unsubscribeApps();
       unsubscribeStaff();
-      unsubscribeStock();
       unsubscribeUser();
     };
   }, [ownerId]);
@@ -968,44 +963,88 @@ export function Administration() {
 
           {activeTab === 'notifications' && (
             <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* Alertas de Stock Bajo */}
                 <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
                   <h3 className="text-sm font-bold text-on-surface mb-4 uppercase tracking-wider flex items-center gap-2">
-                    <Bell size={18} className="text-primary" />
-                    Alertas de Stock
+                    <Bell size={18} className="text-error" />
+                    Stock Bajo ({stockNotifications.length})
                   </h3>
                   <div className="space-y-3">
-                    {notifications.filter(n => n.type === 'stock').map(n => (
-                      <div key={n.id} className="p-3 bg-error-container/5 border border-error/10 rounded-lg flex gap-3">
-                        <AlertCircle className="text-error mt-0.5" size={16} />
-                        <div>
-                          <p className="text-[12px] font-medium text-on-surface leading-tight">{n.message}</p>
-                          <p className="text-[10px] text-on-surface-variant mt-1">{n.time}</p>
-                        </div>
+                    {stockNotifications.length === 0 ? (
+                      <div className="p-4 bg-surface rounded-lg text-center">
+                        <CheckCircle2 className="text-emerald-600 mx-auto mb-1.5" size={18} />
+                        <p className="text-xs font-bold text-on-surface">Inventario en niveles óptimos</p>
+                        <p className="text-[10px] text-on-surface-variant mt-0.5">Sin insumos con stock crítico o bajo.</p>
                       </div>
-                    ))}
+                    ) : (
+                      stockNotifications.map(n => (
+                        <div key={n.id} className="p-3 bg-error-container/5 border border-error/10 rounded-lg flex gap-3">
+                          <AlertCircle className="text-error mt-0.5 shrink-0" size={16} />
+                          <div>
+                            <p className="text-[12px] font-bold text-on-surface leading-tight">{n.title}</p>
+                            <p className="text-[11px] text-on-surface-variant mt-0.5 leading-snug">{n.message}</p>
+                            <p className="text-[10px] text-error font-semibold mt-1">{n.time}</p>
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
+
+                {/* Facturas Próximas a Vencer */}
                 <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
                   <h3 className="text-sm font-bold text-on-surface mb-4 uppercase tracking-wider flex items-center gap-2">
-                    <Shield size={18} className="text-secondary" />
-                    Estado del Sistema
+                    <CreditCard size={18} className="text-amber-600" />
+                    Facturas Próximas a Vencer ({invoiceNotifications.length})
                   </h3>
                   <div className="space-y-3">
-                    <div className="p-3 bg-secondary-container/10 border border-secondary/20 rounded-lg flex items-center gap-3">
-                      <CheckCircle2 className="text-secondary shrink-0" size={18} />
-                      <div>
-                        <p className="text-[12px] font-bold text-on-surface">Base de datos sincronizada</p>
-                        <p className="text-[10px] text-on-surface-variant">Conexión activa y segura en la nube con Firestore.</p>
+                    {invoiceNotifications.length === 0 ? (
+                      <div className="p-4 bg-surface rounded-lg text-center">
+                        <CheckCircle2 className="text-emerald-600 mx-auto mb-1.5" size={18} />
+                        <p className="text-xs font-bold text-on-surface">Facturación al día</p>
+                        <p className="text-[10px] text-on-surface-variant mt-0.5">No hay facturas próximas a vencer ni saldos pendientes.</p>
                       </div>
-                    </div>
-                    <div className="p-3 bg-primary-container/10 border border-primary/20 rounded-lg flex items-center gap-3">
-                      <Users className="text-primary shrink-0" size={18} />
-                      <div>
-                        <p className="text-[12px] font-bold text-on-surface">Control de accesos y personal</p>
-                        <p className="text-[10px] text-on-surface-variant">Gestión de roles y permisos del equipo.</p>
+                    ) : (
+                      invoiceNotifications.map(n => (
+                        <div key={n.id} className="p-3 bg-amber-50/70 border border-amber-200 rounded-lg flex gap-3">
+                          <AlertCircle className="text-amber-700 mt-0.5 shrink-0" size={16} />
+                          <div>
+                            <p className="text-[12px] font-bold text-on-surface leading-tight">{n.title}</p>
+                            <p className="text-[11px] text-on-surface-variant mt-0.5 leading-snug">{n.message}</p>
+                            <p className="text-[10px] text-amber-800 font-semibold mt-1">{n.time}</p>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Notificaciones Motivacionales (Días con Turnos) */}
+                <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
+                  <h3 className="text-sm font-bold text-on-surface mb-4 uppercase tracking-wider flex items-center gap-2">
+                    <Sparkles size={18} className="text-primary" />
+                    Motivación en Días de Turnos ({motivationalNotifications.length})
+                  </h3>
+                  <div className="space-y-3">
+                    {motivationalNotifications.length === 0 ? (
+                      <div className="p-4 bg-surface rounded-lg text-center">
+                        <Calendar className="text-on-surface-variant/50 mx-auto mb-1.5" size={18} />
+                        <p className="text-xs font-bold text-on-surface">Sin turnos programados para hoy</p>
+                        <p className="text-[10px] text-on-surface-variant mt-0.5">Los mensajes motivacionales se activan los días con pacientes agendados.</p>
                       </div>
-                    </div>
+                    ) : (
+                      motivationalNotifications.map(n => (
+                        <div key={n.id} className="p-3.5 bg-primary/5 border border-primary/20 rounded-lg flex gap-3">
+                          <Sparkles className="text-primary mt-0.5 shrink-0" size={16} />
+                          <div>
+                            <p className="text-[12px] font-bold text-on-surface leading-tight">{n.title}</p>
+                            <p className="text-[11px] text-on-surface-variant mt-1 italic leading-relaxed">{n.message}</p>
+                            <p className="text-[10px] text-primary font-semibold mt-1.5">{n.time}</p>
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               </div>

@@ -44,6 +44,28 @@ export function getEffectiveDuration(
   treatmentsList?: any[],
   fallbackMinutes: number = 30
 ): number {
+  const safeFallback = Number(fallbackMinutes) > 0 ? Number(fallbackMinutes) : 30;
+  // If user configured a custom average session duration (e.g. 25, 20, 45 min), respect it for suggested slots
+  // unless a treatment explicitly overrides with a different custom duration (!== 30)
+  if (safeFallback !== 30) {
+    if (treatmentNameOrObj) {
+      if (typeof treatmentNameOrObj === 'object' && Number(treatmentNameOrObj.duration) > 0 && Number(treatmentNameOrObj.duration) !== 30) {
+        return Number(treatmentNameOrObj.duration);
+      }
+      if (typeof treatmentNameOrObj === 'string' && treatmentsList && treatmentsList.length > 0) {
+        const matched = treatmentsList.find(t => t.name === treatmentNameOrObj || t.id === treatmentNameOrObj);
+        if (matched && Number(matched.duration) > 0 && Number(matched.duration) !== 30) {
+          return Number(matched.duration);
+        }
+      }
+    }
+    const parsedManual = Number(manualDuration);
+    if (parsedManual > 0 && parsedManual !== 30) {
+      return parsedManual;
+    }
+    return safeFallback;
+  }
+
   const parsedManual = Number(manualDuration);
   if (parsedManual > 0) {
     return parsedManual;
@@ -59,7 +81,7 @@ export function getEffectiveDuration(
       }
     }
   }
-  return fallbackMinutes > 0 ? fallbackMinutes : 30;
+  return safeFallback;
 }
 
 export interface DetailedConflict {
@@ -237,7 +259,8 @@ export function checkIsOutsideWorkingHours(
     const mappedDay = jsDay === 0 ? 7 : jsDay; // 1 to 7
 
     const workingDays = effectiveHours.workingDays || effectiveHours.days || [];
-    if (workingDays.length > 0 && !workingDays.includes(mappedDay)) {
+    const matchesWorkingDay = workingDays.includes(mappedDay) || (jsDay === 0 && workingDays.includes(0));
+    if (workingDays.length > 0 && !matchesWorkingDay) {
       const dayName = DAYS_NAMES[mappedDay - 1] || 'este día';
       return {
         isOutside: true,
@@ -407,7 +430,8 @@ export function getWorkingHoursDayInfo(
   const dayName = DAYS_NAMES[mappedDay - 1] || '';
 
   const workingDays = effectiveHours.workingDays || effectiveHours.days || [];
-  const isWorkingDay = workingDays.length === 0 || workingDays.includes(mappedDay);
+  const matchesWorkingDay = workingDays.includes(mappedDay) || (jsDay === 0 && workingDays.includes(0));
+  const isWorkingDay = workingDays.length === 0 || matchesWorkingDay;
 
   const morningActive = effectiveHours.morningActive !== false;
   const afternoonActive = effectiveHours.afternoonActive !== false;
@@ -449,7 +473,10 @@ export function getSuggestedAvailableSlots(
 ): SuggestedSlot[] {
   if (!date) return [];
 
-  const safeDuration = Number(durationMinutes) > 0 ? Number(durationMinutes) : 30;
+  const profileAvgDuration = Number(workingHours?.appointmentDurationMinutes) > 0
+    ? Number(workingHours.appointmentDurationMinutes)
+    : 30;
+  const safeDuration = Number(durationMinutes) > 0 ? Number(durationMinutes) : profileAvgDuration;
   const effectiveHours = workingHours || {
     workingDays: [1, 2, 3, 4, 5],
     morningStart: '08:00',
@@ -457,7 +484,8 @@ export function getSuggestedAvailableSlots(
     morningActive: true,
     afternoonStart: '14:00',
     afternoonEnd: '18:00',
-    afternoonActive: true
+    afternoonActive: true,
+    appointmentDurationMinutes: profileAvgDuration
   };
 
   // Check if date is a working day
@@ -467,8 +495,9 @@ export function getSuggestedAvailableSlots(
     const jsDay = d.getDay();
     const mappedDay = jsDay === 0 ? 7 : jsDay;
     const workingDays = effectiveHours.workingDays || effectiveHours.days || [];
+    const matchesWorkingDay = workingDays.includes(mappedDay) || (jsDay === 0 && workingDays.includes(0));
 
-    if (workingDays.length > 0 && !workingDays.includes(mappedDay)) {
+    if (workingDays.length > 0 && !matchesWorkingDay) {
       // Non-working day: do not suggest regular slots
       return [];
     }
@@ -485,8 +514,8 @@ export function getSuggestedAvailableSlots(
   const aEndMin = timeToMinutes(effectiveHours.afternoonEnd || '18:00');
 
   const suggested: SuggestedSlot[] = [];
-  // Resolution: use 15 minutes when duration is a multiple of 15, otherwise 5 minutes (e.g. 25 min, 20 min, 10 min)
-  const STEP_MINUTES = (safeDuration % 15 === 0) ? 15 : 5;
+  // Step interval strictly respects the configured average appointment duration in Profile -> Días y horarios
+  const STEP_MINUTES = profileAvgDuration > 0 ? profileAvgDuration : safeDuration;
 
   // 1. Morning Shift Slots
   if (morningActive && mEndMin - mStartMin >= safeDuration) {
