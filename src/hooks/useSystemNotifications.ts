@@ -35,6 +35,73 @@ export function useSystemNotifications() {
   const [motivationalNotifications, setMotivationalNotifications] = useState<SystemNotification[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Set of read notification IDs persisted in localStorage per user
+  const storageKey = user?.uid ? `medturnos_read_notifications_${user.uid}` : 'medturnos_read_notifications';
+  const [readIds, setReadIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        return new Set(JSON.parse(saved));
+      }
+    } catch {
+      // Ignored
+    }
+    return new Set<string>();
+  });
+
+  // Reload read notifications if user changes
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        setReadIds(new Set(JSON.parse(saved)));
+      } else {
+        setReadIds(new Set<string>());
+      }
+    } catch {
+      setReadIds(new Set<string>());
+    }
+  }, [storageKey]);
+
+  const markAsRead = (id: string) => {
+    setReadIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(Array.from(next)));
+      } catch {
+        // Ignored
+      }
+      return next;
+    });
+  };
+
+  const markAllAsRead = (idsToMark?: string[]) => {
+    setReadIds((prev) => {
+      const next = new Set(prev);
+      if (idsToMark && idsToMark.length > 0) {
+        idsToMark.forEach((id) => next.add(id));
+      } else {
+        notifications.forEach((n) => next.add(n.id));
+      }
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(Array.from(next)));
+      } catch {
+        // Ignored
+      }
+      return next;
+    });
+  };
+
+  const resetReadNotifications = () => {
+    setReadIds(new Set<string>());
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      // Ignored
+    }
+  };
+
   useEffect(() => {
     if (!ownerId || !user) {
       setStockNotifications([]);
@@ -173,21 +240,33 @@ export function useSystemNotifications() {
     };
   }, [ownerId, user]);
 
-  // Todas las notificaciones activas (Stock bajo, Facturas próximas a vencer, y Motivacionales en días con turnos)
-  const notifications: SystemNotification[] = [
+  // Todas las notificaciones generadas
+  const allNotifications: SystemNotification[] = [
     ...invoiceNotifications,
     ...stockNotifications,
     ...motivationalNotifications
   ];
 
-  // Notificaciones críticas de alerta (stock bajo o facturas próximas a vencer)
-  const alertNotificationsCount = stockNotifications.length + invoiceNotifications.length;
+  // Solo notificaciones no leídas activas para el contador y panel activo
+  const notifications: SystemNotification[] = allNotifications.filter((n) => !readIds.has(n.id));
+
+  // Notificaciones críticas de alerta no leídas
+  const alertNotificationsCount = notifications.filter((n) => n.type === 'stock' || n.type === 'invoice').length;
 
   return {
+    allNotifications,
     notifications,
-    stockNotifications,
-    invoiceNotifications,
-    motivationalNotifications,
+    stockNotifications: stockNotifications.filter((n) => !readIds.has(n.id)),
+    invoiceNotifications: invoiceNotifications.filter((n) => !readIds.has(n.id)),
+    motivationalNotifications: motivationalNotifications.filter((n) => !readIds.has(n.id)),
+    allStockNotifications: stockNotifications,
+    allInvoiceNotifications: invoiceNotifications,
+    allMotivationalNotifications: motivationalNotifications,
+    readIds,
+    isRead: (id: string) => readIds.has(id),
+    markAsRead,
+    markAllAsRead,
+    resetReadNotifications,
     alertNotificationsCount,
     totalCount: notifications.length,
     hasNotifications: notifications.length > 0,

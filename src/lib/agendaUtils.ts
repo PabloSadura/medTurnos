@@ -45,42 +45,31 @@ export function getEffectiveDuration(
   fallbackMinutes: number = 30
 ): number {
   const safeFallback = Number(fallbackMinutes) > 0 ? Number(fallbackMinutes) : 30;
-  // If user configured a custom average session duration (e.g. 25, 20, 45 min), respect it for suggested slots
-  // unless a treatment explicitly overrides with a different custom duration (!== 30)
-  if (safeFallback !== 30) {
-    if (treatmentNameOrObj) {
-      if (typeof treatmentNameOrObj === 'object' && Number(treatmentNameOrObj.duration) > 0 && Number(treatmentNameOrObj.duration) !== 30) {
-        return Number(treatmentNameOrObj.duration);
-      }
-      if (typeof treatmentNameOrObj === 'string' && treatmentsList && treatmentsList.length > 0) {
-        const matched = treatmentsList.find(t => t.name === treatmentNameOrObj || t.id === treatmentNameOrObj);
-        if (matched && Number(matched.duration) > 0 && Number(matched.duration) !== 30) {
-          return Number(matched.duration);
-        }
-      }
-    }
-    const parsedManual = Number(manualDuration);
-    if (parsedManual > 0 && parsedManual !== 30) {
-      return parsedManual;
-    }
-    return safeFallback;
-  }
 
-  const parsedManual = Number(manualDuration);
-  if (parsedManual > 0) {
-    return parsedManual;
-  }
+  // 1. If treatment is provided, dynamically use that treatment's duration
   if (treatmentNameOrObj) {
     if (typeof treatmentNameOrObj === 'object' && Number(treatmentNameOrObj.duration) > 0) {
       return Number(treatmentNameOrObj.duration);
     }
     if (typeof treatmentNameOrObj === 'string' && treatmentsList && treatmentsList.length > 0) {
-      const matched = treatmentsList.find(t => t.name === treatmentNameOrObj || t.id === treatmentNameOrObj);
+      const trimmed = treatmentNameOrObj.trim().toLowerCase();
+      const matched = treatmentsList.find(t => 
+        (t.name && t.name.trim().toLowerCase() === trimmed) || 
+        t.id === treatmentNameOrObj
+      );
       if (matched && Number(matched.duration) > 0) {
         return Number(matched.duration);
       }
     }
   }
+
+  // 2. If manual duration is given and positive
+  const parsedManual = Number(manualDuration);
+  if (parsedManual > 0) {
+    return parsedManual;
+  }
+
+  // 3. Fallback: configured profile average duration
   return safeFallback;
 }
 
@@ -502,7 +491,7 @@ export function getSuggestedAvailableSlots(
       return [];
     }
   } catch (_) {
-    // If parsing fails, proceed with default check
+    // If parsing fails, proceed
   }
 
   const morningActive = effectiveHours.morningActive !== false;
@@ -513,23 +502,177 @@ export function getSuggestedAvailableSlots(
   const aStartMin = timeToMinutes(effectiveHours.afternoonStart || '14:00');
   const aEndMin = timeToMinutes(effectiveHours.afternoonEnd || '18:00');
 
-  const suggested: SuggestedSlot[] = [];
-  // Step interval strictly respects the configured average appointment duration in Profile -> Días y horarios
-  const STEP_MINUTES = profileAvgDuration > 0 ? profileAvgDuration : safeDuration;
+  // Filter day appointments (excluding cancelled, current apt being edited, etc.)
+  const dayAppointments = (appointments || []).filter((apt) => {
+    if (!apt || !apt.date || !apt.time) return false;
+    if (apt.date !== date) return false;
+    if (excludeAppointmentId && (apt.id === excludeAppointmentId || apt.id === String(excludeAppointmentId))) {
+      return false;
+    }
+    const status = (apt.status || '').toLowerCase().trim();
+    if (status === 'cancelado' || status === 'cancelled' || status === 'anulado' || status === 'ausente') {
+      return false;
+    }
+    return true;
+  });
 
-  // 1. Morning Shift Slots
-  if (morningActive && mEndMin - mStartMin >= safeDuration) {
-    for (let m = mStartMin; m <= mEndMin - safeDuration; m += STEP_MINUTES) {
+  const isFirstAppointmentOfDay = dayAppointments.length === 0;
+
+  // STEP interval configured in profile Días y horarios
+  const configuredStep = profileAvgDuration > 0 ? profileAvgDuration : 30;
+
+  const suggested: SuggestedSlot[] = [];
+
+  // =========================================================================
+  // CASO 1: SI ES EL PRIMER TURNO (sin turnos agendados en la fecha)
+  // Proponer siempre seguir el tiempo configurado
+  // =========================================================================
+  if (isFirstAppointmentOfDay) {
+    // Turno Mañana
+    if (morningActive && mEndMin - mStartMin >= safeDuration) {
+      for (let m = mStartMin; m <= mEndMin - safeDuration; m += configuredStep) {
+        const timeStr = minutesToTime(m);
+        const endTime = calculateEndTime(timeStr, safeDuration);
+        suggested.push({
+          time: timeStr,
+          endTime,
+          isOverturn: false,
+          isConflict: false,
+          isOutsideWorkingHours: false,
+          label: `${timeStr} - ${endTime} hs`,
+          shift: 'morning'
+        });
+      }
+    }
+
+    // Turno Tarde
+    if (afternoonActive && aEndMin - aStartMin >= safeDuration) {
+      for (let m = aStartMin; m <= aEndMin - safeDuration; m += configuredStep) {
+        const timeStr = minutesToTime(m);
+        const endTime = calculateEndTime(timeStr, safeDuration);
+        suggested.push({
+          time: timeStr,
+          endTime,
+          isOverturn: false,
+          isConflict: false,
+          isOutsideWorkingHours: false,
+          label: `${timeStr} - ${endTime} hs`,
+          shift: 'afternoon'
+        });
+      }
+    }
+
+    return suggested;
+  }
+
+  // =========================================================================
+  // CASO 2: YA HAY TURNOS AGENDADOS EN LA FECHA
+  // Sugerencia dinámica en base al tratamiento seleccionado y turnos agendados
+  // =========================================================================
+  const getShiftCandidates = (shiftStart: number, shiftEnd: number): number[] => {
+    if (shiftEnd - shiftStart < safeDuration) return [];
+
+    const shiftApps = dayAppointments
+      .map(apt => {
+        const start = timeToMinutes(apt.time);
+        const dur = Number(apt.duration) > 0 ? Number(apt.duration) : profileAvgDuration;
+        const end = start + dur;
+        return { start, end, dur, apt };
+      })
+      .filter(a => a.start < shiftEnd && a.end > shiftStart)
+      .sort((a, b) => a.start - b.start);
+
+    const candidates = new Set<number>();
+
+    // 1. Horario de inicio del turno de atención configurado
+    if (shiftStart <= shiftEnd - safeDuration) {
+      candidates.add(shiftStart);
+    }
+
+    // 2. Grilla base de horarios configurados (ej: cada 30 min)
+    for (let m = shiftStart; m <= shiftEnd - safeDuration; m += configuredStep) {
+      candidates.add(m);
+    }
+
+    // 3. Puntos de anclaje dinámicos contiguos a los turnos agendados
+    for (const app of shiftApps) {
+      // Inmediatamente al finalizar el turno previo
+      const afterApp = app.end;
+      if (afterApp >= shiftStart && afterApp <= shiftEnd - safeDuration) {
+        candidates.add(afterApp);
+        // Sugerir slots consecutivos si caben múltiples tratamientos
+        for (let nextM = afterApp + safeDuration; nextM <= shiftEnd - safeDuration; nextM += safeDuration) {
+          candidates.add(nextM);
+        }
+      }
+
+      // Inmediatamente antes de que comience el siguiente turno
+      const beforeApp = app.start - safeDuration;
+      if (beforeApp >= shiftStart && beforeApp <= shiftEnd - safeDuration) {
+        candidates.add(beforeApp);
+      }
+
+      // También el inicio del turno para opciones de sobreturno explícito
+      if (app.start >= shiftStart && app.start <= shiftEnd - safeDuration) {
+        candidates.add(app.start);
+      }
+    }
+
+    // 4. Ventanas libres entre turnos ocupados
+    const occupiedBlocks: { start: number; end: number }[] = [];
+    for (const app of shiftApps) {
+      const curStart = Math.max(shiftStart, app.start);
+      const curEnd = Math.min(shiftEnd, app.end);
+      if (occupiedBlocks.length === 0) {
+        occupiedBlocks.push({ start: curStart, end: curEnd });
+      } else {
+        const prev = occupiedBlocks[occupiedBlocks.length - 1];
+        if (curStart <= prev.end) {
+          prev.end = Math.max(prev.end, curEnd);
+        } else {
+          occupiedBlocks.push({ start: curStart, end: curEnd });
+        }
+      }
+    }
+
+    // Recorrer las ventanas de tiempo libre y calcular slots dinámicos para el tratamiento
+    let pointer = shiftStart;
+    for (const block of occupiedBlocks) {
+      if (block.start > pointer) {
+        const freeWindow = block.start - pointer;
+        if (freeWindow >= safeDuration) {
+          candidates.add(pointer);
+          for (let m = pointer + safeDuration; m <= block.start - safeDuration; m += safeDuration) {
+            candidates.add(m);
+          }
+        }
+      }
+      pointer = Math.max(pointer, block.end);
+    }
+    if (pointer < shiftEnd && (shiftEnd - pointer) >= safeDuration) {
+      candidates.add(pointer);
+      for (let m = pointer + safeDuration; m <= shiftEnd - safeDuration; m += safeDuration) {
+        candidates.add(m);
+      }
+    }
+
+    return Array.from(candidates)
+      .filter(m => m >= shiftStart && m <= shiftEnd - safeDuration)
+      .sort((a, b) => a - b);
+  };
+
+  // 1. Turno Mañana
+  if (morningActive) {
+    const morningCandidates = getShiftCandidates(mStartMin, mEndMin);
+    for (const m of morningCandidates) {
       const timeStr = minutesToTime(m);
-      const collision = checkScheduleCollision(date, timeStr, safeDuration, appointments, excludeAppointmentId);
+      const collision = checkScheduleCollision(date, timeStr, safeDuration, dayAppointments, excludeAppointmentId);
       const outside = checkIsOutsideWorkingHours(date, timeStr, effectiveHours, safeDuration);
       const endTime = calculateEndTime(timeStr, safeDuration);
-      const isOverturn = collision.hasConflict;
-
       suggested.push({
         time: timeStr,
         endTime,
-        isOverturn,
+        isOverturn: collision.hasConflict,
         isConflict: collision.hasConflict,
         conflictSummary: collision.conflictSummary,
         isOutsideWorkingHours: outside.isOutside,
@@ -540,19 +683,18 @@ export function getSuggestedAvailableSlots(
     }
   }
 
-  // 2. Afternoon Shift Slots
-  if (afternoonActive && aEndMin - aStartMin >= safeDuration) {
-    for (let m = aStartMin; m <= aEndMin - safeDuration; m += STEP_MINUTES) {
+  // 2. Turno Tarde
+  if (afternoonActive) {
+    const afternoonCandidates = getShiftCandidates(aStartMin, aEndMin);
+    for (const m of afternoonCandidates) {
       const timeStr = minutesToTime(m);
-      const collision = checkScheduleCollision(date, timeStr, safeDuration, appointments, excludeAppointmentId);
+      const collision = checkScheduleCollision(date, timeStr, safeDuration, dayAppointments, excludeAppointmentId);
       const outside = checkIsOutsideWorkingHours(date, timeStr, effectiveHours, safeDuration);
       const endTime = calculateEndTime(timeStr, safeDuration);
-      const isOverturn = collision.hasConflict;
-
       suggested.push({
         time: timeStr,
         endTime,
-        isOverturn,
+        isOverturn: collision.hasConflict,
         isConflict: collision.hasConflict,
         conflictSummary: collision.conflictSummary,
         isOutsideWorkingHours: outside.isOutside,
@@ -796,4 +938,35 @@ export function getAppointmentStatusStyles(status?: string) {
     shadow: 'shadow-amber-950/5',
     label: 'Pendiente'
   };
+}
+
+/**
+ * Checks if an appointment status represents a cancelled or annulled appointment.
+ */
+export function isAppointmentCancelled(status?: string): boolean {
+  const norm = (status || '').toLowerCase().trim();
+  return norm === 'cancelado' || norm === 'cancelled' || norm === 'anulado';
+}
+
+/**
+ * Standard comparator for sorting appointments in lists:
+ * 1. By Date ascending (YYYY-MM-DD)
+ * 2. Active appointments first, cancelled appointments at the end of the list
+ * 3. By Start Time ascending (HH:mm)
+ */
+export function compareAppointments(a: any, b: any): number {
+  const dateA = a.date || '';
+  const dateB = b.date || '';
+  if (dateA !== dateB) {
+    return dateA.localeCompare(dateB);
+  }
+
+  const isCancelledA = isAppointmentCancelled(a.status);
+  const isCancelledB = isAppointmentCancelled(b.status);
+
+  if (isCancelledA !== isCancelledB) {
+    return isCancelledA ? 1 : -1;
+  }
+
+  return (a.time || '').localeCompare(b.time || '');
 }

@@ -49,7 +49,11 @@ export function Administration() {
     notifications,
     stockNotifications,
     invoiceNotifications,
-    motivationalNotifications
+    motivationalNotifications,
+    markAsRead,
+    markAllAsRead,
+    resetReadNotifications,
+    readIds
   } = useSystemNotifications();
 
   useEffect(() => {
@@ -963,88 +967,214 @@ export function Administration() {
 
           {activeTab === 'notifications' && (
             <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-xl border border-outline-variant shadow-xs">
+                <div>
+                  <h3 className="text-sm font-black text-on-surface uppercase tracking-wider">
+                    Centro de Notificaciones del Sistema
+                  </h3>
+                  <p className="text-xs text-on-surface-variant">
+                    Alertas dinámicas de inventario, vencimientos y mensajes motivacionales en días de turnos.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {notifications.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        markAllAsRead();
+                        showToast('Todas las notificaciones activas se marcaron como leídas.', 'success');
+                      }}
+                      className="px-3 py-1.5 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <CheckCircle2 size={14} />
+                      <span>Marcar todas como leídas</span>
+                    </button>
+                  )}
+                  {readIds.size > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetReadNotifications();
+                        showToast('Se restablecieron las notificaciones leídas.', 'info');
+                      }}
+                      className="px-3 py-1.5 bg-surface hover:bg-outline-variant/30 text-on-surface-variant rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border border-outline-variant"
+                    >
+                      <RefreshCw size={13} />
+                      <span>Ver leídas ({readIds.size})</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {/* Alertas de Stock Bajo */}
-                <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
-                  <h3 className="text-sm font-bold text-on-surface mb-4 uppercase tracking-wider flex items-center gap-2">
-                    <Bell size={18} className="text-error" />
-                    Stock Bajo ({stockNotifications.length})
-                  </h3>
-                  <div className="space-y-3">
-                    {stockNotifications.length === 0 ? (
-                      <div className="p-4 bg-surface rounded-lg text-center">
-                        <CheckCircle2 className="text-emerald-600 mx-auto mb-1.5" size={18} />
-                        <p className="text-xs font-bold text-on-surface">Inventario en niveles óptimos</p>
-                        <p className="text-[10px] text-on-surface-variant mt-0.5">Sin insumos con stock crítico o bajo.</p>
-                      </div>
-                    ) : (
-                      stockNotifications.map(n => (
-                        <div key={n.id} className="p-3 bg-error-container/5 border border-error/10 rounded-lg flex gap-3">
-                          <AlertCircle className="text-error mt-0.5 shrink-0" size={16} />
-                          <div>
-                            <p className="text-[12px] font-bold text-on-surface leading-tight">{n.title}</p>
-                            <p className="text-[11px] text-on-surface-variant mt-0.5 leading-snug">{n.message}</p>
-                            <p className="text-[10px] text-error font-semibold mt-1">{n.time}</p>
-                          </div>
+                <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider flex items-center gap-2">
+                        <Bell size={18} className="text-error" />
+                        Stock Bajo ({stockNotifications.length})
+                      </h3>
+                      {stockNotifications.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            markAllAsRead(stockNotifications.map(n => n.id));
+                            showToast('Alertas de stock marcadas como leídas', 'info');
+                          }}
+                          className="text-[10px] font-bold text-primary hover:underline cursor-pointer"
+                        >
+                          Limpiar
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-3">
+                      {stockNotifications.length === 0 ? (
+                        <div className="p-4 bg-surface rounded-lg text-center">
+                          <CheckCircle2 className="text-emerald-600 mx-auto mb-1.5" size={18} />
+                          <p className="text-xs font-bold text-on-surface">Inventario en niveles óptimos</p>
+                          <p className="text-[10px] text-on-surface-variant mt-0.5">Sin insumos con stock crítico o bajo pendientes de revisión.</p>
                         </div>
-                      ))
-                    )}
+                      ) : (
+                        stockNotifications.map(n => (
+                          <div key={n.id} className="p-3 bg-error-container/5 border border-error/10 rounded-lg flex items-start justify-between gap-3 group">
+                            <div className="flex items-start gap-2.5">
+                              <AlertCircle className="text-error mt-0.5 shrink-0" size={16} />
+                              <div>
+                                <p className="text-[12px] font-bold text-on-surface leading-tight">{n.title}</p>
+                                <p className="text-[11px] text-on-surface-variant mt-0.5 leading-snug">{n.message}</p>
+                                <p className="text-[10px] text-error font-semibold mt-1">{n.time}</p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                markAsRead(n.id);
+                                showToast(`Alerta de stock "${n.title}" marcada como leída`, 'success');
+                              }}
+                              className="p-1 rounded-md text-on-surface-variant hover:text-emerald-700 hover:bg-emerald-50 transition-colors shrink-0 cursor-pointer"
+                              title="Marcar como leída"
+                            >
+                              <CheckCircle2 size={16} />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
                 </div>
 
                 {/* Facturas Próximas a Vencer */}
-                <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
-                  <h3 className="text-sm font-bold text-on-surface mb-4 uppercase tracking-wider flex items-center gap-2">
-                    <CreditCard size={18} className="text-amber-600" />
-                    Facturas Próximas a Vencer ({invoiceNotifications.length})
-                  </h3>
-                  <div className="space-y-3">
-                    {invoiceNotifications.length === 0 ? (
-                      <div className="p-4 bg-surface rounded-lg text-center">
-                        <CheckCircle2 className="text-emerald-600 mx-auto mb-1.5" size={18} />
-                        <p className="text-xs font-bold text-on-surface">Facturación al día</p>
-                        <p className="text-[10px] text-on-surface-variant mt-0.5">No hay facturas próximas a vencer ni saldos pendientes.</p>
-                      </div>
-                    ) : (
-                      invoiceNotifications.map(n => (
-                        <div key={n.id} className="p-3 bg-amber-50/70 border border-amber-200 rounded-lg flex gap-3">
-                          <AlertCircle className="text-amber-700 mt-0.5 shrink-0" size={16} />
-                          <div>
-                            <p className="text-[12px] font-bold text-on-surface leading-tight">{n.title}</p>
-                            <p className="text-[11px] text-on-surface-variant mt-0.5 leading-snug">{n.message}</p>
-                            <p className="text-[10px] text-amber-800 font-semibold mt-1">{n.time}</p>
-                          </div>
+                <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-bold text-on-surface uppercase tracking-wider flex items-center gap-2">
+                        <CreditCard size={18} className="text-amber-600" />
+                        Facturas Próximas a Vencer ({invoiceNotifications.length})
+                      </h3>
+                      {invoiceNotifications.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            markAllAsRead(invoiceNotifications.map(n => n.id));
+                            showToast('Avisos de facturación marcados como leídos', 'info');
+                          }}
+                          className="text-[10px] font-bold text-primary hover:underline cursor-pointer"
+                        >
+                          Limpiar
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-3">
+                      {invoiceNotifications.length === 0 ? (
+                        <div className="p-4 bg-surface rounded-lg text-center">
+                          <CheckCircle2 className="text-emerald-600 mx-auto mb-1.5" size={18} />
+                          <p className="text-xs font-bold text-on-surface">Facturación al día</p>
+                          <p className="text-[10px] text-on-surface-variant mt-0.5">No hay facturas próximas a vencer ni saldos pendientes sin revisar.</p>
                         </div>
-                      ))
-                    )}
+                      ) : (
+                        invoiceNotifications.map(n => (
+                          <div key={n.id} className="p-3 bg-amber-50/70 border border-amber-200 rounded-lg flex items-start justify-between gap-3 group">
+                            <div className="flex items-start gap-2.5">
+                              <AlertCircle className="text-amber-700 mt-0.5 shrink-0" size={16} />
+                              <div>
+                                <p className="text-[12px] font-bold text-on-surface leading-tight">{n.title}</p>
+                                <p className="text-[11px] text-on-surface-variant mt-0.5 leading-snug">{n.message}</p>
+                                <p className="text-[10px] text-amber-800 font-semibold mt-1">{n.time}</p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                markAsRead(n.id);
+                                showToast(`Aviso de factura marcado como leído`, 'success');
+                              }}
+                              className="p-1 rounded-md text-on-surface-variant hover:text-emerald-700 hover:bg-emerald-50 transition-colors shrink-0 cursor-pointer"
+                              title="Marcar como leída"
+                            >
+                              <CheckCircle2 size={16} />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
                 </div>
 
                 {/* Notificaciones Motivacionales (Días con Turnos) */}
-                <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm">
-                  <h3 className="text-sm font-bold text-on-surface mb-4 uppercase tracking-wider flex items-center gap-2">
-                    <Sparkles size={18} className="text-primary" />
-                    Motivación en Días de Turnos ({motivationalNotifications.length})
-                  </h3>
-                  <div className="space-y-3">
-                    {motivationalNotifications.length === 0 ? (
-                      <div className="p-4 bg-surface rounded-lg text-center">
-                        <Calendar className="text-on-surface-variant/50 mx-auto mb-1.5" size={18} />
-                        <p className="text-xs font-bold text-on-surface">Sin turnos programados para hoy</p>
-                        <p className="text-[10px] text-on-surface-variant mt-0.5">Los mensajes motivacionales se activan los días con pacientes agendados.</p>
-                      </div>
-                    ) : (
-                      motivationalNotifications.map(n => (
-                        <div key={n.id} className="p-3.5 bg-primary/5 border border-primary/20 rounded-lg flex gap-3">
-                          <Sparkles className="text-primary mt-0.5 shrink-0" size={16} />
-                          <div>
-                            <p className="text-[12px] font-bold text-on-surface leading-tight">{n.title}</p>
-                            <p className="text-[11px] text-on-surface-variant mt-1 italic leading-relaxed">{n.message}</p>
-                            <p className="text-[10px] text-primary font-semibold mt-1.5">{n.time}</p>
-                          </div>
+                <div className="bg-white p-6 rounded-xl border border-outline-variant shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-bold text-on-surface mb-4 uppercase tracking-wider flex items-center gap-2">
+                        <Sparkles size={18} className="text-primary" />
+                        Motivación en Días de Turnos ({motivationalNotifications.length})
+                      </h3>
+                      {motivationalNotifications.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            markAllAsRead(motivationalNotifications.map(n => n.id));
+                            showToast('Mensaje motivacional marcado como leído', 'info');
+                          }}
+                          className="text-[10px] font-bold text-primary hover:underline cursor-pointer"
+                        >
+                          Limpiar
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-3">
+                      {motivationalNotifications.length === 0 ? (
+                        <div className="p-4 bg-surface rounded-lg text-center">
+                          <Calendar className="text-on-surface-variant/50 mx-auto mb-1.5" size={18} />
+                          <p className="text-xs font-bold text-on-surface">Sin turnos pendientes o mensaje ya leído</p>
+                          <p className="text-[10px] text-on-surface-variant mt-0.5">Los mensajes motivacionales se activan los días con pacientes agendados.</p>
                         </div>
-                      ))
-                    )}
+                      ) : (
+                        motivationalNotifications.map(n => (
+                          <div key={n.id} className="p-3.5 bg-primary/5 border border-primary/20 rounded-lg flex items-start justify-between gap-3 group">
+                            <div className="flex items-start gap-2.5">
+                              <Sparkles className="text-primary mt-0.5 shrink-0" size={16} />
+                              <div>
+                                <p className="text-[12px] font-bold text-on-surface leading-tight">{n.title}</p>
+                                <p className="text-[11px] text-on-surface-variant mt-1 italic leading-relaxed">{n.message}</p>
+                                <p className="text-[10px] text-primary font-semibold mt-1.5">{n.time}</p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                markAsRead(n.id);
+                                showToast('Mensaje motivacional marcado como leído', 'success');
+                              }}
+                              className="p-1 rounded-md text-on-surface-variant hover:text-emerald-700 hover:bg-emerald-50 transition-colors shrink-0 cursor-pointer"
+                              title="Marcar como leída"
+                            >
+                              <CheckCircle2 size={16} />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

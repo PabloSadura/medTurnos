@@ -180,6 +180,9 @@ export function Dashboard() {
             return aptTs >= nowTs;
           })
           .sort((a: any, b: any) => {
+            const isCancA = a.status === 'cancelado' || a.status === 'cancelled' || a.status === 'anulado';
+            const isCancB = b.status === 'cancelado' || b.status === 'cancelled' || b.status === 'anulado';
+            if (isCancA !== isCancB) return isCancA ? 1 : -1;
             const dateA = a.startTime?.toDate ? a.startTime.toDate() : new Date(a.startTime || a.date);
             const dateB = b.startTime?.toDate ? b.startTime.toDate() : new Date(b.startTime || b.date);
             return dateA.getTime() - dateB.getTime();

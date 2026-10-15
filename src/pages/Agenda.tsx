@@ -27,6 +27,7 @@ import {
   getEffectiveDuration,
   computeOverlappingLayout,
   getAppointmentStatusStyles,
+  compareAppointments,
   DayOccupiedSlot
 } from '../lib/agendaUtils';
 import { saveAppointmentWithPersistenceCheck } from '../lib/appointmentService';
@@ -287,8 +288,28 @@ export function Agenda() {
     const initialDuration = getEffectiveDuration(matchedTreatment, null, treatments, profDefault);
     const finalDate = targetDate || formatLocalDate(selectedDate || new Date());
     const availableSlots = getSuggestedAvailableSlots(finalDate, initialDuration, appointments, workingHours);
-    const freeSlot = availableSlots.find(s => !s.isConflict);
-    const initialTime = targetTime || (freeSlot ? freeSlot.time : (availableSlots.length > 0 ? availableSlots[0].time : '09:00'));
+
+    const dayApps = appointments.filter(a => {
+      if (!a || !a.date || a.date !== finalDate) return false;
+      const st = (a.status || '').toLowerCase().trim();
+      return st !== 'cancelado' && st !== 'cancelled' && st !== 'anulado' && st !== 'ausente';
+    });
+    const isFirstOfDate = dayApps.length === 0;
+
+    const configuredStartTime = (workingHours?.morningActive !== false && workingHours?.morningStart)
+      ? workingHours.morningStart
+      : (workingHours?.afternoonStart || '08:00');
+
+    let initialTime = targetTime;
+    if (!initialTime) {
+      if (isFirstOfDate) {
+        // "Si es el primer turno, proponer siempre seguir el tiempo configurado"
+        initialTime = configuredStartTime;
+      } else {
+        const freeSlot = availableSlots.find(s => !s.isConflict);
+        initialTime = freeSlot ? freeSlot.time : (availableSlots.length > 0 ? availableSlots[0].time : configuredStartTime);
+      }
+    }
 
     setNewApt({
       patientId: '',
@@ -326,15 +347,8 @@ export function Agenda() {
     // Using a broader query for the month view but real-time
     const unsubscribeApps = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
-      // Client-side sort by date and time to avoid composite index requirement
-      docs.sort((a, b) => {
-        const dateA = a.date || '';
-        const dateB = b.date || '';
-        if (dateA !== dateB) {
-          return dateA.localeCompare(dateB);
-        }
-        return (a.time || '').localeCompare(b.time || '');
-      });
+      // Client-side sort: by date, active appointments first, cancelled appointments at the end, then by time
+      docs.sort(compareAppointments);
       setAppointments(docs);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'appointments'));
 
@@ -762,7 +776,10 @@ export function Agenda() {
     return days;
   };
 
-  const selectedDateAppointments = appointments.filter(a => a.date === formatLocalDate(selectedDate));
+  const selectedDateAppointments = useMemo(() => {
+    const list = appointments.filter(a => a.date === formatLocalDate(selectedDate));
+    return [...list].sort(compareAppointments);
+  }, [appointments, selectedDate]);
 
   const getPatientPhone = (apt: any) => {
     if (apt?.patientPhone) return apt.patientPhone;
@@ -1777,7 +1794,35 @@ export function Agenda() {
                     : "border-outline-variant"
                 )}
                 value={newApt.date}
-                onChange={(e) => setNewApt({ ...newApt, date: e.target.value })}
+                onChange={(e) => {
+                  const nextDate = e.target.value;
+                  const dayApps = appointments.filter(a => {
+                    if (!a || !a.date || a.date !== nextDate) return false;
+                    const st = (a.status || '').toLowerCase().trim();
+                    return st !== 'cancelado' && st !== 'cancelled' && st !== 'anulado' && st !== 'ausente';
+                  });
+                  const isFirstOfDate = dayApps.length === 0;
+                  const configuredStartTime = (workingHours?.morningActive !== false && workingHours?.morningStart)
+                    ? workingHours.morningStart
+                    : (workingHours?.afternoonStart || '08:00');
+
+                  let proposedTime = newApt.time;
+                  if (isFirstOfDate) {
+                    proposedTime = configuredStartTime;
+                  } else {
+                    const updatedSlots = getSuggestedAvailableSlots(nextDate, effectiveNewAptDuration, appointments, workingHours);
+                    const freeSlot = updatedSlots.find(s => !s.isConflict);
+                    if (freeSlot) {
+                      proposedTime = freeSlot.time;
+                    }
+                  }
+
+                  setNewApt(prev => ({
+                    ...prev,
+                    date: nextDate,
+                    time: proposedTime
+                  }));
+                }}
               />
               {workingHours && newApt.date && !(workingHours.workingDays || workingHours.days || []).includes(new Date(newApt.date + 'T00:00:00').getDay() === 0 ? 7 : new Date(newApt.date + 'T00:00:00').getDay()) && (
                 <p className="text-[10px] text-purple-700 font-bold flex items-center gap-1">
@@ -1821,10 +1866,38 @@ export function Agenda() {
                 const matched = treatments.find(t => t.name === selected);
                 const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
                 const nextDuration = getEffectiveDuration(matched, null, treatments, profDefault);
+
+                const dayApps = appointments.filter(a => {
+                  if (!a || !a.date || a.date !== newApt.date) return false;
+                  const st = (a.status || '').toLowerCase().trim();
+                  return st !== 'cancelado' && st !== 'cancelled' && st !== 'anulado' && st !== 'ausente';
+                });
+                const isFirstOfDate = dayApps.length === 0;
+                const configuredStartTime = (workingHours?.morningActive !== false && workingHours?.morningStart)
+                  ? workingHours.morningStart
+                  : (workingHours?.afternoonStart || '08:00');
+
+                let proposedTime = newApt.time;
+                if (isFirstOfDate) {
+                  // "Si es el primer turno, proponer siempre seguir el tiempo configurado"
+                  proposedTime = configuredStartTime;
+                } else {
+                  // Si el horario actual colisiona con la nueva duración del tratamiento, proponer el primer turno dinámico libre
+                  const currentCollision = checkScheduleCollision(newApt.date, newApt.time, nextDuration, appointments);
+                  if (currentCollision.hasConflict) {
+                    const updatedSlots = getSuggestedAvailableSlots(newApt.date, nextDuration, appointments, workingHours);
+                    const freeSlot = updatedSlots.find(s => !s.isConflict);
+                    if (freeSlot) {
+                      proposedTime = freeSlot.time;
+                    }
+                  }
+                }
+
                 setNewApt(prev => ({
                   ...prev,
                   type: selected,
-                  duration: nextDuration
+                  duration: nextDuration,
+                  time: proposedTime
                 }));
               }}
             >
@@ -1850,6 +1923,7 @@ export function Agenda() {
             treatmentName={newApt.type}
             dateStr={newApt.date}
             workingHours={workingHours}
+            isFirstAppointment={newAptOccupiedSlots.length === 0}
           />
 
           {/* AVISO INFORMATIVO NO BLOQUEANTE DE SUPERPOSICIÓN / SOBRETURNO */}
@@ -2452,6 +2526,7 @@ export function Agenda() {
             treatmentName={editAptData.type}
             dateStr={editAptData.date}
             workingHours={workingHours}
+            isFirstAppointment={editAptOccupiedSlots.length === 0}
           />
 
           {/* AVISO INFORMATIVO NO BLOQUEANTE DE SUPERPOSICIÓN / SOBRETURNO */}

@@ -940,8 +940,9 @@ export function ClinicalHistoryModal({
 
                   {(() => {
                     const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
-                    const nextDuration = Number(nextAptData.duration) > 0 ? Number(nextAptData.duration) : profDefault;
+                    const nextDuration = getEffectiveDuration(nextAptData.treatment, nextAptData.duration, treatments, profDefault);
                     const suggestedNextSlots = getSuggestedAvailableSlots(nextAptData.date, nextDuration, allDoctorAppointments, workingHours);
+                    const isFirstOfDate = (allDoctorAppointments || []).filter(a => a.date === nextAptData.date && a.status !== 'cancelado' && a.status !== 'cancelled').length === 0;
                     return (
                       <SuggestedSlotsPicker
                         slots={suggestedNextSlots}
@@ -951,6 +952,7 @@ export function ClinicalHistoryModal({
                         treatmentName={nextAptData.treatment}
                         dateStr={nextAptData.date}
                         workingHours={workingHours}
+                        isFirstAppointment={isFirstOfDate}
                       />
                     );
                   })()}
@@ -968,7 +970,12 @@ export function ClinicalHistoryModal({
                         placeholder="Ej: Control / Seguimiento o Tratamiento..."
                         className="w-full px-2.5 py-1.5 bg-white border border-outline-variant rounded-md text-[12px] font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                         value={nextAptData.treatment}
-                        onChange={(e) => setNextAptData(prev => ({ ...prev, treatment: e.target.value }))}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const profDefault = Number(workingHours?.appointmentDurationMinutes) > 0 ? Number(workingHours.appointmentDurationMinutes) : 30;
+                          const dynamicDur = getEffectiveDuration(val, null, treatments, profDefault);
+                          setNextAptData(prev => ({ ...prev, treatment: val, duration: dynamicDur }));
+                        }}
                       />
                       <datalist id="modal-next-treatments-list">
                         <option value="Control / Seguimiento" />

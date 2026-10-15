@@ -17,7 +17,9 @@ export function TopAppBar() {
     notifications,
     totalCount,
     hasNotifications,
-    hasCriticalAlerts
+    hasCriticalAlerts,
+    markAsRead,
+    markAllAsRead
   } = useSystemNotifications();
 
   const [isNotifOpen, setIsNotifOpen] = useState(false);
@@ -198,14 +200,28 @@ export function TopAppBar() {
                     </span>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setIsNotifOpen(false)}
-                  className="p-1 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface transition-colors cursor-pointer"
-                  aria-label="Cerrar panel de notificaciones"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                
+                <div className="flex items-center gap-1.5">
+                  {hasNotifications && (
+                    <button
+                      type="button"
+                      onClick={() => markAllAsRead()}
+                      className="text-[10px] font-bold text-primary hover:text-primary/80 px-2 py-1 hover:bg-primary/5 rounded-lg transition-colors cursor-pointer flex items-center gap-1"
+                      title="Marcar todas las notificaciones como leídas"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Marcar leídas</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsNotifOpen(false)}
+                    className="p-1 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface transition-colors cursor-pointer"
+                    aria-label="Cerrar panel de notificaciones"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               <div className="max-h-96 overflow-y-auto divide-y divide-outline-variant/60">
@@ -216,7 +232,7 @@ export function TopAppBar() {
                     </div>
                     <p className="text-xs font-bold text-on-surface">Todo al día</p>
                     <p className="text-[11px] text-on-surface-variant leading-relaxed">
-                      No hay alertas de stock bajo ni facturas próximas a vencer en este momento.
+                      No hay alertas pendientes de stock bajo ni facturas próximas a vencer.
                     </p>
                   </div>
                 ) : (
@@ -226,14 +242,9 @@ export function TopAppBar() {
                     const isMotivational = notif.type === 'motivational';
 
                     return (
-                      <button
+                      <div
                         key={notif.id}
-                        type="button"
-                        onClick={() => {
-                          setIsNotifOpen(false);
-                          navigate(notif.link);
-                        }}
-                        className="w-full text-left p-3.5 hover:bg-surface transition-colors flex items-start gap-3 cursor-pointer group"
+                        className="w-full text-left p-3.5 hover:bg-surface transition-colors flex items-start gap-3 group relative"
                       >
                         <div
                           className={cn(
@@ -249,7 +260,14 @@ export function TopAppBar() {
                           {isStock && <AlertTriangle className="w-4 h-4" />}
                           {isMotivational && <Sparkles className="w-4 h-4" />}
                         </div>
-                        <div className="flex-1 min-w-0">
+
+                        <div
+                          className="flex-1 min-w-0 cursor-pointer"
+                          onClick={() => {
+                            setIsNotifOpen(false);
+                            navigate(notif.link);
+                          }}
+                        >
                           <div className="flex items-center justify-between gap-2">
                             <span
                               className={cn(
@@ -278,8 +296,34 @@ export function TopAppBar() {
                             {notif.message}
                           </p>
                         </div>
-                        <ChevronRight className="w-4 h-4 text-on-surface-variant/40 group-hover:text-primary shrink-0 self-center transition-colors" />
-                      </button>
+
+                        <div className="flex flex-col items-center gap-1 shrink-0 self-center">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              markAsRead(notif.id);
+                            }}
+                            className="p-1 rounded-lg text-on-surface-variant/60 hover:text-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer"
+                            title="Marcar como leída"
+                            aria-label="Marcar como leída"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsNotifOpen(false);
+                              navigate(notif.link);
+                            }}
+                            className="p-1 text-on-surface-variant/40 group-hover:text-primary transition-colors cursor-pointer"
+                            title="Ir al módulo"
+                            aria-label="Ir al módulo"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
                     );
                   })
                 )}

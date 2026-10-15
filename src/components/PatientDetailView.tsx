@@ -24,7 +24,7 @@ import {
   getPatientLastName, formatPatientLastNameFirst 
 } from '../lib/patientNameUtils';
 import { formatArgentinePhoneWithPrefix } from '../lib/phoneUtils';
-import { getSuggestedAvailableSlots, getEffectiveDuration } from '../lib/agendaUtils';
+import { getSuggestedAvailableSlots, getEffectiveDuration, isAppointmentCancelled } from '../lib/agendaUtils';
 import { SuggestedSlotsPicker } from './SuggestedSlotsPicker';
 
 interface PatientDetailViewProps {
@@ -212,6 +212,9 @@ export function PatientDetailView({
       const apps: any[] = allApps.filter((a: any) => a.patientId === patient.id);
 
       apps.sort((a: any, b: any) => {
+        const isCancA = isAppointmentCancelled(a.status);
+        const isCancB = isAppointmentCancelled(b.status);
+        if (isCancA !== isCancB) return isCancA ? 1 : -1;
         const dateCmp = (b.date || '').localeCompare(a.date || '');
         if (dateCmp !== 0) return dateCmp;
         return (b.time || '').localeCompare(a.time || '');
@@ -1418,6 +1421,7 @@ export function PatientDetailView({
                 const activeNextTreatment = nextAptData.treatment || (evolutionTreatments[0]?.treatmentName || '');
                 const nextDuration = getEffectiveDuration(activeNextTreatment, null, treatments, profDefault);
                 const suggestedNextSlots = getSuggestedAvailableSlots(nextAptData.date, nextDuration, allDoctorAppointments, workingHours);
+                const isFirstOfDate = (allDoctorAppointments || []).filter(a => a.date === nextAptData.date && a.status !== 'cancelado' && a.status !== 'cancelled').length === 0;
                 return (
                   <SuggestedSlotsPicker
                     slots={suggestedNextSlots}
@@ -1427,6 +1431,7 @@ export function PatientDetailView({
                     treatmentName={activeNextTreatment}
                     dateStr={nextAptData.date}
                     workingHours={workingHours}
+                    isFirstAppointment={isFirstOfDate}
                   />
                 );
               })()}

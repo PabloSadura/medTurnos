@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { Modal } from './Modal';
 import { useToast } from './Toast';
-import { calculateEndTime, getAppointmentStatusStyles } from '../lib/agendaUtils';
+import { calculateEndTime, getAppointmentStatusStyles, compareAppointments } from '../lib/agendaUtils';
 import { cn } from '../lib/utils';
 
 interface ExportDayAgendaModalProps {
@@ -63,7 +63,7 @@ export function ExportDayAgendaModal({
   // Filter and sort appointments for the selected date
   const dayAppointments = useMemo(() => {
     const list = appointments.filter(a => a.date === currentDateString);
-    return list.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+    return list.sort(compareAppointments);
   }, [appointments, currentDateString]);
 
   // Enrich appointment with patient and treatment details

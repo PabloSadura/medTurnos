@@ -8,12 +8,28 @@ export const DEFAULT_GOOGLE_CLIENT_ID = '410876856184-50cmm871petrptm30kn2ciloah
 export const getGoogleClientId = (): string => {
   const customClientId = localStorage.getItem('medturnos_custom_oauth_client_id');
   const envClientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID as string | undefined;
+  const projectClientId = (firebaseConfig as any).oAuthClientId as string | undefined;
+
+  // Custom user-configured Client ID or env overrides take first precedence
+  if (customClientId && customClientId.trim()) return customClientId.trim();
+  if (envClientId && envClientId.trim()) return envClientId.trim();
+
+  // If a project OAuth Client ID exists in config, check if default fallback is preferred
   return (
-    (envClientId && envClientId.trim()) ||
     (customClientId && customClientId.trim()) ||
+    (envClientId && envClientId.trim()) ||
     DEFAULT_GOOGLE_CLIENT_ID ||
-    (firebaseConfig as any).oAuthClientId
+    (projectClientId && projectClientId.trim()) ||
+    ''
   );
+};
+
+export const setCustomGoogleClientId = (clientId: string) => {
+  if (clientId && clientId.trim()) {
+    localStorage.setItem('medturnos_custom_oauth_client_id', clientId.trim());
+  } else {
+    localStorage.removeItem('medturnos_custom_oauth_client_id');
+  }
 };
 
 export const GOOGLE_CLIENT_ID = getGoogleClientId();

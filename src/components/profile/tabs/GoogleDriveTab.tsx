@@ -13,9 +13,15 @@ import {
   User, 
   AlertTriangle,
   Info,
-  Trash2
+  Trash2,
+  Key,
+  Copy,
+  HelpCircle,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { useGoogleDrive } from '../../../contexts/GoogleDriveContext';
+import { getGoogleClientId, setCustomGoogleClientId } from '../../../lib/googleDrive';
 import { ProfileState } from '../../../types/profile';
 import { cn } from '../../../lib/utils';
 
@@ -45,6 +51,25 @@ export function GoogleDriveTab({
   const [isDisconnectModalOpen, setIsDisconnectModalOpen] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [verifyingRoot, setVerifyingRoot] = useState(false);
+
+  // Custom OAuth Client ID & Origin Troubleshooting state
+  const [customClientIdInput, setCustomClientIdInput] = useState(() => localStorage.getItem('medturnos_custom_oauth_client_id') || '');
+  const [showOAuthHelp, setShowOAuthHelp] = useState(false);
+
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://ais-dev-3kwo2v25dudxhaqgrpqa5c-166114037624.us-east5.run.app';
+  const activeClientId = getGoogleClientId();
+
+  const handleSaveCustomClientId = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = customClientIdInput.trim();
+    setCustomGoogleClientId(trimmed);
+    showToast(trimmed ? 'ID de Cliente OAuth guardado con éxito' : 'Se restauró el ID de Cliente predeterminado', 'success');
+  };
+
+  const handleCopyOrigin = () => {
+    navigator.clipboard.writeText(currentOrigin);
+    showToast(`Origen copiado: ${currentOrigin}`, 'info');
+  };
 
   const handleConfirmDisconnect = async () => {
     setIsDisconnecting(true);
@@ -242,6 +267,82 @@ export function GoogleDriveTab({
               </button>
             )}
           </div>
+        </div>
+
+        {/* SECTION: Custom OAuth Client ID & Error 400 origin_mismatch Resolver */}
+        <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Key size={15} className="text-primary" />
+              <span className="text-xs font-bold text-on-surface">Configuración de Cliente OAuth y Cuentas de Gmail</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowOAuthHelp(!showOAuthHelp)}
+              className="text-[11px] font-bold text-primary hover:underline flex items-center gap-1 cursor-pointer"
+            >
+              <HelpCircle size={13} />
+              <span>¿Error 400 origin_mismatch?</span>
+              {showOAuthHelp ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
+          </div>
+
+          <p className="text-[11px] text-on-surface-variant leading-relaxed">
+            Cada profesional puede conectar su propia cuenta de Gmail y Google Drive institucional o personal. Si tu consola de Google Cloud muestra el <b>Error 400: origin_mismatch</b>, se debe a que el dominio actual de la aplicación debe estar registrado en los <i>Orígenes de JavaScript autorizados</i> del Client ID.
+          </p>
+
+          {showOAuthHelp && (
+            <div className="p-3 bg-white border border-slate-300 rounded-lg space-y-2 text-xs text-slate-700">
+              <div className="flex items-center justify-between bg-slate-100 p-2 rounded-md">
+                <span className="font-mono text-[11px] text-slate-800 break-all select-all">{currentOrigin}</span>
+                <button
+                  type="button"
+                  onClick={handleCopyOrigin}
+                  className="px-2.5 py-1 bg-white hover:bg-slate-200 border border-slate-300 rounded text-[10px] font-bold text-slate-800 flex items-center gap-1 shrink-0 ml-2 cursor-pointer"
+                >
+                  <Copy size={12} />
+                  <span>Copiar Origen</span>
+                </button>
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600 pl-1 leading-relaxed">
+                <li>Ve a <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-primary font-bold hover:underline inline-flex items-center gap-0.5">Google Cloud Console &gt; Credenciales <ExternalLink size={10} /></a>.</li>
+                <li>Selecciona tu <b>ID de cliente de OAuth 2.0</b> (tipo Aplicación web).</li>
+                <li>En la sección <b>Orígenes de JavaScript autorizados</b>, haz clic en <i>+ Agregar URI</i> y pega el origen copiado arriba.</li>
+                <li>Guarda los cambios y vuelve a pulsar <b>Conectar Google Drive</b>.</li>
+              </ol>
+            </div>
+          )}
+
+          <form onSubmit={handleSaveCustomClientId} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+            <div className="flex-1">
+              <input
+                type="text"
+                value={customClientIdInput}
+                onChange={(e) => setCustomClientIdInput(e.target.value)}
+                placeholder={activeClientId || "Ingresa tu OAuth Client ID (ej: 123...apps.googleusercontent.com)"}
+                className="w-full px-3 py-2 bg-white text-xs border border-outline-variant rounded-xl font-mono text-slate-800 outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+              />
+            </div>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer"
+            >
+              Guardar Client ID
+            </button>
+            {customClientIdInput && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomClientIdInput('');
+                  setCustomGoogleClientId('');
+                  showToast('Se restableció el Client ID predeterminado', 'info');
+                }}
+                className="px-3 py-2 bg-surface hover:bg-slate-200 text-on-surface-variant rounded-xl text-xs font-bold transition-all shrink-0 border border-outline-variant cursor-pointer"
+              >
+                Restablecer
+              </button>
+            )}
+          </form>
         </div>
       </div>
 

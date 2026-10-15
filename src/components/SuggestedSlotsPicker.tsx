@@ -11,6 +11,7 @@ interface SuggestedSlotsPickerProps {
   treatmentName?: string;
   dateStr: string;
   workingHours?: any;
+  isFirstAppointment?: boolean;
 }
 
 export const SuggestedSlotsPicker: React.FC<SuggestedSlotsPickerProps> = ({
@@ -20,7 +21,8 @@ export const SuggestedSlotsPicker: React.FC<SuggestedSlotsPickerProps> = ({
   duration,
   treatmentName,
   dateStr,
-  workingHours
+  workingHours,
+  isFirstAppointment
 }) => {
   const [filterMode, setFilterMode] = useState<'all' | 'free' | 'overturn'>('all');
   const dayInfo = getWorkingHoursDayInfo(dateStr, workingHours);
@@ -51,7 +53,17 @@ export const SuggestedSlotsPicker: React.FC<SuggestedSlotsPickerProps> = ({
           <div>
             <h4 className="text-xs font-black text-on-surface flex items-center gap-1.5 flex-wrap">
               Horarios Sugeridos
-              {isSelectedOverturn ? (
+              {isFirstAppointment === true ? (
+                <span className="text-[10px] font-bold text-sky-800 bg-sky-100 border border-sky-300 px-1.5 py-0.2 rounded-md flex items-center gap-0.5">
+                  <Sparkles size={10} className="text-sky-700" />
+                  Primer turno (Horario configurado)
+                </span>
+              ) : isFirstAppointment === false ? (
+                <span className="text-[10px] font-bold text-teal-800 bg-teal-100 border border-teal-300 px-1.5 py-0.2 rounded-md flex items-center gap-0.5">
+                  <Clock size={10} className="text-teal-700" />
+                  Dinámico por turnos agendados
+                </span>
+              ) : isSelectedOverturn ? (
                 <span className="text-[10px] font-bold text-purple-900 bg-purple-100 border border-purple-300 px-1.5 py-0.2 rounded-md flex items-center gap-0.5">
                   <Zap size={10} className="fill-purple-700 text-purple-700" />
                   Horario con sobreturno
