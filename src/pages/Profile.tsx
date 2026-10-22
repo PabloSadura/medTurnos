@@ -3,9 +3,7 @@ import {
   User, 
   Clock, 
   Shield, 
-  Cloud, 
   FileText, 
-  AlertTriangle, 
   Save, 
   Loader2,
   CheckCircle2,
@@ -16,7 +14,6 @@ import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { sendEmailVerification, sendPasswordResetEmail } from 'firebase/auth';
 import { useAuth, isAdminRole } from '../contexts/AuthContext';
-import { useGoogleDrive } from '../contexts/GoogleDriveContext';
 import { cn } from '../lib/utils';
 import { logAuditEvent } from '../lib/auditLogger';
 import { ProfileTab, ProfileState, DEFAULT_PROFILE } from '../types/profile';
@@ -27,17 +24,12 @@ import { AdminScopeCard } from '../components/profile/AdminScopeCard';
 import { PersonalInfoTab } from '../components/profile/tabs/PersonalInfoTab';
 import { ScheduleTab } from '../components/profile/tabs/ScheduleTab';
 import { SecurityTab } from '../components/profile/tabs/SecurityTab';
-import { GoogleDriveTab } from '../components/profile/tabs/GoogleDriveTab';
 import { AuditLogsTab } from '../components/profile/tabs/AuditLogsTab';
 import { PatientPublicProfilePreview } from '../components/PatientPublicProfilePreview';
 import { AvatarCropModal } from '../components/AvatarCropModal';
 
 export function Profile() {
   const { user, profile: authProfile } = useAuth();
-  const { 
-    isConnected: isDriveConnected, 
-    disconnectGoogleDrive
-  } = useGoogleDrive();
 
   // Tab State
   const [activeTab, setActiveTab] = useState<ProfileTab>('info');
@@ -60,7 +52,6 @@ export function Profile() {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
   const [tempImageForCrop, setTempImageForCrop] = useState<string | null>(null);
-  const [isDisconnectModalOpen, setIsDisconnectModalOpen] = useState(false);
 
   // Cooldown counters
   const [verifyEmailCooldown, setVerifyEmailCooldown] = useState(0);
@@ -527,24 +518,6 @@ export function Profile() {
           <span>Seguridad y Cuenta</span>
         </button>
 
-        <button
-          role="tab"
-          id="tab-integrations"
-          aria-selected={activeTab === 'integrations'}
-          aria-controls="panel-integrations"
-          tabIndex={activeTab === 'integrations' ? 0 : -1}
-          onClick={() => setActiveTab('integrations')}
-          className={cn(
-            "flex items-center gap-2 py-3 sm:py-3.5 px-3 sm:px-4 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer whitespace-nowrap min-h-[44px]",
-            activeTab === 'integrations'
-              ? "border-primary text-primary"
-              : "border-transparent text-on-surface-variant hover:text-on-surface"
-          )}
-        >
-          <Cloud size={15} />
-          <span>Google Drive y Nube</span>
-        </button>
-
         {isAdmin && (
           <button
             role="tab"
@@ -596,15 +569,6 @@ export function Profile() {
           resetEmailCooldown={resetEmailCooldown}
           onVerifyEmail={handleVerifyEmail}
           onSendResetEmail={handleSendResetPasswordEmail}
-          showToast={showToast}
-        />
-      )}
-
-      {activeTab === 'integrations' && (
-        <GoogleDriveTab
-          profile={profile}
-          isAdmin={isAdmin}
-          onChange={handleFieldChange}
           showToast={showToast}
         />
       )}
@@ -662,54 +626,6 @@ export function Profile() {
         phone={profile.phone}
         photoURL={profile.photoURL}
       />
-
-      {/* Disconnect Google Drive Modal */}
-      {isDisconnectModalOpen && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs font-sans"
-          role="presentation"
-        >
-          <div 
-            className="bg-white rounded-2xl border border-outline-variant shadow-2xl max-w-md w-full p-6 space-y-4"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="disconnect-modal-title"
-          >
-            <div className="flex items-center gap-3 text-error">
-              <AlertTriangle size={24} />
-              <h3 id="disconnect-modal-title" className="text-base font-bold text-on-surface">
-                ¿Desconectar Google Drive?
-              </h3>
-            </div>
-
-            <p className="text-xs text-on-surface-variant leading-relaxed">
-              Al desconectar su cuenta, MedTurnos dejará de sincronizar archivos en su Google Drive institucional. 
-              <strong> Los documentos e imágenes ya subidos a su carpeta personal de Drive no serán eliminados</strong> y permanecerán seguros en su cuenta de Google.
-            </p>
-
-            <div className="flex items-center justify-end gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsDisconnectModalOpen(false)}
-                className="px-4 py-2 text-xs font-bold text-on-surface-variant hover:text-on-surface rounded-xl border border-outline-variant bg-surface transition-colors cursor-pointer min-h-[40px]"
-              >
-                Cancelar
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  disconnectGoogleDrive();
-                  setIsDisconnectModalOpen(false);
-                }}
-                className="px-4 py-2 text-xs font-black uppercase tracking-wider text-white bg-error hover:bg-error/90 rounded-xl transition-all cursor-pointer min-h-[40px]"
-              >
-                Confirmar Desconexión
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

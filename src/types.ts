@@ -157,7 +157,7 @@ export interface Appointment {
   overlapUpdatedAt?: any;
   clientActionId?: string;
   isOverturnTag?: string | null;
-  status: 'pendiente' | 'confirmed' | 'confirmado' | 'in-session' | 'finished' | 'cancelled' | 'cancelado' | 'ausente';
+  status: 'pendiente' | 'confirmed' | 'confirmado' | 'in-session' | 'finished' | 'cancelled' | 'cancelado' | 'ausente' | 'bloqueado';
   type: string;
   treatment?: string;
   treatmentId?: string;
@@ -171,6 +171,9 @@ export interface Appointment {
   patientPackageId?: string;
   packageName?: string;
   treatmentItems?: EvolutionTreatmentItem[];
+  isBlocked?: boolean;
+  blockReason?: string;
+  isAllDayBlock?: boolean;
   createdAt?: any;
   updatedAt?: any;
 }

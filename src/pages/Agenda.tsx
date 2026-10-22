@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock, Stethoscope, Package, Sparkles, Phone, MessageCircle, Zap, X, Download } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Clock, Plus, Filter, User, MoreVertical, Search, CheckCircle2, AlertTriangle, Edit2, CalendarClock, Stethoscope, Package, Sparkles, Phone, MessageCircle, Zap, X, Download, Lock, Unlock, Trash2, Ban } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { Modal } from '../components/Modal';
@@ -8,7 +8,7 @@ import { ClinicalHistoryModal } from '../components/ClinicalHistoryModal';
 import { ReminderModal } from '../components/ReminderModal';
 import { ExportDayAgendaModal } from '../components/ExportDayAgendaModal';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, addDoc, updateDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch, getDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, where, getDocs, increment, writeBatch, getDoc } from 'firebase/firestore';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { consumePackageSession } from '../lib/packageUtils';
@@ -83,10 +83,35 @@ export function Agenda() {
     }
   }, [isNewAppointmentOpen]);
 
+  const formatLocalDate = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
   const [selectedAppointment, setSelectedAppointment] = useState<any>(null);
   const [reminderModalApt, setReminderModalApt] = useState<any | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isBlockModalOpen, setIsBlockModalOpen] = useState(false);
+  const [isBlockingAgenda, setIsBlockingAgenda] = useState(false);
+  const [blockData, setBlockData] = useState<{
+    id?: string;
+    date: string;
+    time: string;
+    duration: number;
+    isAllDay: boolean;
+    reason: string;
+    notes: string;
+  }>({
+    date: formatLocalDate(new Date()),
+    time: '09:00',
+    duration: 60,
+    isAllDay: false,
+    reason: 'Almuerzo / Descanso',
+    notes: ''
+  });
   const [isClinicalHistoryOpen, setIsClinicalHistoryOpen] = useState(false);
   const [clinicalHistoryAppointment, setClinicalHistoryAppointment] = useState<any>(null);
   const [clinicalHistoryPatient, setClinicalHistoryPatient] = useState<any>(null);
@@ -128,13 +153,6 @@ export function Agenda() {
     idNumber: '',
     birthDate: ''
   });
-  
-  const formatLocalDate = (date: Date) => {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  };
 
   const [patientPackages, setPatientPackages] = useState<PatientPackage[]>([]);
 
@@ -332,7 +350,99 @@ export function Agenda() {
     setSelectedPatientStats(null);
     setPatientPackages([]);
     setIsPatientDropdownOpen(false);
+    setIsBlockingAgenda(false);
     setIsNewAppointmentOpen(true);
+  };
+
+  const handleOpenBlockModal = (targetDate?: string, targetTime?: string, existingBlock?: any) => {
+    const finalDate = targetDate || formatLocalDate(selectedDate || new Date());
+    if (existingBlock) {
+      setBlockData({
+        id: existingBlock.id,
+        date: existingBlock.date || finalDate,
+        time: existingBlock.time || '09:00',
+        duration: Number(existingBlock.duration) > 0 ? Number(existingBlock.duration) : 60,
+        isAllDay: Boolean(existingBlock.isAllDayBlock),
+        reason: existingBlock.blockReason || (existingBlock.patientName ? existingBlock.patientName.replace('[Bloqueado] ', '') : 'Almuerzo / Descanso'),
+        notes: existingBlock.notes || ''
+      });
+    } else {
+      const defaultTime = targetTime || (workingHours?.morningStart || '09:00');
+      setBlockData({
+        id: undefined,
+        date: finalDate,
+        time: defaultTime,
+        duration: 60,
+        isAllDay: false,
+        reason: 'Almuerzo / Descanso',
+        notes: ''
+      });
+    }
+    setIsBlockModalOpen(true);
+  };
+
+  const handleSaveBlock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmittingAppointment) return;
+    setIsSubmittingAppointment(true);
+    try {
+      let finalTime = blockData.time;
+      let finalDuration = Number(blockData.duration) > 0 ? Number(blockData.duration) : 60;
+
+      if (blockData.isAllDay) {
+        finalTime = (workingHours?.morningActive !== false && workingHours?.morningStart) ? workingHours.morningStart : '08:00';
+        const startMin = timeToMinutes(finalTime);
+        const endMin = timeToMinutes((workingHours?.afternoonActive !== false && workingHours?.afternoonEnd) ? workingHours.afternoonEnd : '20:00');
+        finalDuration = Math.max(600, endMin - startMin);
+      }
+
+      const reasonLabel = blockData.reason.trim() || 'Bloqueo de Agenda';
+
+      await saveAppointmentWithPersistenceCheck({
+        id: blockData.id,
+        patientId: 'agenda_block',
+        patientName: `[Bloqueado] ${reasonLabel}`,
+        date: blockData.date,
+        time: finalTime,
+        duration: finalDuration,
+        type: blockData.isAllDay ? 'Bloqueo Completo' : 'Bloqueo de Horario',
+        treatment: 'Bloqueo de Agenda',
+        notes: blockData.notes || '',
+        status: 'bloqueado',
+        cost: 0,
+        price: 0,
+        paidAmount: 0,
+        userId: ownerId,
+        isBlocked: true,
+        blockReason: reasonLabel,
+        isAllDayBlock: Boolean(blockData.isAllDay),
+        workingHours
+      }, Boolean(blockData.id));
+
+      setIsBlockModalOpen(false);
+      showToast(
+        blockData.isAllDay
+          ? `Agenda bloqueada para toda la jornada del ${blockData.date}.`
+          : `Horario bloqueado (${finalTime} hs, ${finalDuration} min) en la agenda.`,
+        'success'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'appointments');
+    } finally {
+      setIsSubmittingAppointment(false);
+    }
+  };
+
+  const handleUnblockAppointment = async (aptId: string) => {
+    if (!aptId) return;
+    try {
+      await deleteDoc(doc(db, 'appointments', aptId));
+      setIsDetailModalOpen(false);
+      setIsBlockModalOpen(false);
+      showToast('Horario desbloqueado exitosamente. La agenda vuelve a estar disponible.', 'success');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `appointments/${aptId}`);
+    }
   };
 
   useEffect(() => {
@@ -386,6 +496,50 @@ export function Agenda() {
     if (isSubmittingAppointment) return;
     setIsSubmittingAppointment(true);
     try {
+      if (isBlockingAgenda) {
+        let finalTime = newApt.time;
+        let finalDuration = Number(blockData.duration) > 0 ? Number(blockData.duration) : 60;
+
+        if (blockData.isAllDay) {
+          finalTime = (workingHours?.morningActive !== false && workingHours?.morningStart) ? workingHours.morningStart : '08:00';
+          const startMin = timeToMinutes(finalTime);
+          const endMin = timeToMinutes((workingHours?.afternoonActive !== false && workingHours?.afternoonEnd) ? workingHours.afternoonEnd : '20:00');
+          finalDuration = Math.max(600, endMin - startMin);
+        }
+
+        const reasonLabel = blockData.reason.trim() || 'Bloqueo de Agenda';
+
+        await saveAppointmentWithPersistenceCheck({
+          patientId: 'agenda_block',
+          patientName: `[Bloqueado] ${reasonLabel}`,
+          date: newApt.date,
+          time: finalTime,
+          duration: finalDuration,
+          type: blockData.isAllDay ? 'Bloqueo Completo' : 'Bloqueo de Horario',
+          treatment: 'Bloqueo de Agenda',
+          notes: newApt.notes || blockData.notes || '',
+          status: 'bloqueado',
+          cost: 0,
+          price: 0,
+          paidAmount: 0,
+          userId: ownerId,
+          isBlocked: true,
+          blockReason: reasonLabel,
+          isAllDayBlock: Boolean(blockData.isAllDay),
+          workingHours
+        }, false);
+
+        setIsNewAppointmentOpen(false);
+        setIsBlockingAgenda(false);
+        showToast(
+          blockData.isAllDay
+            ? `Jornada del ${newApt.date} bloqueada exitosamente.`
+            : `Horario bloqueado (${finalTime} hs, ${finalDuration} min) en la agenda.`,
+          'success'
+        );
+        return;
+      }
+
       let patientId = newApt.patientId;
       let patientName = newApt.patientName;
       let patientFirstName = newApt.patientFirstName || '';
@@ -859,7 +1013,7 @@ export function Agenda() {
           <button
             type="button"
             onClick={() => setIsExportDayModalOpen(true)}
-            className="px-3 sm:px-3.5 py-2 bg-white text-on-surface hover:bg-surface border border-outline-variant rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all shadow-xs uppercase tracking-wider shrink-0"
+            className="px-3 sm:px-3.5 py-2 bg-white text-on-surface hover:bg-surface border border-outline-variant rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all shadow-xs uppercase tracking-wider shrink-0 cursor-pointer"
             title="Exportar agenda del día con pacientes, tratamientos, turnos y notas"
           >
             <Download size={14} className="text-primary shrink-0" />
@@ -867,9 +1021,20 @@ export function Agenda() {
             <span className="xs:hidden">Exportar</span>
           </button>
 
+          <button
+            type="button"
+            onClick={() => handleOpenBlockModal(formatLocalDate(selectedDate))}
+            className="px-3 sm:px-3.5 py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all shadow-xs uppercase tracking-wider shrink-0 cursor-pointer"
+            title="Bloquear un horario o el día completo en la agenda"
+          >
+            <Lock size={14} className="text-amber-700 shrink-0" />
+            <span className="hidden xs:inline">Bloquear Horario</span>
+            <span className="xs:hidden">Bloquear</span>
+          </button>
+
           <button 
             onClick={() => handleOpenNewAppointment()}
-            className="px-3 sm:px-4 py-2 bg-primary text-white rounded-xl text-xs font-bold flex items-center gap-1.5 sm:gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-xs uppercase tracking-wider shrink-0"
+            className="px-3 sm:px-4 py-2 bg-primary text-white rounded-xl text-xs font-bold flex items-center gap-1.5 sm:gap-2 hover:bg-primary/90 active:scale-95 transition-all shadow-xs uppercase tracking-wider shrink-0 cursor-pointer"
           >
             <Plus size={15} />
             <span className="hidden xs:inline">Nuevo Turno</span>
@@ -1004,6 +1169,20 @@ export function Agenda() {
                         {dayAppointments
                           .slice(0, 3)
                           .map((apt) => {
+                            if (apt.isBlocked || apt.status === 'bloqueado') {
+                              return (
+                                <div 
+                                  key={apt.id} 
+                                  className="w-full px-1.5 py-0.5 rounded text-[10px] font-bold truncate border flex items-center gap-1 bg-slate-100 text-slate-800 border-slate-300"
+                                  title={`Bloqueado: ${apt.blockReason || 'Agenda Bloqueada'}`}
+                                >
+                                  <Lock size={8} className="shrink-0 text-slate-700" />
+                                  <span className="truncate">
+                                    {apt.isAllDayBlock ? 'Todo el día' : apt.time} {apt.blockReason || 'Bloqueado'}
+                                  </span>
+                                </div>
+                              );
+                            }
                             const styles = getAppointmentStatusStyles(apt.status);
                             return (
                               <div 
@@ -1098,18 +1277,32 @@ export function Agenda() {
                                   zIndex: (apt.isOverturn ? 20 : 10) + layout.colIndex
                                 }}
                               >
-                                <div className="flex items-center justify-between gap-1">
-                                  <p className="text-[11px] font-black truncate">{apt.patientName}</p>
-                                  {apt.isOverturn && (
-                                    <span className="px-1.5 py-0.5 rounded bg-purple-200 text-purple-900 text-[8px] font-black uppercase shrink-0 flex items-center gap-0.5 border border-purple-300">
-                                      <Zap size={7} className="fill-purple-700 text-purple-700" />
-                                      Sobre Turno
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-[9px] font-bold opacity-75 uppercase truncate">
-                                  {apt.time} - {calculatedEnd} ({duration}m)
-                                </p>
+                                {apt.isBlocked || apt.status === 'bloqueado' ? (
+                                  <div className="flex flex-col gap-0.5">
+                                    <div className="flex items-center gap-1">
+                                      <Lock size={10} className="text-slate-700 shrink-0" />
+                                      <p className="text-[10px] font-black truncate text-slate-900">{apt.blockReason || 'Bloqueado'}</p>
+                                    </div>
+                                    <p className="text-[9px] font-bold text-slate-600 uppercase truncate">
+                                      {apt.isAllDayBlock ? 'Todo el día' : `${apt.time} - ${calculatedEnd}`}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="flex items-center justify-between gap-1">
+                                      <p className="text-[11px] font-black truncate">{apt.patientName}</p>
+                                      {apt.isOverturn && (
+                                        <span className="px-1.5 py-0.5 rounded bg-purple-200 text-purple-900 text-[8px] font-black uppercase shrink-0 flex items-center gap-0.5 border border-purple-300">
+                                          <Zap size={7} className="fill-purple-700 text-purple-700" />
+                                          Sobre Turno
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-[9px] font-bold opacity-75 uppercase truncate">
+                                      {apt.time} - {calculatedEnd} ({duration}m)
+                                    </p>
+                                  </>
+                                )}
                               </div>
                             );
                           });
@@ -1142,6 +1335,7 @@ export function Agenda() {
                       const duration = apt.duration || 30;
                       const calculatedEnd = apt.endTime || calculateEndTime(apt.time, duration);
                       const layout = dayLayoutMap[apt.id] || { colIndex: 0, totalCols: 1, leftPercent: 0, widthPercent: 100 };
+                      const isBlocked = apt.isBlocked || apt.status === 'bloqueado';
                       const styles = getAppointmentStatusStyles(apt.status);
                       return (
                         <motion.div
@@ -1156,20 +1350,22 @@ export function Agenda() {
                             styles.borderColor,
                             styles.borderLeftColor,
                             styles.shadow,
-                            apt.isOverturn && "ring-2 ring-purple-400 shadow-purple-900/10"
+                            apt.isOverturn && "ring-2 ring-purple-400 shadow-purple-900/10",
+                            isBlocked && "bg-slate-100/95 border-slate-300 border-l-slate-700 text-slate-800"
                           )}
                           style={{
                             top: `${((h - startHour) * 100 + (m / 60) * 100)}px`,
                             height: `${Math.max(48, ((duration) / 60) * 100 - 4)}px`,
                             left: `calc(8px + ${layout.leftPercent}% * 0.94)`,
                             width: `calc(${layout.widthPercent}% * 0.94)`,
-                            zIndex: (apt.isOverturn ? 25 : 10) + layout.colIndex
+                            zIndex: (apt.isOverturn ? 25 : (isBlocked ? 20 : 10)) + layout.colIndex
                           }}
                         >
                           <div className="flex justify-between items-center gap-1">
                             <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-                              <span className="text-[10px] sm:text-[12px] font-black uppercase tracking-wider opacity-80 truncate">
-                                {apt.time} - {calculatedEnd} hs ({duration}m) • {apt.type || apt.treatment}
+                              <span className="text-[10px] sm:text-[12px] font-black uppercase tracking-wider opacity-80 truncate flex items-center gap-1">
+                                {isBlocked && <Lock size={12} className="shrink-0 text-slate-600" />}
+                                {apt.time} - {calculatedEnd} hs ({duration}m) • {isBlocked ? (apt.isAllDayBlock ? 'Todo el día' : 'Bloqueo Agenda') : (apt.type || apt.treatment)}
                               </span>
                               {apt.isOverturn && (
                                 <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-purple-200 text-purple-900 border border-purple-300 flex items-center gap-1 shrink-0">
@@ -1179,15 +1375,25 @@ export function Agenda() {
                               )}
                             </div>
                             <span className={cn(
-                              "text-[9px] sm:text-[10px] font-black px-2 py-0.5 rounded capitalize shrink-0 border",
-                              styles.badgeBg,
-                              styles.badgeText,
-                              styles.badgeBorder
+                              "text-[9px] sm:text-[10px] font-black px-2 py-0.5 rounded capitalize shrink-0 border flex items-center gap-1",
+                              isBlocked ? "bg-slate-200 text-slate-800 border-slate-300" : (
+                                cn(styles.badgeBg, styles.badgeText, styles.badgeBorder)
+                              )
                             )}>
-                              {styles.label}
+                              {isBlocked && <Lock size={9} />}
+                              {isBlocked ? 'Bloqueado' : styles.label}
                             </span>
                           </div>
-                          <h4 className="text-[13px] sm:text-[16px] font-black tracking-tight truncate">{apt.patientName}</h4>
+                          <h4 className="text-[13px] sm:text-[16px] font-black tracking-tight truncate flex items-center gap-1.5">
+                            {isBlocked ? (
+                              <>
+                                <Ban size={14} className="text-slate-500 shrink-0" />
+                                <span>{apt.blockReason || (apt.patientName ? apt.patientName.replace('[Bloqueado] ', '') : 'Horario Bloqueado')}</span>
+                              </>
+                            ) : (
+                              apt.patientName
+                            )}
+                          </h4>
                         </motion.div>
                       );
                     });
@@ -1225,8 +1431,17 @@ export function Agenda() {
 
               <div className="flex items-center gap-2.5 self-start sm:self-auto flex-wrap">
                 <span className="text-xs font-bold px-3 py-1.5 bg-surface-bright text-on-surface rounded-xl border border-outline-variant">
-                  {selectedDateAppointments.length} {selectedDateAppointments.length === 1 ? 'turno agendado' : 'turnos agendados'}
+                  {selectedDateAppointments.length} {selectedDateAppointments.length === 1 ? 'registro' : 'registros'}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => handleOpenBlockModal(formatLocalDate(selectedDate))}
+                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all shadow-2xs uppercase tracking-wider"
+                  title="Bloquear un horario o toda la jornada"
+                >
+                  <Lock size={14} />
+                  Bloquear Horario
+                </button>
                 <button
                   type="button"
                   onClick={() => handleOpenNewAppointment(formatLocalDate(selectedDate))}
@@ -1241,24 +1456,128 @@ export function Agenda() {
             {selectedDateAppointments.length === 0 ? (
               <div className="py-12 px-4 text-center bg-surface-bright/50 rounded-xl border border-outline-variant/60">
                 <Calendar size={40} className="mx-auto text-on-surface-variant/40 mb-3" />
-                <h4 className="text-sm font-black text-on-surface">No hay turnos agendados para este día</h4>
+                <h4 className="text-sm font-black text-on-surface">No hay turnos ni bloqueos para este día</h4>
                 <p className="text-xs text-on-surface-variant mt-1 max-w-sm mx-auto">
-                  No se encontraron citas para el {new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'long' }).format(selectedDate)}. Seleccione otro día del calendario o presione el botón para agendar un turno.
+                  No se encontraron citas ni bloqueos para el {new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'long' }).format(selectedDate)}. Seleccione otro día del calendario o presione un botón para continuar.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => handleOpenNewAppointment(formatLocalDate(selectedDate))}
-                  className="mt-4 px-4 py-2 bg-white text-primary border border-primary/30 hover:bg-primary/5 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-xs"
-                >
-                  <Plus size={14} />
-                  Agendar Turno para esta fecha
-                </button>
+                <div className="mt-4 flex items-center justify-center gap-2.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenNewAppointment(formatLocalDate(selectedDate))}
+                    className="px-4 py-2 bg-primary text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 hover:bg-primary/90 transition-all shadow-xs"
+                  >
+                    <Plus size={14} />
+                    Agendar Turno
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenBlockModal(formatLocalDate(selectedDate))}
+                    className="px-4 py-2 bg-slate-100 text-slate-700 border border-slate-300 hover:bg-slate-200 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-xs"
+                  >
+                    <Lock size={14} />
+                    Bloquear Horario / Jornada
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {selectedDateAppointments.map((apt) => {
+                  const isBlocked = apt.isBlocked || apt.status === 'bloqueado';
                   const phone = getPatientPhone(apt);
                   const styles = getAppointmentStatusStyles(apt.status);
+
+                  if (isBlocked) {
+                    return (
+                      <motion.div
+                        key={apt.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="p-4 rounded-xl border border-l-4 border-slate-300 border-l-slate-700 bg-slate-50/70 transition-all flex flex-col justify-between gap-3 relative group shadow-xs hover:shadow-md"
+                      >
+                        <div>
+                          {/* Header: Hora & Badge Bloqueado */}
+                          <div className="flex items-center justify-between gap-2 mb-2.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs font-black text-slate-800 bg-slate-200 px-2.5 py-1 rounded-lg border border-slate-300 flex items-center gap-1">
+                                <Lock size={12} className="text-slate-600" />
+                                {apt.isAllDayBlock
+                                  ? 'Todo el día'
+                                  : `${apt.time} - ${apt.endTime || calculateEndTime(apt.time, apt.duration || 60)} hs`}
+                              </span>
+                              <span className="text-[11px] font-semibold text-slate-500">
+                                ({apt.isAllDayBlock ? 'Jornada Completa' : `${apt.duration || 60} min`})
+                              </span>
+                            </div>
+
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border bg-slate-200 text-slate-800 border-slate-300 flex items-center gap-1">
+                              <Lock size={10} />
+                              Bloqueado
+                            </span>
+                          </div>
+
+                          {/* Motivo del bloqueo */}
+                          <div className="space-y-1">
+                            <h4 
+                              onClick={() => handleAppointmentClick(apt)}
+                              className="text-base font-black text-slate-800 hover:text-primary transition-colors cursor-pointer flex items-center gap-1.5"
+                            >
+                              <Ban size={15} className="text-slate-500 shrink-0" />
+                              <span>{apt.blockReason || (apt.patientName ? apt.patientName.replace('[Bloqueado] ', '') : 'Bloqueo de Agenda')}</span>
+                            </h4>
+                            <p className="text-[11px] font-medium text-slate-500">
+                              Tiempo reservado sin asignación de pacientes
+                            </p>
+                          </div>
+
+                          {apt.notes && (
+                            <p className="mt-2.5 text-xs text-slate-600 bg-white p-2 rounded-lg border border-slate-200 line-clamp-2">
+                              {apt.notes}
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Barra de Acciones para Bloqueos */}
+                        <div className="pt-3 border-t border-slate-200 flex items-center justify-between gap-2 mt-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleUnblockAppointment(apt.id);
+                            }}
+                            title="Desbloquear este horario de la agenda"
+                            className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Trash2 size={13} />
+                            <span>Desbloquear</span>
+                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenBlockModal(apt.date, apt.time, apt);
+                              }}
+                              title="Modificar duración o motivo del bloqueo"
+                              className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit2 size={13} />
+                              <span>Modificar</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleAppointmentClick(apt)}
+                              title="Ver detalle del bloqueo"
+                              className="px-2.5 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                            >
+                              <span>Detalle</span>
+                              <ChevronRight size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  }
+
                   return (
                     <motion.div
                       key={apt.id}
@@ -1407,20 +1726,63 @@ export function Agenda() {
                   {new Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'numeric', month: 'long' }).format(selectedDate)}
                 </h3>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsExportDayModalOpen(true)}
-                className="p-2 bg-white hover:bg-surface text-on-surface border border-outline-variant rounded-xl transition-colors shadow-2xs"
-                title="Exportar agenda del día"
-              >
-                <Download size={15} className="text-primary" />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleOpenBlockModal(formatLocalDate(selectedDate))}
+                  className="p-2 bg-white hover:bg-surface text-slate-700 border border-outline-variant rounded-xl transition-colors shadow-2xs"
+                  title="Bloquear un horario o jornada"
+                >
+                  <Lock size={15} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsExportDayModalOpen(true)}
+                  className="p-2 bg-white hover:bg-surface text-on-surface border border-outline-variant rounded-xl transition-colors shadow-2xs"
+                  title="Exportar agenda del día"
+                >
+                  <Download size={15} className="text-primary" />
+                </button>
+              </div>
             </div>
             
             <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar min-h-0">
               {selectedDateAppointments.length > 0 ? (
                 selectedDateAppointments.map((apt) => {
+                  const isBlocked = apt.isBlocked || apt.status === 'bloqueado';
                   const styles = getAppointmentStatusStyles(apt.status);
+
+                  if (isBlocked) {
+                    return (
+                      <motion.div
+                        key={apt.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        onClick={() => handleAppointmentClick(apt)}
+                        className="p-3.5 rounded-xl border border-l-4 border-slate-300 border-l-slate-700 bg-slate-50/80 shadow-none hover:shadow-md transition-all cursor-pointer group relative overflow-hidden"
+                      >
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[12px] font-black text-slate-800 bg-slate-200 px-2 py-0.5 rounded border border-slate-300 flex items-center gap-1">
+                              <Lock size={11} className="text-slate-600" />
+                              {apt.isAllDayBlock ? 'Todo el día' : `${apt.time} - ${apt.endTime || calculateEndTime(apt.time, apt.duration || 60)}`}
+                            </span>
+                          </div>
+                          <span className="w-2 h-2 rounded-full shrink-0 bg-slate-600" />
+                        </div>
+                        <h4 className="text-[14px] font-bold text-slate-800 mb-1 group-hover:text-primary transition-colors flex items-center gap-1.5">
+                          <Ban size={13} className="text-slate-500 shrink-0" />
+                          <span className="truncate">{apt.blockReason || (apt.patientName ? apt.patientName.replace('[Bloqueado] ', '') : 'Bloqueado')}</span>
+                        </h4>
+                        <div className="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-tighter">
+                          <span className="truncate">{apt.isAllDayBlock ? 'Jornada Completa' : `${apt.duration || 60}m`}</span>
+                          <span className="shrink-0">•</span>
+                          <span className="shrink-0 text-slate-600">Agenda Bloqueada</span>
+                        </div>
+                      </motion.div>
+                    );
+                  }
+
                   return (
                     <motion.div
                       key={apt.id}
@@ -1457,21 +1819,21 @@ export function Agenda() {
                         </div>
                         <div className={cn("w-2 h-2 rounded-full shrink-0", styles.dotColor)} />
                       </div>
-                    <h4 className="text-[14px] font-bold text-on-surface mb-1 group-hover:text-primary transition-colors">{apt.patientName}</h4>
-                    <div className="flex items-center gap-2 text-[11px] font-bold text-on-surface-variant uppercase tracking-tighter">
-                      <span className="truncate">{apt.type}</span>
-                      <span className="shrink-0">•</span>
-                      <span className="shrink-0">{apt.duration || 30}m</span>
-                      {apt.isPackageSession && (
-                        <span className="text-[9px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300 flex items-center gap-0.5 ml-auto">
-                          <Package size={9} /> Paquete ($0)
-                        </span>
-                      )}
-                    </div>
-                  </motion.div>
-                );
-              })
-            ) : (
+                      <h4 className="text-[14px] font-bold text-on-surface mb-1 group-hover:text-primary transition-colors">{apt.patientName}</h4>
+                      <div className="flex items-center gap-2 text-[11px] font-bold text-on-surface-variant uppercase tracking-tighter">
+                        <span className="truncate">{apt.type}</span>
+                        <span className="shrink-0">•</span>
+                        <span className="shrink-0">{apt.duration || 30}m</span>
+                        {apt.isPackageSession && (
+                          <span className="text-[9px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300 flex items-center gap-0.5 ml-auto">
+                            <Package size={9} /> Paquete ($0)
+                          </span>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })
+              ) : (
                 <div className="h-full flex flex-col items-center justify-center opacity-30 py-20 text-center">
                   <Calendar size={48} className="mb-4 text-on-surface-variant" />
                   <p className="text-[11px] font-black uppercase tracking-widest leading-loose">
@@ -1487,10 +1849,20 @@ export function Agenda() {
               )}
             </div>
             
-            <div className="p-4 border-t border-outline-variant bg-surface-dim shrink-0">
+            <div className="p-4 border-t border-outline-variant bg-surface-dim shrink-0 flex gap-2">
               <button 
+                type="button"
+                onClick={() => handleOpenBlockModal(formatLocalDate(selectedDate))}
+                className="px-3.5 py-3 bg-white hover:bg-slate-100 text-slate-700 border border-outline-variant rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 transition-all"
+                title="Bloquear un horario"
+              >
+                <Lock size={15} />
+                Bloquear
+              </button>
+              <button 
+                type="button"
                 onClick={() => handleOpenNewAppointment(formatLocalDate(selectedDate))}
-                className="w-full py-3 bg-primary text-white rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:shadow-primary/40 active:scale-95 transition-all"
+                className="flex-1 py-3 bg-primary text-white rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:shadow-primary/40 active:scale-95 transition-all"
               >
                 <Clock size={16} />
                 NUEVO TURNO
@@ -1503,14 +1875,199 @@ export function Agenda() {
       <Modal 
         isOpen={isNewAppointmentOpen} 
         onClose={() => setIsNewAppointmentOpen(false)} 
-        title="Agendar Nuevo Turno"
+        title={isBlockingAgenda ? "Bloquear Horario de Agenda" : "Agendar Nuevo Turno"}
       >
         <form className="space-y-4" onSubmit={handleSaveAppointment}>
-          <div className="space-y-2">
-            <div className="flex justify-between items-center">
-              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Paciente</label>
-              <button 
-                type="button"
+          {/* Selector de Modo: Turno Paciente vs Bloquear Agenda */}
+          <div className="grid grid-cols-2 p-1 bg-surface-bright rounded-xl border border-outline-variant gap-1">
+            <button
+              type="button"
+              onClick={() => setIsBlockingAgenda(false)}
+              className={cn(
+                "py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer",
+                !isBlockingAgenda
+                  ? "bg-white text-primary shadow-xs border border-outline-variant/60"
+                  : "text-on-surface-variant hover:text-on-surface"
+              )}
+            >
+              <User size={14} />
+              Turno Paciente
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsBlockingAgenda(true)}
+              className={cn(
+                "py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer",
+                isBlockingAgenda
+                  ? "bg-slate-800 text-white shadow-xs"
+                  : "text-on-surface-variant hover:text-on-surface"
+              )}
+            >
+              <Lock size={14} />
+              Bloquear Agenda
+            </button>
+          </div>
+
+          {isBlockingAgenda ? (
+            <div className="space-y-4">
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 flex items-start gap-2.5">
+                <Lock size={16} className="text-slate-600 shrink-0 mt-0.5" />
+                <p>
+                  Reserva este espacio en tu agenda para descanso, trámites o compromisos personales. Evita que se asignen pacientes en este intervalo.
+                </p>
+              </div>
+
+              {/* Checkbox: Todo el día */}
+              <label className="flex items-center gap-3 p-3 bg-surface-bright hover:bg-surface rounded-xl border border-outline-variant cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={blockData.isAllDay}
+                  onChange={(e) => setBlockData(prev => ({ ...prev, isAllDay: e.target.checked }))}
+                  className="rounded border-outline-variant text-slate-800 focus:ring-slate-500 w-4 h-4 cursor-pointer"
+                />
+                <div>
+                  <span className="text-xs font-bold text-on-surface block">Bloquear jornada completa (Todo el día)</span>
+                  <span className="text-[11px] text-on-surface-variant">Inhabilita todo el día para turnos de pacientes</span>
+                </div>
+              </label>
+
+              {/* Fecha y Hora */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Fecha</label>
+                  <input
+                    type="date"
+                    required
+                    value={newApt.date}
+                    onChange={(e) => setNewApt(prev => ({ ...prev, date: e.target.value }))}
+                    className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                {!blockData.isAllDay && (
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Hora de inicio</label>
+                    <input
+                      type="time"
+                      required
+                      value={newApt.time}
+                      onChange={(e) => setNewApt(prev => ({ ...prev, time: e.target.value }))}
+                      className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Duración */}
+              {!blockData.isAllDay && (
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                      Duración del Bloqueo
+                    </label>
+                    <span className="text-xs font-bold text-slate-700 font-mono">
+                      {blockData.duration} min ({Math.floor(blockData.duration / 60)}h {blockData.duration % 60 > 0 ? `${blockData.duration % 60}m` : ''})
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { label: '30 min', val: 30 },
+                      { label: '1 hora', val: 60 },
+                      { label: '2 horas', val: 120 },
+                      { label: '3 horas', val: 180 },
+                      { label: '4 horas', val: 240 }
+                    ].map(dur => (
+                      <button
+                        key={dur.val}
+                        type="button"
+                        onClick={() => setBlockData(prev => ({ ...prev, duration: dur.val }))}
+                        className={cn(
+                          "px-3 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer",
+                          blockData.duration === dur.val
+                            ? "bg-slate-800 text-white border-slate-900 shadow-2xs"
+                            : "bg-surface-bright text-on-surface border-outline-variant hover:bg-surface"
+                        )}
+                      >
+                        {dur.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="pt-1 flex items-center gap-2">
+                    <span className="text-[11px] text-on-surface-variant font-medium">O especificar minutos:</span>
+                    <input
+                      type="number"
+                      min={10}
+                      max={720}
+                      step={5}
+                      value={blockData.duration}
+                      onChange={(e) => setBlockData(prev => ({ ...prev, duration: Math.max(10, Number(e.target.value)) }))}
+                      className="w-24 px-2 py-1 bg-surface border border-outline-variant rounded-md text-xs font-mono font-bold"
+                    />
+                    <span className="text-xs text-on-surface-variant">minutos</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Motivo */}
+              <div className="space-y-2">
+                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                  Motivo de la reserva
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    'Almuerzo / Descanso',
+                    'Trámite personal',
+                    'Congreso / Capacitación',
+                    'Reunión de equipo',
+                    'Asuntos médicos',
+                    'Feriado / Asueto'
+                  ].map(mot => (
+                    <button
+                      key={mot}
+                      type="button"
+                      onClick={() => setBlockData(prev => ({ ...prev, reason: mot }))}
+                      className={cn(
+                        "px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer",
+                        blockData.reason === mot
+                          ? "bg-slate-800 text-white border-slate-900 shadow-2xs"
+                          : "bg-surface text-on-surface border-outline-variant hover:bg-surface-bright"
+                      )}
+                    >
+                      {mot}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  placeholder="Ej: Almuerzo, Trámite personal, etc."
+                  value={blockData.reason}
+                  onChange={(e) => setBlockData(prev => ({ ...prev, reason: e.target.value }))}
+                  className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+
+              {/* Observaciones */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                  Observaciones adicionales (Opcional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="Detalles sobre el bloqueo..."
+                  value={newApt.notes}
+                  onChange={(e) => setNewApt(prev => ({ ...prev, notes: e.target.value }))}
+                  className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary resize-none"
+                />
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Paciente</label>
+                  <button 
+                    type="button"
                 onClick={() => {
                   const nextState = !isCreatingNewPatient;
                   setIsCreatingNewPatient(nextState);
@@ -2105,24 +2662,30 @@ export function Agenda() {
               onChange={(e) => setNewApt({ ...newApt, notes: e.target.value })}
             />
           </div>
+            </>
+          )}
 
           <div className="pt-4 flex gap-3">
             <button 
               type="button"
               onClick={() => setIsNewAppointmentOpen(false)}
-              className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-wider"
+              className="flex-1 px-4 py-2 border border-outline-variant text-[12px] font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-wider cursor-pointer"
             >
               CANCELAR
             </button>
             <button 
               type="submit"
-              disabled={(!isCreatingNewPatient && !newApt.patientId) || isSubmittingAppointment}
+              disabled={(!isBlockingAgenda && !isCreatingNewPatient && !newApt.patientId) || isSubmittingAppointment}
               className={cn(
-                "flex-1 px-4 py-2.5 text-white text-[12px] font-bold rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider",
+                "flex-1 px-4 py-2.5 text-white text-[12px] font-bold rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5 uppercase tracking-wider cursor-pointer",
                 isSubmittingAppointment ? "opacity-70 cursor-not-allowed bg-slate-500" : (
-                  newAptCollision.hasConflict || isNewAptOverturn
-                    ? "bg-purple-700 hover:bg-purple-800"
-                    : "bg-primary hover:bg-primary/90"
+                  isBlockingAgenda
+                    ? "bg-slate-800 hover:bg-slate-900 shadow-slate-900/10"
+                    : (
+                      newAptCollision.hasConflict || isNewAptOverturn
+                        ? "bg-purple-700 hover:bg-purple-800"
+                        : "bg-primary hover:bg-primary/90"
+                    )
                 )
               )}
             >
@@ -2130,6 +2693,11 @@ export function Agenda() {
                 <>
                   <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   GUARDANDO...
+                </>
+              ) : isBlockingAgenda ? (
+                <>
+                  <Lock size={14} />
+                  BLOQUEAR AGENDA
                 </>
               ) : newAptCollision.hasConflict ? (
                 <>
@@ -2152,9 +2720,105 @@ export function Agenda() {
       <Modal 
         isOpen={isDetailModalOpen} 
         onClose={() => setIsDetailModalOpen(false)} 
-        title="Detalles del Turno"
+        title={selectedAppointment?.isBlocked || selectedAppointment?.status === 'bloqueado' ? "Detalles del Bloqueo de Agenda" : "Detalles del Turno"}
       >
         {selectedAppointment && (() => {
+          const isBlocked = selectedAppointment.isBlocked || selectedAppointment.status === 'bloqueado';
+
+          if (isBlocked) {
+            return (
+              <div className="space-y-6">
+                {/* Header Bloqueo */}
+                <div className="flex items-center gap-4 p-4 rounded-xl border border-l-4 border-slate-300 border-l-slate-700 bg-slate-50">
+                  <div className="w-12 h-12 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-lg font-bold shrink-0">
+                    <Lock size={22} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-base font-black text-slate-900 truncate">
+                        {selectedAppointment.blockReason || (selectedAppointment.patientName ? selectedAppointment.patientName.replace('[Bloqueado] ', '') : 'Bloqueo de Agenda')}
+                      </h4>
+                      <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full border bg-slate-200 text-slate-800 border-slate-300 flex items-center gap-1 shrink-0">
+                        <Lock size={10} />
+                        Bloqueado
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 font-bold uppercase tracking-wide mt-0.5">
+                      {selectedAppointment.isAllDayBlock
+                        ? 'Jornada Completa'
+                        : `${selectedAppointment.time} a ${selectedAppointment.endTime || calculateEndTime(selectedAppointment.time, selectedAppointment.duration || 60)} hs (${selectedAppointment.duration || 60} min)`}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Fecha y Franja Horaria */}
+                <div className="p-4 bg-surface-bright rounded-xl border border-outline-variant space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-slate-200 text-slate-700 flex items-center justify-center font-bold shrink-0">
+                      <CalendarClock size={18} />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Día y Franja Reservada</p>
+                      <p className="text-[13px] font-bold text-on-surface">
+                        {selectedAppointment.date} {selectedAppointment.isAllDayBlock ? '(Todo el día)' : `de ${selectedAppointment.time} a ${selectedAppointment.endTime || calculateEndTime(selectedAppointment.time, selectedAppointment.duration || 60)} hs`}
+                      </p>
+                      <p className="text-[11px] font-semibold text-on-surface-variant">
+                        Tipo: {selectedAppointment.isAllDayBlock ? 'Bloqueo total de jornada' : `Reserva de ${selectedAppointment.duration || 60} minutos`}
+                      </p>
+                    </div>
+                  </div>
+
+                  {selectedAppointment.notes && (
+                    <div className="pt-2 border-t border-outline-variant/60">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant mb-1">Notas / Observaciones</p>
+                      <p className="text-xs text-on-surface bg-surface p-2.5 rounded-lg border border-outline-variant">
+                        {selectedAppointment.notes}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Aviso Explicativo */}
+                <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
+                  <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                  <p>
+                    Durante este intervalo ningún paciente podrá agendar turnos ni el sistema sugerirá este horario como libre. Si necesitas habilitar este horario para atención, presiona <strong>Desbloquear Horario</strong>.
+                  </p>
+                </div>
+
+                {/* Acciones */}
+                <div className="pt-2 flex flex-col sm:flex-row items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => handleUnblockAppointment(selectedAppointment.id)}
+                    className="w-full sm:flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 uppercase tracking-wider cursor-pointer"
+                  >
+                    <Trash2 size={15} />
+                    Desbloquear Horario
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsDetailModalOpen(false);
+                      handleOpenBlockModal(selectedAppointment.date, selectedAppointment.time, selectedAppointment);
+                    }}
+                    className="w-full sm:flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 uppercase tracking-wider cursor-pointer"
+                  >
+                    <Edit2 size={14} />
+                    Modificar Bloqueo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsDetailModalOpen(false)}
+                    className="w-full sm:w-auto py-2.5 px-4 bg-white hover:bg-surface text-on-surface border border-outline-variant text-xs font-bold rounded-xl transition-colors uppercase tracking-wider cursor-pointer"
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
           const modalStatusStyles = getAppointmentStatusStyles(selectedAppointment.status);
           const isFinishedAppointment = selectedAppointment.status === 'finished' || selectedAppointment.status === 'finalizado';
           return (
@@ -2692,6 +3356,217 @@ export function Agenda() {
                 <>
                   <CheckCircle2 size={16} />
                   Guardar Cambios
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal Bloquear Horario / Agenda */}
+      <Modal
+        isOpen={isBlockModalOpen}
+        onClose={() => setIsBlockModalOpen(false)}
+        title={blockData.id ? "Modificar Bloqueo de Agenda" : "Bloquear Horario de Agenda"}
+      >
+        <form onSubmit={handleSaveBlock} className="space-y-4">
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 flex items-start gap-2.5">
+            <Lock size={16} className="text-slate-600 shrink-0 mt-0.5" />
+            <p>
+              Bloquea un horario o la jornada completa para que no se puedan agendar turnos ni se sugiera este tiempo como disponible para pacientes.
+            </p>
+          </div>
+
+          {/* Toggle Jornada Completa */}
+          <label className="flex items-center gap-3 p-3 bg-surface-bright hover:bg-surface rounded-xl border border-outline-variant cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={blockData.isAllDay}
+              onChange={(e) => setBlockData(prev => ({ ...prev, isAllDay: e.target.checked }))}
+              className="rounded border-outline-variant text-slate-800 focus:ring-slate-500 w-4 h-4 cursor-pointer"
+            />
+            <div>
+              <span className="text-xs font-bold text-on-surface block">Bloquear jornada completa (Todo el día)</span>
+              <span className="text-[11px] text-on-surface-variant">Inhabilita la atención durante todo el día seleccionado</span>
+            </div>
+          </label>
+
+          {/* Fecha y Hora de Inicio */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                Fecha a Bloquear *
+              </label>
+              <input
+                type="date"
+                required
+                value={blockData.date}
+                onChange={(e) => setBlockData(prev => ({ ...prev, date: e.target.value }))}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+            {!blockData.isAllDay && (
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                  Hora de Inicio *
+                </label>
+                <input
+                  type="time"
+                  required
+                  value={blockData.time}
+                  onChange={(e) => setBlockData(prev => ({ ...prev, time: e.target.value }))}
+                  className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary font-mono"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Selector de Duración (1h, 2h, o personalizada) */}
+          {!blockData.isAllDay && (
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
+                <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+                  Tiempo a Bloquear
+                </label>
+                <span className="text-xs font-bold text-slate-800 font-mono">
+                  Hasta las {calculateEndTime(blockData.time, blockData.duration)} hs ({blockData.duration} min)
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+                {[
+                  { label: '30 min', val: 30 },
+                  { label: '1 hora', val: 60 },
+                  { label: '2 horas', val: 120 },
+                  { label: '3 horas', val: 180 },
+                  { label: '4 horas', val: 240 }
+                ].map((item) => (
+                  <button
+                    key={item.val}
+                    type="button"
+                    onClick={() => setBlockData(prev => ({ ...prev, duration: item.val }))}
+                    className={cn(
+                      "py-2 px-2 rounded-lg text-xs font-bold border transition-all text-center cursor-pointer",
+                      blockData.duration === item.val
+                        ? "bg-slate-800 text-white border-slate-900 shadow-2xs"
+                        : "bg-surface-bright text-on-surface border-outline-variant hover:bg-surface"
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="pt-1 flex items-center gap-2">
+                <span className="text-[11px] text-on-surface-variant font-medium">O duración personalizada:</span>
+                <input
+                  type="number"
+                  min={10}
+                  max={720}
+                  step={5}
+                  value={blockData.duration}
+                  onChange={(e) => setBlockData(prev => ({ ...prev, duration: Math.max(10, Number(e.target.value)) }))}
+                  className="w-24 px-2.5 py-1 bg-surface border border-outline-variant rounded-md text-xs font-mono font-bold text-on-surface outline-none focus:ring-1 focus:ring-primary"
+                />
+                <span className="text-xs text-on-surface-variant">minutos</span>
+              </div>
+            </div>
+          )}
+
+          {/* Motivo de Bloqueo */}
+          <div className="space-y-2">
+            <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+              Motivo del Bloqueo
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                'Almuerzo / Descanso',
+                'Trámite personal',
+                'Congreso / Capacitación',
+                'Reunión de equipo',
+                'Asuntos médicos',
+                'Feriado / Asueto'
+              ].map((reason) => (
+                <button
+                  key={reason}
+                  type="button"
+                  onClick={() => setBlockData(prev => ({ ...prev, reason }))}
+                  className={cn(
+                    "px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer",
+                    blockData.reason === reason
+                      ? "bg-slate-800 text-white border-slate-900 shadow-2xs"
+                      : "bg-surface text-on-surface border-outline-variant hover:bg-surface-bright"
+                  )}
+                >
+                  {reason}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              required
+              placeholder="Ej: Almuerzo, Trámite, Capacitación, etc."
+              value={blockData.reason}
+              onChange={(e) => setBlockData(prev => ({ ...prev, reason: e.target.value }))}
+              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
+
+          {/* Observaciones */}
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">
+              Observaciones adicionales (Opcional)
+            </label>
+            <textarea
+              rows={2}
+              placeholder="Detalles sobre este bloqueo de agenda..."
+              value={blockData.notes}
+              onChange={(e) => setBlockData(prev => ({ ...prev, notes: e.target.value }))}
+              className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-xs outline-none focus:ring-1 focus:ring-primary resize-none"
+            />
+          </div>
+
+          {/* Acciones */}
+          <div className="pt-3 flex items-center gap-2.5">
+            {blockData.id && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (blockData.id) {
+                    handleUnblockAppointment(blockData.id);
+                    setIsBlockModalOpen(false);
+                  }
+                }}
+                className="py-2.5 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider"
+              >
+                <Trash2 size={14} />
+                Desbloquear
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsBlockModalOpen(false)}
+              className="flex-1 py-2.5 px-4 border border-outline-variant text-xs font-bold rounded-lg hover:bg-surface transition-colors uppercase tracking-widest text-on-surface cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmittingAppointment}
+              className={cn(
+                "flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-lg shadow-sm transition-all uppercase tracking-widest flex items-center justify-center gap-2 cursor-pointer",
+                isSubmittingAppointment && "opacity-70 cursor-not-allowed"
+              )}
+            >
+              {isSubmittingAppointment ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Guardando...
+                </>
+              ) : (
+                <>
+                  <Lock size={14} />
+                  {blockData.id ? 'Guardar Cambios' : 'Bloquear Agenda'}
                 </>
               )}
             </button>

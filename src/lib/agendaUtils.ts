@@ -95,6 +95,7 @@ export interface ConflictResult {
   detailedConflicts: DetailedConflict[];
   conflictSummary: string;
   message?: string;
+  isBlockedConflict?: boolean;
 }
 
 /**
@@ -182,20 +183,28 @@ export function checkScheduleCollision(
     const overlapCount = overlappingAppointments.length;
     const firstApt = overlappingAppointments[0];
     const firstConflict = detailedConflicts[0];
+    const isAnyBlocked = overlappingAppointments.some(a => a.isBlocked || a.status === 'bloqueado');
 
     let conflictSummary = '';
-    if (overlapCount === 1) {
+    if (isAnyBlocked) {
+      const blockedItem = overlappingAppointments.find(a => a.isBlocked || a.status === 'bloqueado') || firstApt;
+      const bReason = blockedItem.blockReason || blockedItem.notes || 'Bloqueo de Agenda';
+      conflictSummary = `Horario bloqueado: ${bReason} (${firstConflict.time}–${firstConflict.endTime} hs)`;
+    } else if (overlapCount === 1) {
       conflictSummary = `Superposición detectada: ${firstConflict.time}–${firstConflict.endTime} hs · Paciente: ${firstConflict.patientName} · Tratamiento: ${firstConflict.treatment}`;
     } else {
       const detailsList = detailedConflicts.map(c => `${c.patientName} (${c.time}–${c.endTime} hs)`).join(', ');
       conflictSummary = `Superposición detectada con ${overlapCount} turnos: ${detailsList}`;
     }
 
-    const message = `Superposición de horarios detectada con ${overlapCount} turno(s) existente(s). Se guardará automáticamente como SOBRETURNO sin bloquear la agenda.`;
+    const message = isAnyBlocked
+      ? `Este horario coincide con un bloqueo de agenda registrado por el profesional (${firstApt.blockReason || 'Horario no disponible'}).`
+      : `Superposición de horarios detectada con ${overlapCount} turno(s) existente(s). Se guardará automáticamente como SOBRETURNO sin bloquear la agenda.`;
 
     return {
       hasConflict: true,
       isOverturn: true,
+      isBlockedConflict: isAnyBlocked,
       overturnReason: 'time_overlap',
       conflictingAppointment: firstApt,
       overlappingAppointments,
@@ -516,6 +525,14 @@ export function getSuggestedAvailableSlots(
     return true;
   });
 
+  // Si la jornada completa está bloqueada por el profesional, no se ofrecen turnos disponibles
+  const hasAllDayBlock = dayAppointments.some(a => 
+    Boolean(a.isAllDayBlock || a.type === 'Bloqueo Completo' || (a.isBlocked && Number(a.duration) >= 480))
+  );
+  if (hasAllDayBlock) {
+    return [];
+  }
+
   const isFirstAppointmentOfDay = dayAppointments.length === 0;
 
   // STEP interval configured in profile Días y horarios
@@ -826,6 +843,25 @@ export function computeOverlappingLayout(
 export function getAppointmentStatusStyles(status?: string) {
   const norm = (status || 'pendiente').toLowerCase().trim();
 
+  if (norm === 'bloqueado' || norm === 'blocked') {
+    return {
+      borderColor: 'border-slate-400',
+      borderLeftColor: 'border-l-slate-700',
+      borderSubtle: 'border-slate-300',
+      borderSubtleLight: 'border-slate-200',
+      bg: 'bg-slate-100',
+      bgLight: 'bg-slate-50',
+      textColor: 'text-slate-900',
+      textAccent: 'text-slate-700',
+      badgeBg: 'bg-slate-200',
+      badgeText: 'text-slate-800',
+      badgeBorder: 'border-slate-300',
+      dotColor: 'bg-slate-700',
+      shadow: 'shadow-slate-900/10',
+      label: 'Bloqueado'
+    };
+  }
+
   if (norm === 'finished' || norm === 'finalizado') {
     return {
       borderColor: 'border-emerald-500',
@@ -945,7 +981,7 @@ export function getAppointmentStatusStyles(status?: string) {
  */
 export function isAppointmentCancelled(status?: string): boolean {
   const norm = (status || '').toLowerCase().trim();
-  return norm === 'cancelado' || norm === 'cancelled' || norm === 'anulado';
+  return norm.startsWith('cancel') || norm === 'anulado';
 }
 
 /**

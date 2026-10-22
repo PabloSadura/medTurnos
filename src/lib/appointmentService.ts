@@ -30,6 +30,9 @@ export interface SaveAppointmentPayload {
   isPackageSession?: boolean;
   patientPackageId?: string;
   packageName?: string;
+  isBlocked?: boolean;
+  blockReason?: string;
+  isAllDayBlock?: boolean;
 }
 
 export interface SaveAppointmentResult {
@@ -138,11 +141,11 @@ export async function saveAppointmentWithPersistenceCheck(
     paidAmount: payload.paidAmount !== undefined ? payload.paidAmount : (payload.cost || payload.price || 0),
     notes: payload.notes || '',
     attendance: payload.attendance || 1,
-    status: payload.status || 'pendiente',
+    status: payload.isBlocked ? 'bloqueado' : (payload.status || 'pendiente'),
     userId,
-    isOverturn,
+    isOverturn: payload.isBlocked ? false : isOverturn,
     manualOverturn: Boolean(manualOverturn),
-    overturnReason,
+    overturnReason: payload.isBlocked ? null : overturnReason,
     isOutsideWorkingHours,
     outsideHoursReason,
     overlappingAppointmentIds,
@@ -151,6 +154,9 @@ export async function saveAppointmentWithPersistenceCheck(
     isPackageSession: Boolean(payload.isPackageSession),
     patientPackageId: payload.patientPackageId || '',
     packageName: payload.packageName || '',
+    isBlocked: Boolean(payload.isBlocked),
+    blockReason: payload.blockReason || '',
+    isAllDayBlock: Boolean(payload.isAllDayBlock),
     updatedAt: serverTimestamp()
   };
 

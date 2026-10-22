@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
-import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save, TrendingUp, Stethoscope, CalendarClock, DollarSign, Clock, Link2, Package, Layers, Sparkles, Cloud, Split, Camera, Image, CalendarPlus, ArrowLeft, ChevronRight } from 'lucide-react';
+import { Search, Plus, Filter, Download, MoreHorizontal, User, Phone, Mail, Calendar, Trash2, Edit2, FileText, CheckCircle2, AlertTriangle, Save, TrendingUp, Stethoscope, CalendarClock, DollarSign, Clock, Link2, Package, Layers, Sparkles, Split, CalendarPlus, ArrowLeft, ChevronRight } from 'lucide-react';
 import { cn, calculateAge } from '../lib/utils';
 import { motion } from 'motion/react';
 import { Modal } from '../components/Modal';
@@ -10,8 +10,6 @@ import { useToast } from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { PatientDetailView } from '../components/PatientDetailView';
 import { PatientPackagesView } from '../components/PatientPackagesView';
-import { PatientDriveFiles } from '../components/PatientDriveFiles';
-import { PatientEvolutionPhotos } from '../components/PatientEvolutionPhotos';
 import { consumePackageSession } from '../lib/packageUtils';
 import { PatientPackage } from '../types';
 import { splitFullName, formatPatientFullName, getPatientFirstName, getPatientLastName, comparePatientsByLastName, formatPatientLastNameFirst } from '../lib/patientNameUtils';
@@ -27,7 +25,7 @@ export function Patients() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeModal, setActiveModal] = useState<'create' | 'edit' | 'delete' | null>(null);
   const [selectedPatient, setSelectedPatient] = useState<any>(null);
-  const [patientDetailTab, setPatientDetailTab] = useState<'evolutions' | 'photos' | 'packages' | 'drive'>('evolutions');
+  const [patientDetailTab, setPatientDetailTab] = useState<'evolutions' | 'packages'>('evolutions');
   const [patientPackages, setPatientPackages] = useState<PatientPackage[]>([]);
   const [isAddingEntry, setIsAddingEntry] = useState(false);
   const [evolutions, setEvolutions] = useState<any[]>([]);
@@ -130,7 +128,7 @@ export function Patients() {
     if (patientId && patients.length > 0) {
       const patient = patients.find(p => p.id === patientId);
       if (patient) {
-        const modalType = (action === 'add-entry' || appointmentId) ? 'add-entry' : action === 'drive' ? 'drive' : action === 'photos' ? 'photos' : 'history';
+        const modalType = (action === 'add-entry' || appointmentId) ? 'add-entry' : 'history';
         handleOpenModal(modalType, patient, appointmentId || undefined);
       }
     }
@@ -337,7 +335,7 @@ export function Patients() {
     }
   };
 
-  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'history' | 'add-entry' | 'drive' | 'photos', patient?: any, initialAppointmentId?: string) => {
+  const handleOpenModal = (type: 'create' | 'edit' | 'delete' | 'history' | 'add-entry', patient?: any, initialAppointmentId?: string) => {
     if (type === 'create') {
       setSelectedPatient(null);
       setFormData({
@@ -389,18 +387,6 @@ export function Patients() {
 
     // Inline detail views (no modal)
     setActiveModal(null);
-
-    if (type === 'photos') {
-      setPatientDetailTab('photos');
-      setIsAddingEntry(false);
-      return;
-    }
-
-    if (type === 'drive') {
-      setPatientDetailTab('drive');
-      setIsAddingEntry(false);
-      return;
-    }
 
     if (type === 'add-entry') {
       setPatientDetailTab('evolutions');

@@ -1,4 +1,4 @@
-export type ProfileTab = 'info' | 'schedule' | 'security' | 'integrations' | 'audit';
+export type ProfileTab = 'info' | 'schedule' | 'security' | 'audit';
 
 export interface ProfileState {
   // 1. Personal Identity

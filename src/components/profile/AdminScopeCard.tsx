@@ -170,7 +170,7 @@ export function AdminScopeCard() {
                   <li>Bloqueo o desvinculación de profesionales de la plataforma clínica.</li>
                   <li>Cambio de planes, precios base y descuentos institucionales.</li>
                   <li>Revocación global de sesiones activas y reseteo de claves de acceso.</li>
-                  <li>Desconexión del almacenamiento institucional en Google Drive.</li>
+                  <li>Configuración y auditoría institucional de la plataforma.</li>
                 </ul>
               </div>
             </div>

@@ -58,6 +58,7 @@ import {
   computeMonthlyEvolution,
   formatLocalDate
 } from '../lib/dashboardUtils';
+import { isAppointmentCancelled } from '../lib/agendaUtils';
 
 type TimeframePreset = '1m' | '3m' | '6m' | '12m' | 'specific' | 'custom';
 type EvolutionMetric = 'patients' | 'revenue' | 'status';
@@ -180,8 +181,8 @@ export function Dashboard() {
             return aptTs >= nowTs;
           })
           .sort((a: any, b: any) => {
-            const isCancA = a.status === 'cancelado' || a.status === 'cancelled' || a.status === 'anulado';
-            const isCancB = b.status === 'cancelado' || b.status === 'cancelled' || b.status === 'anulado';
+            const isCancA = isAppointmentCancelled(a.status);
+            const isCancB = isAppointmentCancelled(b.status);
             if (isCancA !== isCancB) return isCancA ? 1 : -1;
             const dateA = a.startTime?.toDate ? a.startTime.toDate() : new Date(a.startTime || a.date);
             const dateB = b.startTime?.toDate ? b.startTime.toDate() : new Date(b.startTime || b.date);

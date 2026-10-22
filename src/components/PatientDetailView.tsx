@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { 
-  FileText, Camera, Package, Cloud, Plus, X, Save, Clock, Sparkles, 
+  FileText, Package, Plus, X, Save, Clock, Sparkles, 
   Layers, Link2, User, Phone, Mail, Trash2, Edit2, ArrowLeft, 
   CalendarPlus, CheckCircle2, AlertTriangle, TrendingUp, DollarSign,
   ChevronRight, CalendarClock, Search, Lock
@@ -14,8 +14,6 @@ import {
 } from 'firebase/firestore';
 import { useToast } from './Toast';
 import { PatientPackagesView } from './PatientPackagesView';
-import { PatientDriveFiles } from './PatientDriveFiles';
-import { PatientEvolutionPhotos } from './PatientEvolutionPhotos';
 import { consumePackageSession } from '../lib/packageUtils';
 import { checkEvolutionEditability, formatEvolutionDate } from '../lib/evolutionUtils';
 import { PatientPackage } from '../types';
@@ -37,7 +35,7 @@ interface PatientDetailViewProps {
   onEdit: (patient: any) => void;
   onDelete: (patient: any) => void;
   targetAppointmentId?: string | null;
-  initialTab?: 'evolutions' | 'photos' | 'packages' | 'drive';
+  initialTab?: 'evolutions' | 'packages';
   initialAddEntry?: boolean;
 }
 
@@ -56,7 +54,7 @@ export function PatientDetailView({
 }: PatientDetailViewProps) {
   const { showToast } = useToast();
 
-  const [patientDetailTab, setPatientDetailTab] = useState<'evolutions' | 'photos' | 'packages' | 'drive'>(initialTab);
+  const [patientDetailTab, setPatientDetailTab] = useState<'evolutions' | 'packages'>(initialTab === 'packages' ? 'packages' : 'evolutions');
   const [isAddingEntry, setIsAddingEntry] = useState(initialAddEntry);
   const [evolutions, setEvolutions] = useState<any[]>([]);
   const [historySearchTerm, setHistorySearchTerm] = useState('');
@@ -1619,21 +1617,6 @@ export function PatientDetailView({
 
           <button
             type="button"
-            id="tab-patient-photos"
-            onClick={() => setPatientDetailTab('photos')}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap cursor-pointer",
-              patientDetailTab === 'photos'
-                ? "border-primary text-primary"
-                : "border-transparent text-on-surface-variant hover:text-on-surface"
-            )}
-          >
-            <Camera size={14} />
-            Antes y Después (Fotos)
-          </button>
-
-          <button
-            type="button"
             id="tab-patient-packages"
             onClick={() => setPatientDetailTab('packages')}
             className={cn(
@@ -1646,44 +1629,13 @@ export function PatientDetailView({
             <Package size={14} />
             Paquetes Adquiridos ({patientPackages.length})
           </button>
-
-          <button
-            type="button"
-            id="tab-patient-drive"
-            onClick={() => setPatientDetailTab('drive')}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all -mb-px whitespace-nowrap cursor-pointer",
-              patientDetailTab === 'drive'
-                ? "border-primary text-primary"
-                : "border-transparent text-on-surface-variant hover:text-on-surface"
-            )}
-          >
-            <Cloud size={14} />
-            Archivos y Google Drive
-          </button>
         </div>
 
         {/* Tab content */}
-        {patientDetailTab === 'photos' && (
-          <PatientEvolutionPhotos 
-            patient={patient}
-            ownerId={ownerId}
-            treatments={treatments}
-          />
-        )}
-
         {patientDetailTab === 'packages' && (
           <PatientPackagesView
             patient={patient}
             ownerId={ownerId}
-          />
-        )}
-
-        {patientDetailTab === 'drive' && (
-          <PatientDriveFiles
-            patient={patient}
-            evolutions={evolutions}
-            doctorName={currentDoctorName}
           />
         )}
 
